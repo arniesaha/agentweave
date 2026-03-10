@@ -46,6 +46,11 @@ PROV_LLM_STOP_REASON = "prov.llm.stop_reason"
 PROV_LLM_PROMPT_PREVIEW = "prov.llm.prompt_preview"    # first 512 chars of prompt
 PROV_LLM_RESPONSE_PREVIEW = "prov.llm.response_preview"  # first 512 chars of response
 
+# --- Provider IDs ---
+PROVIDER_ANTHROPIC = "anthropic"
+PROVIDER_GOOGLE = "google"
+PROVIDER_OPENAI = "openai"
+
 # --- Activity types ---
 
 ACTIVITY_TOOL_CALL = "tool_call"

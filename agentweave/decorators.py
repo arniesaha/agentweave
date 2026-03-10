@@ -417,11 +417,22 @@ def _set_llm_response_attributes(
     result: Any,
     captures_output: bool,
 ) -> None:
-    # Token extraction — Anthropic + OpenAI conventions
-    usage = getattr(result, "usage", None)
+    # Token extraction — Anthropic, OpenAI, and Google Gemini conventions
+    usage = getattr(result, "usage", None) or getattr(result, "usage_metadata", None)
     if usage is not None:
-        pt = getattr(usage, "input_tokens", None) or getattr(usage, "prompt_tokens", None)
-        ct = getattr(usage, "output_tokens", None) or getattr(usage, "completion_tokens", None)
+        # Anthropic: input_tokens / output_tokens
+        # OpenAI: prompt_tokens / completion_tokens
+        # Google: prompt_token_count / candidates_token_count
+        pt = (
+            getattr(usage, "input_tokens", None)
+            or getattr(usage, "prompt_tokens", None)
+            or getattr(usage, "prompt_token_count", None)
+        )
+        ct = (
+            getattr(usage, "output_tokens", None)
+            or getattr(usage, "completion_tokens", None)
+            or getattr(usage, "candidates_token_count", None)
+        )
         if pt is not None:
             span.set_attribute(schema.PROV_LLM_PROMPT_TOKENS, int(pt))
         if ct is not None:
@@ -429,7 +440,17 @@ def _set_llm_response_attributes(
         if pt is not None and ct is not None:
             span.set_attribute(schema.PROV_LLM_TOTAL_TOKENS, int(pt) + int(ct))
 
-    stop = getattr(result, "stop_reason", None) or getattr(result, "finish_reason", None)
+    # Stop reason — Anthropic, OpenAI, Google
+    stop = (
+        getattr(result, "stop_reason", None)
+        or getattr(result, "finish_reason", None)
+    )
+    # Google: candidates[0].finish_reason
+    if stop is None:
+        try:
+            stop = result.candidates[0].finish_reason
+        except (AttributeError, IndexError, TypeError):
+            pass
     if stop:
         span.set_attribute(schema.PROV_LLM_STOP_REASON, str(stop))
 

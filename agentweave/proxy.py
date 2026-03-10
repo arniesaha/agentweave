@@ -1,27 +1,31 @@
-"""AgentWeave Anthropic API Proxy.
+"""AgentWeave Multi-Provider AI Proxy.
 
-Intercepts requests to the Anthropic API, emits an OTel span per call with
-token counts, model, stop reason, and optional prompt/response previews, then
-forwards the response transparently to the caller.
+Intercepts requests to Anthropic and Google Gemini APIs, emits an OTel span
+per call with token counts, model, stop reason, and latency, then forwards
+the response transparently to the caller.
 
-Works for both streaming and non-streaming requests. Any client that supports
-``ANTHROPIC_BASE_URL`` (Anthropic Python SDK, Claude Code, OpenClaw, etc.) can
-be pointed at this proxy with zero code changes.
+Provider is detected automatically from the request path:
+  /v1/messages              → Anthropic  (api.anthropic.com)
+  /v1beta/models/...        → Google     (generativelanguage.googleapis.com)
+  /v1/models/...            → Google     (generativelanguage.googleapis.com)
+
+Works for both streaming and non-streaming requests. Zero code changes needed
+in calling agents — just point ANTHROPIC_BASE_URL / GOOGLE_GENAI_BASE_URL at
+this proxy.
 
 Usage::
 
-    # Start the proxy
     agentweave proxy start --port 4000 --endpoint http://tempo-host:4318
 
-    # Or run directly
-    python -m agentweave.proxy
-
-    # Then set in your agent/shell environment:
+    # Anthropic agents
     export ANTHROPIC_BASE_URL=http://localhost:4000
 
-    # Optional: tag which agent is calling (add header in your SDK wrapper)
-    # X-AgentWeave-Agent-Id: nix-v1
-    # X-AgentWeave-Agent-Model: claude-sonnet-4-6
+    # Google / Gemini agents (pi-mono / Max)
+    export GOOGLE_GENAI_BASE_URL=http://localhost:4000
+    # or set in Google SDK: genai.configure(client_options={"api_endpoint": "localhost:4000"})
+
+    # Tag calls by agent
+    # X-AgentWeave-Agent-Id: max-v1
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from typing import Any, AsyncIterator
@@ -44,38 +49,46 @@ from agentweave.exporter import get_tracer, _provider
 
 logger = logging.getLogger("agentweave.proxy")
 
-ANTHROPIC_BASE = "https://api.anthropic.com"
+# --- Upstream base URLs ---
+_ANTHROPIC_BASE = "https://api.anthropic.com"
+_GOOGLE_BASE = "https://generativelanguage.googleapis.com"
 
-# Headers forwarded from client → Anthropic (drop hop-by-hop + host + ours)
-_SKIP_REQUEST_HEADERS = {
+# Headers always stripped before forwarding (hop-by-hop + proxy-specific)
+_SKIP_HEADERS_ALWAYS = {
     "host", "content-length", "transfer-encoding", "connection",
-    "authorization",                   # stripped — contains proxy token, not Anthropic key
-    "x-agentweave-agent-id", "x-agentweave-agent-model",
+    "x-agentweave-agent-id",
+    "x-agentweave-agent-model",
 }
 
-# Runtime auth token — set via AGENTWEAVE_PROXY_TOKEN env var or --auth-token CLI flag.
-# If empty, proxy runs in open mode (dev/localhost only).
+# Runtime auth token. Set AGENTWEAVE_PROXY_TOKEN or --auth-token.
+# Empty = open mode (dev/localhost only).
 _PROXY_TOKEN: str | None = os.getenv("AGENTWEAVE_PROXY_TOKEN") or None
+
+# Gemini model name from URL, e.g. /v1beta/models/gemini-2.5-pro:generateContent
+_GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 
 app = FastAPI(
     title="AgentWeave Proxy",
-    description="Transparent Anthropic API proxy with OTel tracing",
-    version="0.1.0",
+    description="Multi-provider AI observability proxy (Anthropic + Google Gemini)",
+    version="0.2.0",
 )
 
 
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
 def _check_auth(request: Request) -> JSONResponse | None:
-    """Return a 401 JSONResponse if token auth fails, else None."""
+    """Return 401 if token auth fails, else None (pass through)."""
     if not _PROXY_TOKEN:
-        return None  # open mode — no auth required
+        return None
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         return JSONResponse(
             {"error": "missing_token", "message": "Authorization: Bearer <token> required"},
             status_code=401,
         )
-    token = auth[len("Bearer "):]
-    if not secrets.compare_digest(token, _PROXY_TOKEN):
+    if not secrets.compare_digest(auth[len("Bearer "):], _PROXY_TOKEN):
         return JSONResponse(
             {"error": "invalid_token", "message": "Invalid proxy token"},
             status_code=401,
@@ -83,10 +96,49 @@ def _check_auth(request: Request) -> JSONResponse | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Provider detection
+# ---------------------------------------------------------------------------
+
+def _detect_provider(path: str) -> str:
+    """Return 'google' or 'anthropic' based on the request path."""
+    if path.startswith("v1beta/") or (
+        path.startswith("v1/") and "/models/" in path
+    ):
+        return "google"
+    return "anthropic"
+
+
+def _upstream_url(provider: str, path: str, query_string: str) -> str:
+    base = _GOOGLE_BASE if provider == "google" else _ANTHROPIC_BASE
+    url = f"{base}/{path}"
+    if query_string:
+        url += f"?{query_string}"
+    return url
+
+
+def _extract_model(provider: str, path: str, body: dict) -> str:
+    if provider == "google":
+        m = _GEMINI_MODEL_RE.search(path)
+        return m.group(1) if m else "gemini"
+    return body.get("model", "unknown")
+
+
+def _is_streaming(provider: str, path: str, body: dict) -> bool:
+    if provider == "google":
+        return "streamGenerateContent" in path
+    return bool(body.get("stream", False))
+
+
+# ---------------------------------------------------------------------------
+# Main route
+# ---------------------------------------------------------------------------
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], response_model=None)
 async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse:
     if (denied := _check_auth(request)) is not None:
         return denied
+
     body_bytes = await request.body()
     body: dict[str, Any] = {}
     if body_bytes:
@@ -95,10 +147,11 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         except json.JSONDecodeError:
             pass
 
-    model = body.get("model", "unknown")
-    is_stream = body.get("stream", False)
+    provider = _detect_provider(path)
+    model = _extract_model(provider, path, body)
+    is_stream = _is_streaming(provider, path, body)
+    query_string = request.url.query
 
-    # Agent identity — from custom headers or global config
     agent_id = (
         request.headers.get("x-agentweave-agent-id")
         or _config_value("agent_id")
@@ -110,69 +163,61 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         or model
     )
 
-    # Forward headers — preserve x-api-key, anthropic-version, etc.
-    # Drop proxy-specific headers (authorization = proxy token, not Anthropic key)
     forward_headers = {
         k: v for k, v in request.headers.items()
-        if k.lower() not in _SKIP_REQUEST_HEADERS
+        if k.lower() not in _SKIP_HEADERS_ALWAYS
     }
+    # When proxy auth is enabled, the "authorization" header is the proxy
+    # token — strip it and rely on x-api-key / x-goog-api-key for upstream.
+    # In open mode (no token), forward authorization so SDKs that send the
+    # API key via Bearer token (e.g. OpenClaw) keep working.
+    if _PROXY_TOKEN:
+        forward_headers.pop("authorization", None)
+    upstream = _upstream_url(provider, path, query_string)
+    logger.debug("→ %s %s provider=%s model=%s stream=%s",
+                 request.method, upstream, provider, model, is_stream)
 
-    upstream_url = f"{ANTHROPIC_BASE}/{path}"
+    kwargs = dict(
+        upstream_url=upstream,
+        method=request.method,
+        headers=forward_headers,
+        body=body,
+        body_bytes=body_bytes,
+        model=model,
+        provider=provider,
+        agent_id=agent_id,
+        agent_model=agent_model,
+        path=path,
+    )
 
     if is_stream:
-        return StreamingResponse(
-            _stream_and_trace(
-                upstream_url=upstream_url,
-                method=request.method,
-                headers=forward_headers,
-                body=body,
-                model=model,
-                agent_id=agent_id,
-                agent_model=agent_model,
-                path=path,
-            ),
-            media_type="text/event-stream",
-        )
-    else:
-        return await _request_and_trace(
-            upstream_url=upstream_url,
-            method=request.method,
-            headers=forward_headers,
-            body=body,
-            model=model,
-            agent_id=agent_id,
-            agent_model=agent_model,
-            path=path,
-        )
+        media = "text/event-stream" if provider == "anthropic" else "application/json"
+        return StreamingResponse(_stream_and_trace(**kwargs), media_type=media)
+    return await _request_and_trace(**kwargs)
 
+
+# ---------------------------------------------------------------------------
+# Non-streaming handler
+# ---------------------------------------------------------------------------
 
 async def _request_and_trace(
-    upstream_url: str,
-    method: str,
-    headers: dict,
-    body: dict,
-    model: str,
-    agent_id: str,
-    agent_model: str,
-    path: str,
+    upstream_url: str, method: str, headers: dict, body: dict, body_bytes: bytes,
+    model: str, provider: str, agent_id: str, agent_model: str, path: str,
 ) -> JSONResponse:
-    """Handle non-streaming request: forward, parse response, emit span."""
     tracer = get_tracer()
-    span_name = f"{schema.SPAN_PREFIX_LLM}.{model}"
-
-    with tracer.start_as_current_span(span_name) as span:
-        _set_request_attrs(span, model=model, agent_id=agent_id,
-                           agent_model=agent_model, path=path, body=body)
+    with tracer.start_as_current_span(f"{schema.SPAN_PREFIX_LLM}.{model}") as span:
+        _set_request_attrs(span, model=model, provider=provider,
+                           agent_id=agent_id, agent_model=agent_model,
+                           path=path, body=body)
         start = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
+            async with httpx.AsyncClient(timeout=300) as client:
                 resp = await client.request(
-                    method, upstream_url, headers=headers,
-                    content=json.dumps(body).encode(),
+                    method, upstream_url, headers=headers, content=body_bytes,
                 )
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             data = resp.json()
-            _set_response_attrs(span, data=data, elapsed_ms=elapsed_ms)
+            _extract_and_set_response(span, data=data, provider=provider, elapsed_ms=elapsed_ms)
             span.set_status(StatusCode.OK)
             return JSONResponse(content=data, status_code=resp.status_code)
         except Exception as exc:
@@ -181,72 +226,59 @@ async def _request_and_trace(
             raise
 
 
-async def _stream_and_trace(
-    upstream_url: str,
-    method: str,
-    headers: dict,
-    body: dict,
-    model: str,
-    agent_id: str,
-    agent_model: str,
-    path: str,
-) -> AsyncIterator[bytes]:
-    """Handle streaming SSE request: forward events, emit span on completion."""
-    tracer = get_tracer()
-    span_name = f"{schema.SPAN_PREFIX_LLM}.{model}"
-    span = tracer.start_span(span_name)
-    _set_request_attrs(span, model=model, agent_id=agent_id,
-                       agent_model=agent_model, path=path, body=body)
+# ---------------------------------------------------------------------------
+# Streaming handler
+# ---------------------------------------------------------------------------
 
-    input_tokens = 0
-    output_tokens = 0
+async def _stream_and_trace(
+    upstream_url: str, method: str, headers: dict, body: dict, body_bytes: bytes,
+    model: str, provider: str, agent_id: str, agent_model: str, path: str,
+) -> AsyncIterator[bytes]:
+    tracer = get_tracer()
+    span = tracer.start_span(f"{schema.SPAN_PREFIX_LLM}.{model}")
+    _set_request_attrs(span, model=model, provider=provider,
+                       agent_id=agent_id, agent_model=agent_model,
+                       path=path, body=body)
+
+    input_tokens = output_tokens = 0
     stop_reason = None
     start = time.perf_counter()
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream(
-                method, upstream_url,
-                headers=headers,
-                content=json.dumps(body).encode(),
+                method, upstream_url, headers=headers, content=body_bytes,
             ) as resp:
-                async for raw_line in resp.aiter_lines():
-                    line = raw_line.strip()
-                    if not line:
-                        yield b"\n"
-                        continue
-
-                    yield (line + "\n").encode()
-
-                    # Parse SSE events for token accounting
-                    if line.startswith("data: "):
-                        payload = line[6:]
-                        if payload == "[DONE]":
+                if resp.status_code >= 400:
+                    logger.warning("← upstream error status=%d", resp.status_code)
+                try:
+                    async for raw_line in resp.aiter_lines():
+                        line = raw_line.strip()
+                        if not line:
+                            yield b"\n"
                             continue
-                        try:
-                            event = json.loads(payload)
-                            etype = event.get("type", "")
+                        yield (line + "\n").encode()
 
-                            if etype == "message_start":
-                                usage = event.get("message", {}).get("usage", {})
-                                input_tokens = usage.get("input_tokens", 0)
-
-                            elif etype == "message_delta":
-                                usage = event.get("usage", {})
-                                output_tokens = usage.get("output_tokens", 0)
-                                stop_reason = event.get("delta", {}).get("stop_reason")
-
-                        except (json.JSONDecodeError, KeyError):
-                            pass
+                        if provider == "anthropic":
+                            input_tokens, output_tokens, stop_reason = _parse_anthropic_sse(
+                                line, input_tokens, output_tokens, stop_reason
+                            )
+                        else:  # google
+                            input_tokens, output_tokens, stop_reason = _parse_google_stream(
+                                line, input_tokens, output_tokens, stop_reason
+                            )
+                except httpx.RemoteProtocolError as exc:
+                    logger.warning("upstream closed mid-stream: %s", exc)
+                    span.set_attribute("agentweave.stream_error", str(exc))
+                    stop_reason = stop_reason or "upstream_disconnect"
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
-        _set_stream_end_attrs(
-            span,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            stop_reason=stop_reason,
-            elapsed_ms=elapsed_ms,
-        )
+        span.set_attribute(schema.PROV_LLM_PROMPT_TOKENS, input_tokens)
+        span.set_attribute(schema.PROV_LLM_COMPLETION_TOKENS, output_tokens)
+        span.set_attribute(schema.PROV_LLM_TOTAL_TOKENS, input_tokens + output_tokens)
+        if stop_reason:
+            span.set_attribute(schema.PROV_LLM_STOP_REASON, stop_reason)
+        span.set_attribute("agentweave.latency_ms", elapsed_ms)
         span.set_status(StatusCode.OK)
 
     except Exception as exc:
@@ -255,79 +287,168 @@ async def _stream_and_trace(
         raise
     finally:
         span.end()
-        # Flush so traces aren't lost on long-idle connections
         try:
             _provider.force_flush(timeout_millis=2000)
         except Exception:
             pass
 
 
-# --- Attribute helpers ---
+# ---------------------------------------------------------------------------
+# Provider-specific token parsers
+# ---------------------------------------------------------------------------
 
-def _set_request_attrs(
-    span: Any,
-    model: str,
-    agent_id: str,
-    agent_model: str,
-    path: str,
-    body: dict,
+def _parse_anthropic_sse(
+    line: str, input_tokens: int, output_tokens: int, stop_reason: str | None
+) -> tuple[int, int, str | None]:
+    if not line.startswith("data: "):
+        return input_tokens, output_tokens, stop_reason
+    payload = line[6:]
+    if payload == "[DONE]":
+        return input_tokens, output_tokens, stop_reason
+    try:
+        event = json.loads(payload)
+        etype = event.get("type", "")
+        if etype == "message_start":
+            usage = event.get("message", {}).get("usage", {})
+            input_tokens = usage.get("input_tokens", input_tokens)
+        elif etype == "message_delta":
+            usage = event.get("usage", {})
+            output_tokens = usage.get("output_tokens", output_tokens)
+            stop_reason = event.get("delta", {}).get("stop_reason") or stop_reason
+    except (json.JSONDecodeError, KeyError):
+        pass
+    return input_tokens, output_tokens, stop_reason
+
+
+def _parse_google_stream(
+    line: str, input_tokens: int, output_tokens: int, stop_reason: str | None
+) -> tuple[int, int, str | None]:
+    # Google streaming: SSE "data: {...}" or bare JSON lines
+    payload = line[6:] if line.startswith("data: ") else line
+    if not payload or payload == "[DONE]":
+        return input_tokens, output_tokens, stop_reason
+    try:
+        chunk = json.loads(payload)
+        usage = chunk.get("usageMetadata", {})
+        if usage:
+            input_tokens = usage.get("promptTokenCount", input_tokens)
+            output_tokens = usage.get("candidatesTokenCount", output_tokens)
+        candidates = chunk.get("candidates", [])
+        if candidates:
+            reason = candidates[0].get("finishReason")
+            if reason and reason != "FINISH_REASON_UNSPECIFIED":
+                stop_reason = reason
+    except (json.JSONDecodeError, KeyError, IndexError):
+        pass
+    return input_tokens, output_tokens, stop_reason
+
+
+# ---------------------------------------------------------------------------
+# Response attribute extractors
+# ---------------------------------------------------------------------------
+
+def _extract_and_set_response(
+    span: Any, data: dict, provider: str, elapsed_ms: int
 ) -> None:
-    span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
-    span.set_attribute(schema.PROV_LLM_PROVIDER, "anthropic")
-    span.set_attribute(schema.PROV_LLM_MODEL, model)
-    span.set_attribute(schema.PROV_AGENT_ID, agent_id)
-    span.set_attribute(schema.PROV_AGENT_MODEL, agent_model)
-    span.set_attribute(schema.PROV_WAS_ASSOCIATED_WITH, agent_id)
-    span.set_attribute("http.route", f"/{path}")
-
-    # Prompt preview from first user message (opt-in via env var)
-    if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes"):
-        messages = body.get("messages", [])
-        if messages:
-            first = messages[0]
-            content = first.get("content", "")
-            if isinstance(content, list):
-                content = " ".join(
-                    c.get("text", "") for c in content if isinstance(c, dict)
-                )
-            span.set_attribute(schema.PROV_LLM_PROMPT_PREVIEW, str(content)[:512])
+    if provider == "google":
+        _set_google_response_attrs(span, data, elapsed_ms)
+    else:
+        _set_anthropic_response_attrs(span, data, elapsed_ms)
 
 
-def _set_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
+def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
     usage = data.get("usage", {})
     pt = usage.get("input_tokens", 0)
     ct = usage.get("output_tokens", 0)
     span.set_attribute(schema.PROV_LLM_PROMPT_TOKENS, pt)
     span.set_attribute(schema.PROV_LLM_COMPLETION_TOKENS, ct)
     span.set_attribute(schema.PROV_LLM_TOTAL_TOKENS, pt + ct)
-
     stop = data.get("stop_reason")
     if stop:
         span.set_attribute(schema.PROV_LLM_STOP_REASON, stop)
-
     span.set_attribute("agentweave.latency_ms", elapsed_ms)
-
-    if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes"):
-        content = data.get("content", [])
-        if content and isinstance(content, list):
-            text = content[0].get("text", "") if isinstance(content[0], dict) else ""
-            span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, str(text)[:512])
+    _maybe_set_response_preview(span, _anthropic_response_text(data))
 
 
-def _set_stream_end_attrs(
-    span: Any,
-    input_tokens: int,
-    output_tokens: int,
-    stop_reason: str | None,
-    elapsed_ms: int,
+def _set_google_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
+    usage = data.get("usageMetadata", {})
+    pt = usage.get("promptTokenCount", 0)
+    ct = usage.get("candidatesTokenCount", 0)
+    span.set_attribute(schema.PROV_LLM_PROMPT_TOKENS, pt)
+    span.set_attribute(schema.PROV_LLM_COMPLETION_TOKENS, ct)
+    span.set_attribute(schema.PROV_LLM_TOTAL_TOKENS, usage.get("totalTokenCount", pt + ct))
+    candidates = data.get("candidates", [])
+    if candidates:
+        stop = candidates[0].get("finishReason")
+        if stop:
+            span.set_attribute(schema.PROV_LLM_STOP_REASON, stop)
+    span.set_attribute("agentweave.latency_ms", elapsed_ms)
+    _maybe_set_response_preview(span, _google_response_text(data))
+
+
+def _anthropic_response_text(data: dict) -> str:
+    content = data.get("content", [])
+    if content and isinstance(content, list):
+        return content[0].get("text", "") if isinstance(content[0], dict) else ""
+    return ""
+
+
+def _google_response_text(data: dict) -> str:
+    try:
+        return (
+            data["candidates"][0]["content"]["parts"][0].get("text", "")
+        )
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def _maybe_set_response_preview(span: Any, text: str) -> None:
+    if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes") and text:
+        span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, text[:512])
+
+
+# ---------------------------------------------------------------------------
+# Request attributes
+# ---------------------------------------------------------------------------
+
+def _set_request_attrs(
+    span: Any, model: str, provider: str, agent_id: str, agent_model: str,
+    path: str, body: dict,
 ) -> None:
-    span.set_attribute(schema.PROV_LLM_PROMPT_TOKENS, input_tokens)
-    span.set_attribute(schema.PROV_LLM_COMPLETION_TOKENS, output_tokens)
-    span.set_attribute(schema.PROV_LLM_TOTAL_TOKENS, input_tokens + output_tokens)
-    if stop_reason:
-        span.set_attribute(schema.PROV_LLM_STOP_REASON, stop_reason)
-    span.set_attribute("agentweave.latency_ms", elapsed_ms)
+    span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
+    span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
+    span.set_attribute(schema.PROV_LLM_MODEL, model)
+    span.set_attribute(schema.PROV_AGENT_ID, agent_id)
+    span.set_attribute(schema.PROV_AGENT_MODEL, agent_model)
+    span.set_attribute(schema.PROV_WAS_ASSOCIATED_WITH, agent_id)
+    span.set_attribute("http.route", f"/{path}")
 
+    cfg = AgentWeaveConfig.get_or_none()
+    if cfg and cfg.agent_id:
+        span.set_attribute(schema.PROV_AGENT_ID, cfg.agent_id)
+
+    if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() not in ("1", "true", "yes"):
+        return
+    try:
+        if provider == "google":
+            parts = body.get("contents", [{}])[-1].get("parts", [{}])
+            preview = parts[0].get("text", "")[:512]
+        else:
+            messages = body.get("messages", [])
+            first = messages[0] if messages else {}
+            content = first.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+            preview = str(content)[:512]
+        if preview:
+            span.set_attribute(schema.PROV_LLM_PROMPT_PREVIEW, preview)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _config_value(field: str) -> str | None:
     try:
@@ -341,7 +462,7 @@ def run(host: str = "0.0.0.0", port: int = 4000) -> None:
     """Start the proxy server (called from CLI)."""
     import uvicorn
     logger.info(f"AgentWeave proxy listening on {host}:{port}")
-    logger.info(f"Set ANTHROPIC_BASE_URL=http://<your-host>:{port} in your agents")
+    logger.info("Providers: anthropic (/v1/messages), google (/v1beta/models/...)")
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
