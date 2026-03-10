@@ -1,0 +1,592 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "agentweave-overview",
+    "title": "AgentWeave \u2014 Agent Activity",
+    "tags": [
+      "agentweave",
+      "ai",
+      "tracing"
+    ],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 7,
+    "refresh": "30s",
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "model",
+          "label": "Model",
+          "type": "custom",
+          "query": ".*,llm.claude.*,llm.gemini.*,llm.gpt.*",
+          "current": {
+            "text": "All",
+            "value": ".*"
+          },
+          "options": [
+            {
+              "text": "All",
+              "value": ".*",
+              "selected": true
+            },
+            {
+              "text": "Claude",
+              "value": "llm.claude.*"
+            },
+            {
+              "text": "Gemini",
+              "value": "llm.gemini.*"
+            },
+            {
+              "text": "GPT",
+              "value": "llm.gpt.*"
+            }
+          ],
+          "hide": 0
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Total LLM Calls",
+        "type": "stat",
+        "gridPos": {
+          "x": 0,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "filterFieldsByName",
+            "options": {
+              "include": {
+                "names": [
+                  "Duration"
+                ]
+              }
+            }
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "count"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "orientation": "auto",
+          "textMode": "value_and_name",
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "fixed",
+              "fixedColor": "blue"
+            },
+            "unit": "short",
+            "displayName": "LLM Calls"
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Avg Latency",
+        "type": "stat",
+        "gridPos": {
+          "x": 6,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "filterFieldsByName",
+            "options": {
+              "include": {
+                "names": [
+                  "Duration"
+                ]
+              }
+            }
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "mean"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 10000
+                },
+                {
+                  "color": "red",
+                  "value": 30000
+                }
+              ]
+            },
+            "unit": "ms",
+            "displayName": "Avg Latency"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Max Latency",
+        "type": "stat",
+        "gridPos": {
+          "x": 12,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "filterFieldsByName",
+            "options": {
+              "include": {
+                "names": [
+                  "Duration"
+                ]
+              }
+            }
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "max"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "fixed",
+              "fixedColor": "orange"
+            },
+            "unit": "ms",
+            "displayName": "Max Latency"
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Total LLM Time",
+        "type": "stat",
+        "gridPos": {
+          "x": 18,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "filterFieldsByName",
+            "options": {
+              "include": {
+                "names": [
+                  "Duration"
+                ]
+              }
+            }
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "sum"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "fixed",
+              "fixedColor": "purple"
+            },
+            "unit": "ms",
+            "displayName": "Total LLM Time"
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Calls by Model",
+        "type": "barchart",
+        "gridPos": {
+          "x": 0,
+          "y": 4,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "groupBy",
+            "options": {
+              "fields": {
+                "Name": {
+                  "aggregations": [
+                    "count"
+                  ],
+                  "operation": "groupby"
+                },
+                "traceID": {
+                  "aggregations": [
+                    "count"
+                  ],
+                  "operation": "aggregate"
+                }
+              }
+            }
+          },
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "Name": "Model",
+                "traceID (count)": "Calls"
+              }
+            }
+          },
+          {
+            "id": "sortBy",
+            "options": {
+              "fields": [
+                {
+                  "displayName": "Calls",
+                  "desc": true
+                }
+              ]
+            }
+          }
+        ],
+        "options": {
+          "xField": "Model",
+          "orientation": "auto",
+          "fillOpacity": 80,
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          },
+          "tooltip": {
+            "mode": "single"
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "custom": {
+              "lineWidth": 1,
+              "fillOpacity": 80
+            }
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Avg Latency by Model",
+        "type": "bargauge",
+        "gridPos": {
+          "x": 12,
+          "y": 4,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && name =~ \"${model}\" }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "groupBy",
+            "options": {
+              "fields": {
+                "Name": {
+                  "aggregations": [],
+                  "operation": "groupby"
+                },
+                "Duration": {
+                  "aggregations": [
+                    "mean"
+                  ],
+                  "operation": "aggregate"
+                }
+              }
+            }
+          },
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "Duration (mean)": "Avg ms"
+              }
+            }
+          },
+          {
+            "id": "rowsToFields",
+            "options": {
+              "nameField": "Name",
+              "valueField": "Avg ms"
+            }
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "orientation": "horizontal",
+          "displayMode": "gradient",
+          "showUnfilled": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 10000
+                },
+                {
+                  "color": "red",
+                  "value": 30000
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 7,
+        "title": "Recent Traces",
+        "type": "table",
+        "gridPos": {
+          "x": 0,
+          "y": 12,
+          "w": 24,
+          "h": 12
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && name =~ \"${model}\" }",
+            "tableType": "traces",
+            "limit": 50,
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "frameIndex": 0,
+          "showHeader": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "auto"
+            }
+          },
+          "overrides": [
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Duration"
+              },
+              "properties": [
+                {
+                  "id": "unit",
+                  "value": "ms"
+                },
+                {
+                  "id": "custom.width",
+                  "value": 130
+                },
+                {
+                  "id": "thresholds",
+                  "value": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      },
+                      {
+                        "color": "yellow",
+                        "value": 10000
+                      },
+                      {
+                        "color": "red",
+                        "value": 30000
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "custom.displayMode",
+                  "value": "color-background"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "folderId": 0,
+  "overwrite": true
+}
