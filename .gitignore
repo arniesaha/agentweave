@@ -30,3 +30,10 @@ TODO.md
 # OS
 .DS_Store
 Thumbs.db
+
+# Node.js
+node_modules/
+npm-debug.log*
+*.tsbuildinfo
+dist/
+.turbo/
