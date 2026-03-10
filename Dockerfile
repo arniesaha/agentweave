@@ -19,15 +19,17 @@ USER agentweave
 EXPOSE 4000
 
 # Configuration via environment variables:
-#   AGENTWEAVE_OTLP_ENDPOINT  — OTLP HTTP endpoint (required)
-#   AGENTWEAVE_PROXY_TOKEN    — Bearer token for incoming auth (recommended)
-#   AGENTWEAVE_PROXY_PORT     — Port to listen on (default: 4000)
-#   AGENTWEAVE_AGENT_ID       — Default agent ID tag (optional)
+#   AGENTWEAVE_OTLP_ENDPOINT   — OTLP HTTP endpoint (required)
+#   AGENTWEAVE_PROXY_TOKEN     — Bearer token for incoming auth (recommended)
+#   AGENTWEAVE_LISTEN_PORT     — Port to listen on (default: 4000)
+#                                NOTE: use AGENTWEAVE_LISTEN_PORT, not AGENTWEAVE_PROXY_PORT
+#                                (k8s injects AGENTWEAVE_PROXY_PORT as a service discovery var)
+#   AGENTWEAVE_AGENT_ID        — Default agent ID tag (optional)
 #   AGENTWEAVE_CAPTURE_PROMPTS — Set to "1" to capture prompt previews (optional)
 
 ENTRYPOINT ["sh", "-c", "\
   agentweave proxy start \
-    --port ${AGENTWEAVE_PROXY_PORT:-4000} \
+    --port ${AGENTWEAVE_LISTEN_PORT:-4000} \
     --endpoint ${AGENTWEAVE_OTLP_ENDPOINT:-http://localhost:4318} \
     ${AGENTWEAVE_AGENT_ID:+--agent-id $AGENTWEAVE_AGENT_ID} \
     ${AGENTWEAVE_CAPTURE_PROMPTS:+--capture-prompts} \
