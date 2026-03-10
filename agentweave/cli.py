@@ -12,7 +12,9 @@ from rich.tree import Tree
 
 app = typer.Typer(name="agentweave", help="AgentWeave — observability for multi-agent AI systems.")
 trace_app = typer.Typer(name="trace", help="Inspect decision provenance traces.")
+proxy_app = typer.Typer(name="proxy", help="Anthropic API proxy for zero-config tracing.")
 app.add_typer(trace_app)
+app.add_typer(proxy_app)
 
 console = Console()
 
@@ -117,6 +119,82 @@ def trace_export(
     console.print(
         "\n[yellow]Note:[/yellow] Full trace data export requires backend query support (v0.2)."
     )
+
+
+# ---------------------------------------------------------------------------
+# agentweave proxy start
+# ---------------------------------------------------------------------------
+
+
+@proxy_app.command("start")
+def proxy_start(
+    port: int = typer.Option(4000, "--port", "-p", help="Port to listen on."),
+    host: str = typer.Option("0.0.0.0", "--host", help="Host to bind to."),
+    endpoint: Optional[str] = typer.Option(
+        None, "--endpoint", "-e",
+        help="OTLP HTTP endpoint (e.g. http://localhost:4318). Overrides AGENTWEAVE_OTLP_ENDPOINT.",
+    ),
+    agent_id: Optional[str] = typer.Option(
+        None, "--agent-id", help="Default agent ID tag for all traced calls."
+    ),
+    capture_prompts: bool = typer.Option(
+        False, "--capture-prompts",
+        help="Record first 512 chars of prompt and response in span attributes.",
+    ),
+) -> None:
+    """Start the AgentWeave Anthropic API proxy.
+
+    Point any Anthropic SDK client at this proxy by setting:
+
+        ANTHROPIC_BASE_URL=http://localhost:<port>
+
+    All requests are forwarded transparently; each LLM call gets an OTel span
+    with token counts, model, stop reason, and latency.
+    """
+    import os
+
+    try:
+        from agentweave.proxy import run as proxy_run
+    except ImportError:
+        console.print(
+            "[red]Proxy dependencies not installed.[/red]\n"
+            "Run: [bold]pip install agentweave\\[proxy][/bold]"
+        )
+        raise typer.Exit(code=1)
+
+    if endpoint:
+        os.environ["AGENTWEAVE_OTLP_ENDPOINT"] = endpoint
+    if capture_prompts:
+        os.environ["AGENTWEAVE_CAPTURE_PROMPTS"] = "1"
+
+    otel_endpoint = endpoint or os.getenv("AGENTWEAVE_OTLP_ENDPOINT", "http://localhost:4318")
+
+    from agentweave.config import AgentWeaveConfig
+    from agentweave import exporter as _exp
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.resources import Resource
+
+    resource = Resource.create({
+        "service.name": "agentweave-proxy",
+        "agentweave.agent.id": agent_id or "proxy",
+    })
+    provider = TracerProvider(resource=resource)
+    provider.add_span_processor(
+        BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{otel_endpoint}/v1/traces"))
+    )
+    _exp._provider = provider
+
+    console.print(f"[bold green]AgentWeave Proxy[/bold green] starting on [bold]{host}:{port}[/bold]")
+    console.print(f"  OTLP endpoint : [cyan]{otel_endpoint}[/cyan]")
+    console.print(f"  Agent ID      : [cyan]{agent_id or '(from X-AgentWeave-Agent-Id header)'}[/cyan]")
+    console.print(f"  Capture prompts: [cyan]{capture_prompts}[/cyan]")
+    console.print()
+    console.print(f"  Set in your agent: [bold]ANTHROPIC_BASE_URL=http://localhost:{port}[/bold]")
+    console.print()
+
+    proxy_run(host=host, port=port)
 
 
 # ---------------------------------------------------------------------------
