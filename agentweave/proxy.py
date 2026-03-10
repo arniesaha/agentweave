@@ -310,7 +310,15 @@ def _parse_anthropic_sse(
         etype = event.get("type", "")
         if etype == "message_start":
             usage = event.get("message", {}).get("usage", {})
-            input_tokens = usage.get("input_tokens", input_tokens)
+            # Sum all input token categories — OpenClaw uses prompt caching so
+            # the bulk of tokens are in cache_read_input_tokens /
+            # cache_creation_input_tokens, not bare input_tokens.
+            total_input = (
+                usage.get("input_tokens", 0)
+                + usage.get("cache_creation_input_tokens", 0)
+                + usage.get("cache_read_input_tokens", 0)
+            )
+            input_tokens = total_input if total_input > 0 else input_tokens
         elif etype == "message_delta":
             usage = event.get("usage", {})
             output_tokens = usage.get("output_tokens", output_tokens)
@@ -358,7 +366,12 @@ def _extract_and_set_response(
 
 def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
     usage = data.get("usage", {})
-    pt = usage.get("input_tokens", 0)
+    # Sum all input token categories to account for prompt caching
+    pt = (
+        usage.get("input_tokens", 0)
+        + usage.get("cache_creation_input_tokens", 0)
+        + usage.get("cache_read_input_tokens", 0)
+    )
     ct = usage.get("output_tokens", 0)
     span.set_attribute(schema.PROV_LLM_PROMPT_TOKENS, pt)
     span.set_attribute(schema.PROV_LLM_COMPLETION_TOKENS, ct)
