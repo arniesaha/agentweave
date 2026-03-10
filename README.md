@@ -4,6 +4,54 @@ Observability for multi-agent AI systems. Track what your agents decided, why th
 
 AgentWeave wraps your Python agent code with [W3C PROV-O](https://www.w3.org/TR/prov-o/) compatible [OpenTelemetry](https://opentelemetry.io/) spans. Three decorators. Full decision provenance. Works with any OTLP backend.
 
+<p align="center">
+  <img src="screenshots/AgentWeave-SS-1.png" alt="Trace waterfall in Grafana Tempo showing a Gemini 2.5 Pro call with PROV-O span attributes" width="100%">
+  <br>
+  <em>Trace waterfall in Grafana Tempo — a Gemini 2.5 Pro call with PROV-O span attributes (model, provider, agent ID, latency)</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/AgentWeave-SS-2.png" alt="Multi-provider trace list showing Gemini and Claude calls side by side" width="100%">
+  <br>
+  <em>Multi-provider trace list — Gemini and Claude Sonnet calls from the same proxy, one unified view</em>
+</p>
+
+## Architecture
+
+```mermaid
+graph LR
+    subgraph Agents
+        A1[Claude Agent<br><small>Python / Node.js</small>]
+        A2[Gemini Agent<br><small>Python / Node.js</small>]
+        A3[Any Agent<br><small>OpenAI, etc.</small>]
+    end
+
+    subgraph AgentWeave Proxy :4000
+        P[Multi-Provider<br>Proxy]
+    end
+
+    subgraph Upstream LLMs
+        AN[api.anthropic.com]
+        GO[generativelanguage<br>.googleapis.com]
+    end
+
+    subgraph Observability
+        OT[OTLP Collector<br><small>Tempo / Jaeger / Langfuse</small>]
+        GR[Grafana<br>Dashboard]
+    end
+
+    A1 -- "ANTHROPIC_BASE_URL" --> P
+    A2 -- "GOOGLE_GENAI_BASE_URL" --> P
+    A3 -. "@trace_llm decorator" .-> OT
+
+    P -- "/v1/messages" --> AN
+    P -- "/v1beta/models/*" --> GO
+    P -- "OTel spans" --> OT
+    OT --> GR
+```
+
+**How it works:** Agents point their SDK base URL at the proxy. The proxy auto-detects the provider from the request path, forwards the call upstream, extracts token counts and metadata, and emits an OTel span — all transparently. For Python agents, you can also use the `@trace_llm` / `@trace_tool` / `@trace_agent` decorators directly.
+
 ## Why
 
 When an agent delegates to another agent, calls an LLM ten times searching for a photo, and finally deploys a result — none of that is visible today. You see the output. You don't see the chain.
@@ -82,17 +130,21 @@ def delegate_to_max(task: str) -> dict: ...
 
 ### `@trace_llm`
 
-Span for LLM invocations. Auto-extracts token counts and stop reason from the response (Anthropic and OpenAI conventions supported).
+Span for LLM invocations. Auto-extracts token counts and stop reason from the response (Anthropic, OpenAI, and Google Gemini conventions supported).
 
 ```python
 @trace_llm(provider="anthropic", model="claude-sonnet-4-6",
            captures_input=True, captures_output=True)
 def call_claude(messages: list) -> anthropic.Message: ...
+
+@trace_llm(provider="google", model="gemini-2.5-pro",
+           captures_input=True, captures_output=True)
+def call_gemini(contents: list) -> genai.GenerateContentResponse: ...
 ```
 
 **Captured automatically:**
 - `prov.llm.prompt_tokens` / `prov.llm.completion_tokens` / `prov.llm.total_tokens`
-- `prov.llm.stop_reason` (`end_turn`, `tool_use`, `stop`, etc.)
+- `prov.llm.stop_reason` (`end_turn`, `tool_use`, `STOP`, etc.)
 - `prov.llm.prompt_preview` and `prov.llm.response_preview` (first 512 chars, when `captures_input/output=True`)
 
 ## PROV-O Attributes
@@ -106,7 +158,7 @@ def call_claude(messages: list) -> anthropic.Message: ...
 | `prov.used` | Serialized inputs consumed by the activity |
 | `prov.wasGeneratedBy` | Output produced by the activity |
 | `prov.wasAssociatedWith` | Agent responsible for the activity |
-| `prov.llm.provider` | LLM provider (`anthropic`, `openai`, etc.) |
+| `prov.llm.provider` | LLM provider (`anthropic`, `openai`, `google`) |
 | `prov.llm.model` | Model name |
 | `prov.llm.prompt_tokens` | Input token count |
 | `prov.llm.completion_tokens` | Output token count |
@@ -115,18 +167,36 @@ def call_claude(messages: list) -> anthropic.Message: ...
 
 Full schema: [`agentweave/schema.py`](agentweave/schema.py)
 
-## Proxy — zero-config tracing for any agent
+## Proxy — multi-provider observability gateway
 
-For agents you can't instrument with decorators (Node.js, Claude Code, pi-mono), run the **AgentWeave proxy** — a transparent HTTP server between your agent and the Anthropic API.
+For agents you can't instrument with decorators (Node.js, Claude Code, OpenClaw), run the **AgentWeave proxy** — a transparent HTTP server that sits between your agents and their LLM providers.
+
+The proxy auto-detects the provider from the request path:
+
+| Path pattern | Provider | Upstream |
+|---|---|---|
+| `/v1/messages` | Anthropic | `api.anthropic.com` |
+| `/v1beta/models/...` | Google Gemini | `generativelanguage.googleapis.com` |
+| `/v1/models/...` | Google Gemini | `generativelanguage.googleapis.com` |
 
 ```bash
 pip install "agentweave[proxy]"
 agentweave proxy start --port 4000 --endpoint http://localhost:4318 --agent-id my-agent
 ```
 
-Then set `ANTHROPIC_BASE_URL=http://localhost:4000` in your agent. That's it. Every LLM call gets a span — no SDK changes, no framework lock-in, works for Python, Node.js, or anything that uses the Anthropic SDK.
+Point your agents at the proxy:
 
-→ Full setup guide: [docs/proxy-setup.md](docs/proxy-setup.md)
+```bash
+# Anthropic agents
+export ANTHROPIC_BASE_URL=http://localhost:4000
+
+# Google Gemini agents
+export GOOGLE_GENAI_BASE_URL=http://localhost:4000
+```
+
+One port, all providers. Every LLM call gets a span — no SDK changes, no framework lock-in.
+
+> Full setup guide: [docs/proxy-setup.md](docs/proxy-setup.md)
 
 ## Backends
 
