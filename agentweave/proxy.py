@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import time
 from typing import Any, AsyncIterator
 
@@ -45,11 +46,16 @@ logger = logging.getLogger("agentweave.proxy")
 
 ANTHROPIC_BASE = "https://api.anthropic.com"
 
-# Headers forwarded from client → Anthropic (drop hop-by-hop + host)
+# Headers forwarded from client → Anthropic (drop hop-by-hop + host + ours)
 _SKIP_REQUEST_HEADERS = {
     "host", "content-length", "transfer-encoding", "connection",
+    "authorization",                   # stripped — contains proxy token, not Anthropic key
     "x-agentweave-agent-id", "x-agentweave-agent-model",
 }
+
+# Runtime auth token — set via AGENTWEAVE_PROXY_TOKEN env var or --auth-token CLI flag.
+# If empty, proxy runs in open mode (dev/localhost only).
+_PROXY_TOKEN: str | None = os.getenv("AGENTWEAVE_PROXY_TOKEN") or None
 
 app = FastAPI(
     title="AgentWeave Proxy",
@@ -58,8 +64,29 @@ app = FastAPI(
 )
 
 
+def _check_auth(request: Request) -> JSONResponse | None:
+    """Return a 401 JSONResponse if token auth fails, else None."""
+    if not _PROXY_TOKEN:
+        return None  # open mode — no auth required
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return JSONResponse(
+            {"error": "missing_token", "message": "Authorization: Bearer <token> required"},
+            status_code=401,
+        )
+    token = auth[len("Bearer "):]
+    if not secrets.compare_digest(token, _PROXY_TOKEN):
+        return JSONResponse(
+            {"error": "invalid_token", "message": "Invalid proxy token"},
+            status_code=401,
+        )
+    return None
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], response_model=None)
 async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse:
+    if (denied := _check_auth(request)) is not None:
+        return denied
     body_bytes = await request.body()
     body: dict[str, Any] = {}
     if body_bytes:
@@ -83,7 +110,8 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         or model
     )
 
-    # Forward headers — preserve anthropic-version, auth, etc.
+    # Forward headers — preserve x-api-key, anthropic-version, etc.
+    # Drop proxy-specific headers (authorization = proxy token, not Anthropic key)
     forward_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in _SKIP_REQUEST_HEADERS

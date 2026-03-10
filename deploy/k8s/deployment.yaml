@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentweave-proxy
+  namespace: agentweave
+  labels:
+    app: agentweave-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentweave-proxy
+  template:
+    metadata:
+      labels:
+        app: agentweave-proxy
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: proxy
+          image: ghcr.io/arniesaha/agentweave:latest
+          ports:
+            - containerPort: 4000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: agentweave-proxy
+          env:
+            # Proxy token injected from Secret — never hardcode in ConfigMap
+            - name: AGENTWEAVE_PROXY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: agentweave-proxy
+                  key: proxy-token
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /docs
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /docs
+              port: 4000
+            initialDelaySeconds: 3
+            periodSeconds: 10

@@ -141,6 +141,11 @@ def proxy_start(
         False, "--capture-prompts",
         help="Record first 512 chars of prompt and response in span attributes.",
     ),
+    auth_token: Optional[str] = typer.Option(
+        None, "--auth-token",
+        help="Bearer token required on incoming requests. Recommended for NodePort/LAN exposure. "
+             "Also reads from AGENTWEAVE_PROXY_TOKEN env var.",
+    ),
 ) -> None:
     """Start the AgentWeave Anthropic API proxy.
 
@@ -166,6 +171,10 @@ def proxy_start(
         os.environ["AGENTWEAVE_OTLP_ENDPOINT"] = endpoint
     if capture_prompts:
         os.environ["AGENTWEAVE_CAPTURE_PROMPTS"] = "1"
+    if auth_token:
+        os.environ["AGENTWEAVE_PROXY_TOKEN"] = auth_token
+    # Also propagate env var if already set (CLI flag takes precedence)
+    effective_token = auth_token or os.getenv("AGENTWEAVE_PROXY_TOKEN")
 
     otel_endpoint = endpoint or os.getenv("AGENTWEAVE_OTLP_ENDPOINT", "http://localhost:4318")
 
@@ -190,6 +199,7 @@ def proxy_start(
     console.print(f"  OTLP endpoint : [cyan]{otel_endpoint}[/cyan]")
     console.print(f"  Agent ID      : [cyan]{agent_id or '(from X-AgentWeave-Agent-Id header)'}[/cyan]")
     console.print(f"  Capture prompts: [cyan]{capture_prompts}[/cyan]")
+    console.print(f"  Auth token    : [cyan]{'set ✓' if effective_token else 'NONE (open mode — localhost only!)'}[/cyan]")
     console.print()
     console.print(f"  Set in your agent: [bold]ANTHROPIC_BASE_URL=http://localhost:{port}[/bold]")
     console.print()

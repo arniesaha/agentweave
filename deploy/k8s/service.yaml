@@ -1,0 +1,38 @@
+---
+# ClusterIP — for agents running inside k8s (same cluster)
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentweave-proxy
+  namespace: agentweave
+  labels:
+    app: agentweave-proxy
+spec:
+  type: ClusterIP
+  selector:
+    app: agentweave-proxy
+  ports:
+    - port: 4000
+      targetPort: 4000
+      name: http
+
+---
+# NodePort — for LAN agents (Mac Mini / pi-mono) outside the cluster
+# Access via http://<node-ip>:30400
+# Protected by AGENTWEAVE_PROXY_TOKEN bearer auth.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentweave-proxy-nodeport
+  namespace: agentweave
+  labels:
+    app: agentweave-proxy
+spec:
+  type: NodePort
+  selector:
+    app: agentweave-proxy
+  ports:
+    - port: 4000
+      targetPort: 4000
+      nodePort: 30400
+      name: http

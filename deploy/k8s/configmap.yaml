@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentweave-proxy
+  namespace: agentweave
+data:
+  # OTLP HTTP endpoint for trace export
+  AGENTWEAVE_OTLP_ENDPOINT: "http://tempo.monitoring.svc.cluster.local:4318"
+
+  # Agent ID tag applied to all spans from this proxy instance
+  AGENTWEAVE_AGENT_ID: "proxy"
+
+  # Set to "1" to capture prompt/response previews in spans (opt-in)
+  # AGENTWEAVE_CAPTURE_PROMPTS: "1"
