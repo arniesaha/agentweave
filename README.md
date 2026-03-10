@@ -115,6 +115,19 @@ def call_claude(messages: list) -> anthropic.Message: ...
 
 Full schema: [`agentweave/schema.py`](agentweave/schema.py)
 
+## Proxy — zero-config tracing for any agent
+
+For agents you can't instrument with decorators (Node.js, Claude Code, pi-mono), run the **AgentWeave proxy** — a transparent HTTP server between your agent and the Anthropic API.
+
+```bash
+pip install "agentweave[proxy]"
+agentweave proxy start --port 4000 --endpoint http://localhost:4318 --agent-id my-agent
+```
+
+Then set `ANTHROPIC_BASE_URL=http://localhost:4000` in your agent. That's it. Every LLM call gets a span — no SDK changes, no framework lock-in, works for Python, Node.js, or anything that uses the Anthropic SDK.
+
+→ Full setup guide: [docs/proxy-setup.md](docs/proxy-setup.md)
+
 ## Backends
 
 AgentWeave emits standard OTLP HTTP — works with any compatible backend:
