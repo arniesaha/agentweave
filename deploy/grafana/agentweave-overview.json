@@ -10,7 +10,7 @@
     ],
     "timezone": "browser",
     "schemaVersion": 38,
-    "version": 8,
+    "version": 9,
     "refresh": "30s",
     "time": {
       "from": "now-24h",
@@ -116,7 +116,7 @@
             {
               "matcher": {
                 "id": "byName",
-                "options": "Duration"
+                "options": "traceDuration"
               },
               "properties": [
                 {
