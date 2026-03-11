@@ -10,7 +10,7 @@
     ],
     "timezone": "browser",
     "schemaVersion": 38,
-    "version": 9,
+    "version": 10,
     "refresh": "30s",
     "time": {
       "from": "now-24h",
@@ -72,7 +72,7 @@
               "uid": "cffj9et53r9j4f"
             },
             "queryType": "traceql",
-            "query": "{ resource.service.name = \"agentweave-proxy\" }",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
             "tableType": "traces",
             "limit": 500,
             "refId": "A"
@@ -149,7 +149,7 @@
               "uid": "cffj9et53r9j4f"
             },
             "queryType": "traceql",
-            "query": "{ resource.service.name = \"agentweave-proxy\" }",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
             "tableType": "traces",
             "limit": 500,
             "refId": "A"
@@ -226,7 +226,7 @@
               "uid": "cffj9et53r9j4f"
             },
             "queryType": "traceql",
-            "query": "{ resource.service.name = \"agentweave-proxy\" }",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
             "tableType": "traces",
             "limit": 500,
             "refId": "A"
@@ -287,7 +287,7 @@
               "uid": "cffj9et53r9j4f"
             },
             "queryType": "traceql",
-            "query": "{ resource.service.name = \"agentweave-proxy\" }",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
             "tableType": "traces",
             "limit": 500,
             "refId": "A"
@@ -348,7 +348,7 @@
               "uid": "cffj9et53r9j4f"
             },
             "queryType": "traceql",
-            "query": "{ resource.service.name = \"agentweave-proxy\" }",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
             "tableType": "traces",
             "limit": 500,
             "refId": "A"
