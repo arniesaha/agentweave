@@ -2,23 +2,21 @@
 
 Observability for multi-agent AI systems. Track what your agents decided, why they decided it, and how much it cost.
 
-AgentWeave wraps your agent code with [W3C PROV-O](https://www.w3.org/TR/prov-o/) compatible [OpenTelemetry](https://opentelemetry.io/) spans. Three decorators. Full decision provenance. Works with any OTLP backend.
+Three decorators. Full decision provenance. Works with any OTLP backend.
 
-<p align="center">
-  <img src="screenshots/AgentWeave-SS.png" alt="AgentWeave Grafana dashboard showing LLM call counts, latency by model, and recent traces across Claude and Gemini" width="100%">
-  <br>
-  <em>AgentWeave dashboard — 80 LLM calls across Claude Opus, Sonnet, and Haiku with latency breakdowns and live trace feed</em>
-</p>
+```
+agent.nix                          94ms
+├── llm.claude-sonnet-4-6          81ms  ← prompt_tokens=847, completion_tokens=312
+├── tool.image_search               52ms
+├── llm.claude-sonnet-4-6          79ms  ← prompt_tokens=847, completion_tokens=312
+├── tool.image_search               51ms
+├── llm.claude-sonnet-4-6          80ms  ← found it
+└── tool.deploy_portfolio           48ms
+```
 
-## SDKs
+When an agent delegates to another agent, calls an LLM ten times, and finally deploys a result — you see the output but not the chain. AgentWeave makes the chain the first-class artifact. Every span carries [W3C PROV-O](https://www.w3.org/TR/prov-o/) provenance on [OpenTelemetry](https://opentelemetry.io/): what was consumed, what was generated, which agent made the call, which model ran it.
 
-| SDK | Language | Install | Status |
-|-----|----------|---------|--------|
-| [sdk/python](./sdk/python) | Python | `pip install agentweave-sdk` | ✅ v0.1.1 |
-| [sdk/js](./sdk/js) | TypeScript / JavaScript | `npm install agentweave` | ✅ v0.1.0 |
-| [sdk/go](./sdk/go) | Go | `go get github.com/arniesaha/agentweave-go` | ✅ v0.1.0 |
-
-## Architecture
+## How it works
 
 ```mermaid
 graph LR
@@ -52,38 +50,24 @@ graph LR
     OT --> GR
 ```
 
-**How it works:** Agents point their SDK base URL at the proxy. The proxy auto-detects the provider from the request path, forwards the call upstream, extracts token counts and metadata, and emits an OTel span — all transparently. For Python/TypeScript/Go agents, you can also use the `@trace_llm` / `@trace_tool` / `@trace_agent` decorators directly.
+**Two paths to instrumentation:**
 
-## Why
+1. **Decorators** (`@trace_agent`, `@trace_llm`, `@trace_tool`) — wrap your functions directly in Python, TypeScript, or Go. Zero infrastructure needed.
+2. **Proxy** — point any agent's base URL at AgentWeave. It auto-detects the provider, forwards upstream, extracts token counts, and emits OTel spans. No code changes.
 
-When an agent delegates to another agent, calls an LLM ten times searching for a photo, and finally deploys a result — none of that is visible today. You see the output. You don't see the chain.
-
-AgentWeave makes the chain the first-class artifact:
-
-```
-agent.nix                          94ms
-├── llm.claude-sonnet-4-6          81ms  ← prompt_tokens=847, completion_tokens=312
-├── tool.image_search               52ms
-├── llm.claude-sonnet-4-6          79ms  ← prompt_tokens=847, completion_tokens=312
-├── tool.image_search               51ms
-├── llm.claude-sonnet-4-6          80ms  ← found it
-└── tool.deploy_portfolio           48ms
-```
-
-Every span carries PROV-O provenance: what was consumed, what was generated, which agent made the call, which model ran it.
+<p align="center">
+  <img src="screenshots/AgentWeave-SS.png" alt="AgentWeave Grafana dashboard showing LLM call counts, latency by model, and recent traces across Claude and Gemini" width="100%">
+  <br>
+  <em>AgentWeave dashboard — 80 LLM calls across Claude Opus, Sonnet, and Haiku with latency breakdowns and live trace feed</em>
+</p>
 
 ## Install
 
-```bash
-# Python
-pip install agentweave-sdk
-
-# TypeScript / JavaScript
-npm install agentweave
-
-# Go
-go get github.com/arniesaha/agentweave-go
-```
+| SDK | Language | Install |
+|-----|----------|---------|
+| [sdk/python](./sdk/python) | Python | `pip install agentweave-sdk` |
+| [sdk/js](./sdk/js) | TypeScript / JavaScript | `npm install agentweave` |
+| [sdk/go](./sdk/go) | Go | `go get github.com/arniesaha/agentweave-go` |
 
 ## Quickstart (Python)
 
@@ -196,14 +180,12 @@ AgentWeave emits standard OTLP HTTP — works with any compatible backend:
 ## Development
 
 ```bash
-git clone https://github.com/arniesaha/agentweave
-cd agentweave
+git clone https://github.com/arniesaha/agentweave && cd agentweave
 pip install -e "./sdk/python[dev]"
-cd sdk/python && pytest         # 31 tests (Python)
-cd sdk/js && npx jest --verbose  # 10 tests (TypeScript)
-cd sdk/go && go test ./... -v    # 4 tests (Go)
-python examples/simple_agent.py
-python examples/nix_max_delegation.py
+
+pytest sdk/python                                    # 31 Python tests
+(cd sdk/js && npm ci && npx jest --verbose)           # 10 TypeScript tests
+(cd sdk/go && go test ./... -v)                       # 4 Go tests
 ```
 
 ## License
