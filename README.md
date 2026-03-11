@@ -21,28 +21,36 @@ When an agent delegates to another agent, calls an LLM ten times, and finally de
 ```mermaid
 graph LR
     subgraph Agents
-        A1[Claude Agent<br><small>Python / Node.js</small>]
-        A2[Gemini Agent<br><small>Python / Node.js</small>]
-        A3[Any Agent<br><small>OpenAI, etc.</small>]
+        A1["Claude Agent
+        (Python / Node.js)"]
+        A2["Gemini Agent
+        (Python / Node.js)"]
+        A3["OpenAI Agent
+        (Python / Node.js)"]
     end
 
     subgraph AgentWeave Proxy :4000
-        P[Multi-Provider<br>Proxy]
+        P["Multi-Provider
+        Proxy"]
     end
 
     subgraph Upstream LLMs
         AN[api.anthropic.com]
-        GO[generativelanguage<br>.googleapis.com]
+        GO["generativelanguage
+        .googleapis.com"]
     end
 
     subgraph Observability
-        OT[OTLP Collector<br><small>Tempo / Jaeger / Langfuse</small>]
-        GR[Grafana<br>Dashboard]
+        OT["OTLP Collector
+        (Tempo / Jaeger / Langfuse)"]
+        GR["Grafana
+        Dashboard"]
     end
 
     A1 -- "ANTHROPIC_BASE_URL" --> P
     A2 -- "GOOGLE_GENAI_BASE_URL" --> P
-    A3 -. "@trace_llm decorator" .-> OT
+    A3 -. "auto_instrument() or
+    @trace_llm decorator" .-> OT
 
     P -- "/v1/messages" --> AN
     P -- "/v1beta/models/*" --> GO
