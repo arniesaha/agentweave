@@ -26,7 +26,9 @@ jobs:
 
       - name: Install dependencies
         working-directory: sdk/python
-        run: pip install -e ".[dev]"
+        run: |
+          cp ../../README.md .
+          pip install -e ".[dev]"
 
       - name: Run tests
         working-directory: sdk/python
@@ -48,6 +50,7 @@ jobs:
         working-directory: sdk/python
         run: |
           pip install build
+          cp ../../README.md .
           python -m build
 
       - name: Publish to PyPI
