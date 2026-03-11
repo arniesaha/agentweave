@@ -57,8 +57,13 @@ def _make_llm_wrapper(
                 span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
                 span.set_attribute(schema.PROV_LLM_MODEL, model)
                 span.set_attribute(schema.AUTO_INSTRUMENTED, True)
+                # OTel gen_ai.* dual-emit
+                span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
+                span.set_attribute(schema.GEN_AI_SYSTEM, provider)
                 for k, v in _get_config_attrs().items():
                     span.set_attribute(k, v)
+                # Set after config attrs so explicit model wins over cfg.agent_model
+                span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
 
                 result = await original(*args, **kwargs)
 
@@ -82,8 +87,13 @@ def _make_llm_wrapper(
                 span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
                 span.set_attribute(schema.PROV_LLM_MODEL, model)
                 span.set_attribute(schema.AUTO_INSTRUMENTED, True)
+                # OTel gen_ai.* dual-emit
+                span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
+                span.set_attribute(schema.GEN_AI_SYSTEM, provider)
                 for k, v in _get_config_attrs().items():
                     span.set_attribute(k, v)
+                # Set after config attrs so explicit model wins over cfg.agent_model
+                span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
 
                 result = original(*args, **kwargs)
 

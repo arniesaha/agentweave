@@ -4,6 +4,23 @@ These constants map PROV-O concepts to OTel span attributes, enabling
 provenance-aware tracing of agent decisions and tool calls.
 
 Reference: https://www.w3.org/TR/prov-o/
+
+OTel gen_ai.* Semantic Conventions (dual-emitted alongside prov.*)
+------------------------------------------------------------------
+AgentWeave emits both prov.* and gen_ai.* attributes on every span so
+that backends like Datadog, Grafana, and Arize work out of the box.
+
+Mapping:
+  prov.activity.type = llm_call   → gen_ai.operation.name = chat
+  prov.activity.type = agent_turn → gen_ai.operation.name = invoke_agent
+  prov.llm.provider               → gen_ai.system
+  prov.agent.model                → gen_ai.request.model
+  prov.llm.prompt_tokens          → gen_ai.usage.input_tokens
+  prov.llm.completion_tokens      → gen_ai.usage.output_tokens
+  prov.llm.stop_reason            → gen_ai.response.finish_reasons (array)
+  prov.agent.id                   → gen_ai.agent.name
+
+Reference: https://opentelemetry.io/docs/specs/semconv/gen-ai/
 """
 
 # --- Span attribute keys ---
@@ -75,3 +92,20 @@ SPAN_PREFIX_LLM = "llm"
 # --- Auto-instrumentation ---
 
 AUTO_INSTRUMENTED = "agentweave.auto_instrumented"
+
+# ---------------------------------------------------------------------------
+# OTel gen_ai.* semantic convention attributes (dual-emitted alongside prov.*)
+# Reference: https://opentelemetry.io/docs/specs/semconv/gen-ai/
+# ---------------------------------------------------------------------------
+
+GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+GEN_AI_SYSTEM = "gen_ai.system"
+GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
+GEN_AI_AGENT_NAME = "gen_ai.agent.name"
+
+# gen_ai.operation.name values
+GEN_AI_OP_CHAT = "chat"
+GEN_AI_OP_INVOKE_AGENT = "invoke_agent"
