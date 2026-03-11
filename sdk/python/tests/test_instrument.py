@@ -180,6 +180,13 @@ class TestAnthropicInstrumentation:
         assert attrs[schema.PROV_LLM_COMPLETION_TOKENS] == 50
         assert attrs[schema.PROV_LLM_TOTAL_TOKENS] == 150
         assert attrs[schema.AUTO_INSTRUMENTED] is True
+        # OTel gen_ai.* dual-emit
+        assert attrs[schema.GEN_AI_OPERATION_NAME] == "chat"
+        assert attrs[schema.GEN_AI_SYSTEM] == "anthropic"
+        assert attrs[schema.GEN_AI_REQUEST_MODEL] == "claude-sonnet-4-6"
+        assert attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] == 100
+        assert attrs[schema.GEN_AI_USAGE_OUTPUT_TOKENS] == 50
+        assert list(attrs[schema.GEN_AI_RESPONSE_FINISH_REASONS]) == ["end_turn"]
 
     def test_anthropic_async(self, _setup_test_tracer):
         exporter, _ = _setup_test_tracer
@@ -219,6 +226,12 @@ class TestOpenAIInstrumentation:
         assert attrs[schema.PROV_LLM_PROMPT_TOKENS] == 80
         assert attrs[schema.PROV_LLM_COMPLETION_TOKENS] == 40
         assert attrs[schema.PROV_LLM_TOTAL_TOKENS] == 120
+        # OTel gen_ai.* dual-emit
+        assert attrs[schema.GEN_AI_OPERATION_NAME] == "chat"
+        assert attrs[schema.GEN_AI_SYSTEM] == "openai"
+        assert attrs[schema.GEN_AI_REQUEST_MODEL] == "gpt-4o"
+        assert attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] == 80
+        assert attrs[schema.GEN_AI_USAGE_OUTPUT_TOKENS] == 40
 
     def test_openai_async(self, _setup_test_tracer):
         exporter, _ = _setup_test_tracer
