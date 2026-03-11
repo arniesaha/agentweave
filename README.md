@@ -5,15 +5,9 @@ Observability for multi-agent AI systems. Track what your agents decided, why th
 AgentWeave wraps your agent code with [W3C PROV-O](https://www.w3.org/TR/prov-o/) compatible [OpenTelemetry](https://opentelemetry.io/) spans. Three decorators. Full decision provenance. Works with any OTLP backend.
 
 <p align="center">
-  <img src="screenshots/AgentWeave-SS-1.png" alt="Trace waterfall in Grafana Tempo showing a Gemini 2.5 Pro call with PROV-O span attributes" width="100%">
+  <img src="screenshots/AgentWeave-SS.png" alt="AgentWeave Grafana dashboard showing LLM call counts, latency by model, and recent traces across Claude and Gemini" width="100%">
   <br>
-  <em>Trace waterfall in Grafana Tempo — a Gemini 2.5 Pro call with PROV-O span attributes (model, provider, agent ID, latency)</em>
-</p>
-
-<p align="center">
-  <img src="screenshots/AgentWeave-SS-2.png" alt="Multi-provider trace list showing Gemini and Claude calls side by side" width="100%">
-  <br>
-  <em>Multi-provider trace list — Gemini and Claude Sonnet calls from the same proxy, one unified view</em>
+  <em>AgentWeave dashboard — 80 LLM calls across Claude Opus, Sonnet, and Haiku with latency breakdowns and live trace feed</em>
 </p>
 
 ## SDKs
@@ -174,7 +168,7 @@ Full schema: [`agentweave/schema.py`](agentweave/schema.py)
 
 ## Proxy — zero-code observability
 
-For agents you can't instrument with decorators (Node.js, Claude Code, any runtime), run the **AgentWeave proxy** — a transparent HTTP server that sits between your agents and their LLM providers.
+For agents you can't instrument with decorators (Claude Code, Node.js, any runtime), run the **AgentWeave proxy** — a transparent HTTP server that sits between your agents and their LLM providers. Works with Claude Code out of the box — just set `ANTHROPIC_BASE_URL` in `~/.claude/settings.json` ([setup guide](docs/claude-code-proxy.md)).
 
 ```bash
 pip install "agentweave[proxy]"
@@ -206,7 +200,9 @@ AgentWeave emits standard OTLP HTTP — works with any compatible backend:
 git clone https://github.com/arniesaha/agentweave
 cd agentweave
 pip install -e ".[dev]"
-pytest                          # 27 tests
+pytest                          # 31 tests (Python)
+cd sdk-js && npx jest --verbose  # 10 tests (TypeScript)
+cd sdk-go && go test ./... -v    # 4 tests (Go)
 python examples/simple_agent.py
 python examples/nix_max_delegation.py
 ```
