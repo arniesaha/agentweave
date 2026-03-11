@@ -2,7 +2,7 @@
 
 Observability for multi-agent AI systems. Track what your agents decided, why they decided it, and how much it cost.
 
-Three decorators. Full decision provenance. Works with any OTLP backend.
+Three decorators — or zero, with auto-instrumentation. Full decision provenance. Works with any OTLP backend.
 
 ```
 agent.nix                          94ms
@@ -50,10 +50,11 @@ graph LR
     OT --> GR
 ```
 
-**Two paths to instrumentation:**
+**Three paths to instrumentation:**
 
-1. **Decorators** (`@trace_agent`, `@trace_llm`, `@trace_tool`) — wrap your functions directly in Python, TypeScript, or Go. Zero infrastructure needed.
-2. **Proxy** — point any agent's base URL at AgentWeave. It auto-detects the provider, forwards upstream, extracts token counts, and emits OTel spans. No code changes.
+1. **Auto-instrumentation** (`auto_instrument()`) — one call patches Anthropic and OpenAI SDKs. No decorators needed.
+2. **Decorators** (`@trace_agent`, `@trace_llm`, `@trace_tool`) — wrap your functions directly in Python, TypeScript, or Go. Zero infrastructure needed.
+3. **Proxy** — point any agent's base URL at AgentWeave. It auto-detects the provider, forwards upstream, extracts token counts, and emits OTel spans. No code changes.
 
 <p align="center">
   <img src="screenshots/AgentWeave-SS.png" alt="AgentWeave Grafana dashboard showing LLM call counts, latency by model, and recent traces across Claude and Gemini" width="100%">
@@ -70,6 +71,19 @@ graph LR
 | [sdk/go](./sdk/go) | Go | `go get github.com/arniesaha/agentweave-go` |
 
 ## Quickstart (Python)
+
+### Option A — Auto-instrumentation (zero decorators)
+
+```python
+from agentweave import auto_instrument
+
+auto_instrument()  # patches Anthropic + OpenAI SDKs automatically
+
+# Every client.messages.create() and client.chat.completions.create()
+# now emits OTel spans with token counts — no wrappers needed.
+```
+
+### Option B — Decorators (explicit control)
 
 ```python
 from agentweave import AgentWeaveConfig, trace_agent, trace_llm, trace_tool
@@ -96,6 +110,25 @@ async def handle(message: str) -> str:
 ```
 
 All three spans link to the same trace ID. Open any OTLP backend and you see the waterfall.
+
+## Auto-Instrumentation
+
+Patch LLM SDK client methods with a single call — no decorators needed.
+
+```python
+from agentweave import auto_instrument, uninstrument
+
+auto_instrument()                              # patch all detected SDKs
+auto_instrument(providers=["anthropic"])        # selective
+auto_instrument(captures_output=True)          # include response preview
+
+uninstrument()                                 # restore originals
+```
+
+- Supports **Anthropic** (`Messages.create`) and **OpenAI** (`Completions.create`), sync + async
+- Composes with explicit `@trace_llm` — auto-instrumentation detects existing spans and skips to avoid double-tracing
+- Idempotent — calling `auto_instrument()` twice is safe
+- Streaming support deferred to a follow-up
 
 ## Decorators
 
@@ -183,7 +216,7 @@ AgentWeave emits standard OTLP HTTP — works with any compatible backend:
 git clone https://github.com/arniesaha/agentweave && cd agentweave
 pip install -e "./sdk/python[dev]"
 
-pytest sdk/python                                    # 31 Python tests
+pytest sdk/python                                    # 41 Python tests
 (cd sdk/js && npm ci && npx jest --verbose)           # 10 TypeScript tests
 (cd sdk/go && go test ./... -v)                       # 4 Go tests
 ```
