@@ -7,7 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  python:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -26,3 +27,39 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Run tests
+        working-directory: sdk-go
+        run: go test ./... -v
+
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: sdk-js
+        run: npm ci
+
+      - name: Run tests
+        working-directory: sdk-js
+        run: npx jest --verbose
