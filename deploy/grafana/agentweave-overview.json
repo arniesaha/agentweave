@@ -10,7 +10,7 @@
     ],
     "timezone": "browser",
     "schemaVersion": 38,
-    "version": 7,
+    "version": 8,
     "refresh": "30s",
     "time": {
       "from": "now-24h",
@@ -84,7 +84,7 @@
             "options": {
               "include": {
                 "names": [
-                  "traceID"
+                  "Duration"
                 ]
               }
             }
@@ -111,7 +111,21 @@
             },
             "unit": "none",
             "displayName": "LLM Calls"
-          }
+          },
+          "overrides": [
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Duration"
+              },
+              "properties": [
+                {
+                  "id": "unit",
+                  "value": "none"
+                }
+              ]
+            }
+          ]
         }
       },
       {
