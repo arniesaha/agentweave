@@ -40,12 +40,8 @@ spec:
                 secretKeyRef:
                   name: agentweave-proxy
                   key: proxy-token
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 4000
-            initialDelaySeconds: 10
-            periodSeconds: 30
+          # Note: /health requires auth so liveness probe omitted.
+          # Long-term fix: make /health unauthenticated (issue #9 area)
           resources:
             requests:
               memory: "128Mi"
