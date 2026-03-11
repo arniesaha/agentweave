@@ -279,6 +279,13 @@ async def _stream_and_trace(
         if stop_reason:
             span.set_attribute(schema.PROV_LLM_STOP_REASON, stop_reason)
         span.set_attribute("agentweave.latency_ms", elapsed_ms)
+
+        # OTel gen_ai.* dual-emit for streaming responses
+        span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
+        span.set_attribute(schema.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
+        if stop_reason:
+            span.set_attribute(schema.GEN_AI_RESPONSE_FINISH_REASONS, [stop_reason])
+
         span.set_status(StatusCode.OK)
 
     except Exception as exc:
@@ -382,6 +389,12 @@ def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int) -> Non
     span.set_attribute("agentweave.latency_ms", elapsed_ms)
     _maybe_set_response_preview(span, _anthropic_response_text(data))
 
+    # OTel gen_ai.* dual-emit
+    span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
+    span.set_attribute(schema.GEN_AI_USAGE_OUTPUT_TOKENS, ct)
+    if stop:
+        span.set_attribute(schema.GEN_AI_RESPONSE_FINISH_REASONS, [stop])
+
 
 def _set_google_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
     usage = data.get("usageMetadata", {})
@@ -391,12 +404,19 @@ def _set_google_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
     span.set_attribute(schema.PROV_LLM_COMPLETION_TOKENS, ct)
     span.set_attribute(schema.PROV_LLM_TOTAL_TOKENS, usage.get("totalTokenCount", pt + ct))
     candidates = data.get("candidates", [])
+    stop = None
     if candidates:
         stop = candidates[0].get("finishReason")
         if stop:
             span.set_attribute(schema.PROV_LLM_STOP_REASON, stop)
     span.set_attribute("agentweave.latency_ms", elapsed_ms)
     _maybe_set_response_preview(span, _google_response_text(data))
+
+    # OTel gen_ai.* dual-emit
+    span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
+    span.set_attribute(schema.GEN_AI_USAGE_OUTPUT_TOKENS, ct)
+    if stop:
+        span.set_attribute(schema.GEN_AI_RESPONSE_FINISH_REASONS, [stop])
 
 
 def _anthropic_response_text(data: dict) -> str:
@@ -435,6 +455,12 @@ def _set_request_attrs(
     span.set_attribute(schema.PROV_AGENT_MODEL, agent_model)
     span.set_attribute(schema.PROV_WAS_ASSOCIATED_WITH, agent_id)
     span.set_attribute("http.route", f"/{path}")
+
+    # OTel gen_ai.* dual-emit
+    span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
+    span.set_attribute(schema.GEN_AI_SYSTEM, provider)
+    span.set_attribute(schema.GEN_AI_REQUEST_MODEL, agent_model)
+    span.set_attribute(schema.GEN_AI_AGENT_NAME, agent_id)
 
     cfg = AgentWeaveConfig.get_or_none()
     if cfg and cfg.agent_id:

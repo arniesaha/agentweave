@@ -14,17 +14,26 @@ from agentweave.exporter import get_tracer
 
 
 def _get_config_attrs() -> dict:
-    """Pull agent identity attributes from global config (if setup)."""
+    """Pull agent identity attributes from global config (if setup).
+
+    Returns both prov.* and gen_ai.* attributes for dual-emit.
+    """
     try:
         from agentweave.config import AgentWeaveConfig
         cfg = AgentWeaveConfig.get_or_none()
         if cfg:
-            return {
+            attrs = {
                 schema.PROV_AGENT_ID: cfg.agent_id,
                 schema.PROV_AGENT_MODEL: cfg.agent_model,
                 schema.PROV_AGENT_VERSION: cfg.agent_version,
                 schema.PROV_WAS_ASSOCIATED_WITH: cfg.agent_id,
             }
+            # OTel gen_ai.* dual-emit
+            if cfg.agent_id:
+                attrs[schema.GEN_AI_AGENT_NAME] = cfg.agent_id
+            if cfg.agent_model:
+                attrs[schema.GEN_AI_REQUEST_MODEL] = cfg.agent_model
+            return attrs
     except Exception:
         pass
     return {}
@@ -111,6 +120,8 @@ def _make_agent_wrapper(fn: Callable, name: str, captures_input: bool, captures_
             tracer = get_tracer()
             with tracer.start_as_current_span(span_name) as span:
                 span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
+                # OTel gen_ai.* dual-emit
+                span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_INVOKE_AGENT)
                 for k, v in _get_config_attrs().items():
                     span.set_attribute(k, v)
                 if captures_input:
@@ -127,6 +138,8 @@ def _make_agent_wrapper(fn: Callable, name: str, captures_input: bool, captures_
             tracer = get_tracer()
             with tracer.start_as_current_span(span_name) as span:
                 span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
+                # OTel gen_ai.* dual-emit
+                span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_INVOKE_AGENT)
                 for k, v in _get_config_attrs().items():
                     span.set_attribute(k, v)
                 if captures_input:
@@ -191,6 +204,14 @@ def _extract_llm_attrs(response: Any, captures_output: bool) -> dict:
             stop_reason = getattr(choices[0], "finish_reason", None)
     if stop_reason is not None:
         attrs[schema.PROV_LLM_STOP_REASON] = stop_reason
+        # OTel gen_ai.* dual-emit
+        attrs[schema.GEN_AI_RESPONSE_FINISH_REASONS] = [stop_reason]
+
+    # OTel gen_ai.* token dual-emit
+    if schema.PROV_LLM_PROMPT_TOKENS in attrs:
+        attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] = attrs[schema.PROV_LLM_PROMPT_TOKENS]
+    if schema.PROV_LLM_COMPLETION_TOKENS in attrs:
+        attrs[schema.GEN_AI_USAGE_OUTPUT_TOKENS] = attrs[schema.PROV_LLM_COMPLETION_TOKENS]
 
     # Response preview
     if captures_output:
@@ -228,8 +249,13 @@ def trace_llm(provider: str, model: str, captures_input: bool = False, captures_
                     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
                     span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
                     span.set_attribute(schema.PROV_LLM_MODEL, model)
+                    # OTel gen_ai.* dual-emit
+                    span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
+                    span.set_attribute(schema.GEN_AI_SYSTEM, provider)
                     for k, v in _get_config_attrs().items():
                         span.set_attribute(k, v)
+                    # Set after config attrs so explicit model param wins over cfg.agent_model
+                    span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
                     result = await fn(*args, **kwargs)
                     for k, v in _extract_llm_attrs(result, captures_output).items():
                         span.set_attribute(k, v)
@@ -243,8 +269,13 @@ def trace_llm(provider: str, model: str, captures_input: bool = False, captures_
                     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
                     span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
                     span.set_attribute(schema.PROV_LLM_MODEL, model)
+                    # OTel gen_ai.* dual-emit
+                    span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
+                    span.set_attribute(schema.GEN_AI_SYSTEM, provider)
                     for k, v in _get_config_attrs().items():
                         span.set_attribute(k, v)
+                    # Set after config attrs so explicit model param wins over cfg.agent_model
+                    span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
                     result = fn(*args, **kwargs)
                     for k, v in _extract_llm_attrs(result, captures_output).items():
                         span.set_attribute(k, v)

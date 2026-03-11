@@ -197,6 +197,8 @@ class TestTraceAgent:
         assert spans[0].name == "agent.handle_message"
         attrs = dict(spans[0].attributes)
         assert attrs[schema.PROV_ACTIVITY_TYPE] == schema.ACTIVITY_AGENT_TURN
+        # OTel gen_ai.* dual-emit
+        assert attrs[schema.GEN_AI_OPERATION_NAME] == "invoke_agent"
 
     def test_named_agent(self, _setup_test_tracer):
         exporter, _ = _setup_test_tracer
@@ -346,6 +348,14 @@ class TestTraceLlm:
         assert attrs["prov.llm.stop_reason"] == "end_turn"
         assert "Lisbon" in attrs.get("prov.llm.response_preview", "")
 
+        # OTel gen_ai.* dual-emit assertions
+        assert attrs[schema.GEN_AI_OPERATION_NAME] == "chat"
+        assert attrs[schema.GEN_AI_SYSTEM] == "anthropic"
+        assert attrs[schema.GEN_AI_REQUEST_MODEL] == "claude-sonnet-4-6"
+        assert attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] == 150
+        assert attrs[schema.GEN_AI_USAGE_OUTPUT_TOKENS] == 42
+        assert list(attrs[schema.GEN_AI_RESPONSE_FINISH_REASONS]) == ["end_turn"]
+
     def test_openai_token_convention(self, _setup_test_tracer):
         exporter, _ = _setup_test_tracer
 
@@ -378,6 +388,13 @@ class TestTraceLlm:
         assert attrs["prov.llm.completion_tokens"] == 30
         assert attrs["prov.llm.total_tokens"] == 130
         assert "Paris" in attrs.get("prov.llm.response_preview", "")
+
+        # OTel gen_ai.* dual-emit assertions
+        assert attrs[schema.GEN_AI_OPERATION_NAME] == "chat"
+        assert attrs[schema.GEN_AI_SYSTEM] == "openai"
+        assert attrs[schema.GEN_AI_REQUEST_MODEL] == "gpt-4o"
+        assert attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] == 100
+        assert attrs[schema.GEN_AI_USAGE_OUTPUT_TOKENS] == 30
 
     def test_nested_agent_llm_tool_trace(self, _setup_test_tracer):
         """Full chain: agent_turn → llm_call → tool_call, all same trace_id."""
