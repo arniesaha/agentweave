@@ -1,4 +1,4 @@
 export { AgentWeaveConfig } from './config';
-export { getTracer } from './tracer';
+export { getTracer, withSpan } from './tracer';
 export { traceTool, traceAgent, traceLlm } from './decorators';
-export { PROV } from './schema';
+export * from './schema';

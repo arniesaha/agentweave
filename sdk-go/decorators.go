@@ -25,7 +25,7 @@ type LLMConfig struct {
 }
 
 // TraceTool wraps fn as a tool_call span. name is the tool name.
-func TraceTool(ctx context.Context, name string, fn func() (any, error)) (any, error) {
+func TraceTool(ctx context.Context, name string, fn func(context.Context) (any, error)) (any, error) {
 	tracer := getTracer()
 	spanName := fmt.Sprintf("%s.%s", SpanPrefixTool, name)
 
@@ -37,7 +37,7 @@ func TraceTool(ctx context.Context, name string, fn func() (any, error)) (any, e
 	)
 	applyGlobalConfig(span)
 
-	result, err := fn()
+	result, err := fn(ctx)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -47,7 +47,7 @@ func TraceTool(ctx context.Context, name string, fn func() (any, error)) (any, e
 }
 
 // TraceAgent wraps fn as an agent_turn span.
-func TraceAgent(ctx context.Context, name string, cfg AgentConfig, fn func() (any, error)) (any, error) {
+func TraceAgent(ctx context.Context, name string, cfg AgentConfig, fn func(context.Context) (any, error)) (any, error) {
 	tracer := getTracer()
 	spanName := fmt.Sprintf("%s.%s", SpanPrefixAgent, name)
 
@@ -68,7 +68,7 @@ func TraceAgent(ctx context.Context, name string, cfg AgentConfig, fn func() (an
 		span.SetAttributes(attribute.String(ProvAgentVersion, cfg.Version))
 	}
 
-	result, err := fn()
+	result, err := fn(ctx)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -79,11 +79,11 @@ func TraceAgent(ctx context.Context, name string, cfg AgentConfig, fn func() (an
 
 // TraceLlm wraps fn as an llm_call span. Extracts token counts from the response
 // if it implements LLMResponse.
-func TraceLlm(ctx context.Context, cfg LLMConfig, fn func() (any, error)) (any, error) {
+func TraceLlm(ctx context.Context, cfg LLMConfig, fn func(context.Context) (any, error)) (any, error) {
 	tracer := getTracer()
 	spanName := fmt.Sprintf("%s.%s", SpanPrefixLLM, cfg.Model)
 
-	_, span := tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
+	ctx, span := tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
 	defer span.End()
 
 	span.SetAttributes(
@@ -93,7 +93,7 @@ func TraceLlm(ctx context.Context, cfg LLMConfig, fn func() (any, error)) (any, 
 	)
 	applyGlobalConfig(span)
 
-	result, err := fn()
+	result, err := fn(ctx)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

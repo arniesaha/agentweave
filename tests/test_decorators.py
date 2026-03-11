@@ -158,7 +158,7 @@ class TestTraceToolAsync:
         async def async_search(query: str) -> str:
             return f"async results for {query}"
 
-        result = asyncio.get_event_loop().run_until_complete(async_search("test"))
+        result = asyncio.run(async_search("test"))
         assert result == "async results for test"
 
         spans = exporter.get_finished_spans()
@@ -173,7 +173,7 @@ class TestTraceToolAsync:
             raise RuntimeError("async fail")
 
         with pytest.raises(RuntimeError, match="async fail"):
-            asyncio.get_event_loop().run_until_complete(bad_async())
+            asyncio.run(bad_async())
 
         spans = exporter.get_finished_spans()
         assert spans[0].status.status_code == trace.StatusCode.ERROR
@@ -217,11 +217,68 @@ class TestTraceAgent:
         async def async_handler(message: str) -> str:
             return f"async: {message}"
 
-        result = asyncio.get_event_loop().run_until_complete(async_handler("hi"))
+        result = asyncio.run(async_handler("hi"))
         assert result == "async: hi"
 
         spans = exporter.get_finished_spans()
         assert spans[0].name == "agent.async_handler"
+
+    def test_captures_input(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="input_agent", captures_input=True)
+        def handle(msg: str) -> str:
+            return "response"
+
+        handle("input message")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert schema.PROV_USED in attrs
+        assert "input message" in attrs[schema.PROV_USED]
+
+    def test_captures_output(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="output_agent", captures_output=True)
+        def handle(msg: str) -> str:
+            return "agent response"
+
+        handle("hello")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert schema.PROV_WAS_GENERATED_BY in attrs
+        assert "agent response" in attrs[f"{schema.PROV_ENTITY}.output.value"]
+
+    def test_captures_input_and_output(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="full_agent", captures_input=True, captures_output=True)
+        def handle(msg: str) -> str:
+            return "full response"
+
+        handle("full input")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert "full input" in attrs[schema.PROV_USED]
+        assert "full response" in attrs[f"{schema.PROV_ENTITY}.output.value"]
+
+    def test_async_captures_input_output(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="async_cap_agent", captures_input=True, captures_output=True)
+        async def handle(msg: str) -> str:
+            return "async response"
+
+        result = asyncio.run(handle("async input"))
+        assert result == "async response"
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert "async input" in attrs[schema.PROV_USED]
+        assert "async response" in attrs[f"{schema.PROV_ENTITY}.output.value"]
 
     def test_nested_agent_tool_spans(self, _setup_test_tracer):
         exporter, _ = _setup_test_tracer

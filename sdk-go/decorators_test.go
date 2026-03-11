@@ -25,7 +25,7 @@ func TestTraceTool(t *testing.T) {
 	recorder := setupTestTracer(t)
 	ctx := context.Background()
 
-	result, err := agentweave.TraceTool(ctx, "web_search", func() (any, error) {
+	result, err := agentweave.TraceTool(ctx, "web_search", func(ctx context.Context) (any, error) {
 		return "results", nil
 	})
 
@@ -56,7 +56,7 @@ func TestTraceToolError(t *testing.T) {
 	recorder := setupTestTracer(t)
 	ctx := context.Background()
 
-	_, err := agentweave.TraceTool(ctx, "failing_tool", func() (any, error) {
+	_, err := agentweave.TraceTool(ctx, "failing_tool", func(ctx context.Context) (any, error) {
 		return nil, errors.New("tool failed")
 	})
 
@@ -79,7 +79,7 @@ func TestTraceAgent(t *testing.T) {
 		Model:   "claude-sonnet-4-6",
 	}
 
-	_, err := agentweave.TraceAgent(ctx, "handle", cfg, func() (any, error) {
+	_, err := agentweave.TraceAgent(ctx, "handle", cfg, func(ctx context.Context) (any, error) {
 		return "done", nil
 	})
 	if err != nil {
@@ -114,7 +114,7 @@ func TestTraceLlm(t *testing.T) {
 		Model:    "claude-sonnet-4-6",
 	}
 
-	_, err := agentweave.TraceLlm(ctx, cfg, func() (any, error) {
+	_, err := agentweave.TraceLlm(ctx, cfg, func(ctx context.Context) (any, error) {
 		return "response text", nil
 	})
 	if err != nil {

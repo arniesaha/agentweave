@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 from typing import Any, Callable, Optional
 
 from opentelemetry import trace
@@ -34,7 +35,7 @@ def _get_config_attrs() -> dict:
 def _make_tool_wrapper(fn: Callable, name: str, captures_input: bool, captures_output: bool) -> Callable:
     span_name = f"{schema.SPAN_PREFIX_TOOL}.{name}"
 
-    if asyncio.iscoroutinefunction(fn):
+    if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             tracer = get_tracer()
@@ -101,10 +102,10 @@ def trace_tool(fn: Optional[Callable] = None, *, name: Optional[str] = None,
 
 # ── trace_agent ───────────────────────────────────────────────────────────────
 
-def _make_agent_wrapper(fn: Callable, name: str) -> Callable:
+def _make_agent_wrapper(fn: Callable, name: str, captures_input: bool, captures_output: bool) -> Callable:
     span_name = f"{schema.SPAN_PREFIX_AGENT}.{name}"
 
-    if asyncio.iscoroutinefunction(fn):
+    if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             tracer = get_tracer()
@@ -112,7 +113,13 @@ def _make_agent_wrapper(fn: Callable, name: str) -> Callable:
                 span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
                 for k, v in _get_config_attrs().items():
                     span.set_attribute(k, v)
-                return await fn(*args, **kwargs)
+                if captures_input:
+                    span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
+                result = await fn(*args, **kwargs)
+                if captures_output:
+                    span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
+                    span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
+                return result
         return async_wrapper
     else:
         @functools.wraps(fn)
@@ -122,7 +129,13 @@ def _make_agent_wrapper(fn: Callable, name: str) -> Callable:
                 span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
                 for k, v in _get_config_attrs().items():
                     span.set_attribute(k, v)
-                return fn(*args, **kwargs)
+                if captures_input:
+                    span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
+                result = fn(*args, **kwargs)
+                if captures_output:
+                    span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
+                    span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
+                return result
         return sync_wrapper
 
 
@@ -138,10 +151,10 @@ def trace_agent(fn: Optional[Callable] = None, *, name: Optional[str] = None, co
         def handle(msg): ...
     """
     if callable(fn):
-        return _make_agent_wrapper(fn, fn.__name__)
+        return _make_agent_wrapper(fn, fn.__name__, False, False)
 
     def decorator(inner_fn: Callable) -> Callable:
-        return _make_agent_wrapper(inner_fn, name or inner_fn.__name__)
+        return _make_agent_wrapper(inner_fn, name or inner_fn.__name__, captures_input, captures_output)
 
     return decorator
 
@@ -207,7 +220,7 @@ def trace_llm(provider: str, model: str, captures_input: bool = False, captures_
     span_name = f"{schema.SPAN_PREFIX_LLM}.{model}"
 
     def decorator(fn: Callable) -> Callable:
-        if asyncio.iscoroutinefunction(fn):
+        if inspect.iscoroutinefunction(fn):
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 tracer = get_tracer()
