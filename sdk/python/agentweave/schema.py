@@ -71,3 +71,7 @@ ENTITY_TEXT = "text"
 SPAN_PREFIX_TOOL = "tool"
 SPAN_PREFIX_AGENT = "agent"
 SPAN_PREFIX_LLM = "llm"
+
+# --- Auto-instrumentation ---
+
+AUTO_INSTRUMENTED = "agentweave.auto_instrumented"
