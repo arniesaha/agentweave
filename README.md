@@ -14,10 +14,9 @@ AgentWeave wraps your agent code with [W3C PROV-O](https://www.w3.org/TR/prov-o/
 
 | SDK | Language | Install | Status |
 |-----|----------|---------|--------|
-| [sdk-python](./sdk-python) | Python | `pip install agentweave-sdk` | ✅ v0.1.1 |
-| [sdk-js](./sdk-js) | TypeScript / JavaScript | `npm install agentweave` | ✅ v0.1.0 |
-| [sdk-go](./sdk-go) | Go | `go get github.com/arniesaha/agentweave-go` | ✅ v0.1.0 |
-| [proxy](./proxy) | Docker / k8s | `docker pull ghcr.io/arniesaha/agentweave:latest` | ✅ v0.1.1 |
+| [sdk/python](./sdk/python) | Python | `pip install agentweave-sdk` | ✅ v0.1.1 |
+| [sdk/js](./sdk/js) | TypeScript / JavaScript | `npm install agentweave` | ✅ v0.1.0 |
+| [sdk/go](./sdk/go) | Go | `go get github.com/arniesaha/agentweave-go` | ✅ v0.1.0 |
 
 ## Architecture
 
@@ -164,7 +163,7 @@ def call_claude(messages: list) -> anthropic.Message: ...
 | `prov.llm.total_tokens` | Total tokens |
 | `prov.llm.stop_reason` | Why the model stopped |
 
-Full schema: [`agentweave/schema.py`](agentweave/schema.py)
+Full schema: [`sdk/python/agentweave/schema.py`](sdk/python/agentweave/schema.py)
 
 ## Proxy — zero-code observability
 
@@ -181,7 +180,7 @@ export GOOGLE_GENAI_BASE_URL=http://localhost:4000
 
 One port, all providers. Every LLM call gets a span automatically.
 
-> Docker / k8s setup: [proxy/README.md](proxy/README.md)
+> Docker / k8s setup: see [`deploy/docker/Dockerfile`](deploy/docker/Dockerfile)
 
 ## Backends
 
@@ -199,10 +198,10 @@ AgentWeave emits standard OTLP HTTP — works with any compatible backend:
 ```bash
 git clone https://github.com/arniesaha/agentweave
 cd agentweave
-pip install -e ".[dev]"
-pytest                          # 31 tests (Python)
-cd sdk-js && npx jest --verbose  # 10 tests (TypeScript)
-cd sdk-go && go test ./... -v    # 4 tests (Go)
+pip install -e "./sdk/python[dev]"
+cd sdk/python && pytest         # 31 tests (Python)
+cd sdk/js && npx jest --verbose  # 10 tests (TypeScript)
+cd sdk/go && go test ./... -v    # 4 tests (Go)
 python examples/simple_agent.py
 python examples/nix_max_delegation.py
 ```

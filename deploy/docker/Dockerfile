@@ -8,8 +8,9 @@ LABEL org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 
 # Install dependencies (proxy extras)
-COPY pyproject.toml README.md ./
-COPY agentweave/ ./agentweave/
+COPY sdk/python/pyproject.toml ./
+COPY README.md ./
+COPY sdk/python/agentweave/ ./agentweave/
 RUN pip install --no-cache-dir ".[proxy]"
 
 # Non-root user

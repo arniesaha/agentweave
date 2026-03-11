@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: Publish
 
 on:
   push:
@@ -10,7 +10,8 @@ permissions:
   packages: write   # ghcr.io Docker push
 
 jobs:
-  test:
+  # ── Python ──────────────────────────────────────────────
+  test-python:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -24,13 +25,15 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
+        working-directory: sdk/python
         run: pip install -e ".[dev]"
 
       - name: Run tests
+        working-directory: sdk/python
         run: pytest
 
-  publish:
-    needs: test
+  publish-pypi:
+    needs: test-python
     runs-on: ubuntu-latest
     environment: pypi
     steps:
@@ -42,15 +45,84 @@ jobs:
           python-version: "3.12"
 
       - name: Build package
+        working-directory: sdk/python
         run: |
           pip install build
           python -m build
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdk/python/dist/
 
+  # ── TypeScript / JavaScript ─────────────────────────────
+  test-js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: sdk/js
+        run: npm ci
+
+      - name: Run tests
+        working-directory: sdk/js
+        run: npx jest --verbose
+
+  publish-npm:
+    needs: test-js
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        working-directory: sdk/js
+        run: npm ci
+
+      - name: Build
+        working-directory: sdk/js
+        run: npm run build
+
+      - name: Publish to npm
+        working-directory: sdk/js
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ── Go ──────────────────────────────────────────────────
+  test-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Run tests
+        working-directory: sdk/go
+        run: go test ./... -v
+
+      - name: Verify module
+        working-directory: sdk/go
+        run: go vet ./...
+
+  # ── Docker ──────────────────────────────────────────────
   docker:
-    needs: test
+    needs: test-python
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,6 +142,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: deploy/docker/Dockerfile
           push: true
           tags: |
             ghcr.io/arniesaha/agentweave:${{ steps.tag.outputs.version }}

@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "agentweave-sdk"
 version = "0.1.1"
 description = "Observability and mesh layer for multi-agent AI systems — track what your agents decided, why they decided it, and how they're connected."
-readme = "README.md"
+readme = "../../README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [

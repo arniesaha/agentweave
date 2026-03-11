@@ -1,4 +1,5 @@
 import { NodeSDK } from '@opentelemetry/sdk-node';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 
 export class AgentWeaveConfig {
   static agentId: string;
@@ -26,8 +27,8 @@ export class AgentWeaveConfig {
     this.enabled = true;
 
     const sdk = new NodeSDK({
-      traceExporter: new (require('@opentelemetry/exporter-trace-otlp-http').OTLPTraceExporter)({
-        url: this.otlpEndpoint
+      traceExporter: new OTLPTraceExporter({
+        url: this.otlpEndpoint,
       }),
     });
     sdk.start();
