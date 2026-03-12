@@ -1,10 +1,20 @@
-"""Tests for the AgentWeave proxy — provider detection and OpenAI parsers."""
+"""Tests for the AgentWeave proxy — provider detection, parsers, auth, and header forwarding."""
 
+import agentweave.proxy as proxy_module
 from agentweave.proxy import (
+    _check_auth,
     _detect_provider,
     _openai_response_text,
+    _parse_anthropic_sse,
+    _parse_google_stream,
     _parse_openai_sse,
+    _set_anthropic_response_attrs,
+    _set_google_response_attrs,
     _set_openai_response_attrs,
+    _set_request_attrs,
+    _anthropic_response_text,
+    _google_response_text,
+    _SKIP_HEADERS_ALWAYS,
 )
 
 
@@ -146,3 +156,332 @@ class TestHealthEndpoint:
         client = TestClient(app)
         resp = client.get("/health", headers={"Authorization": "Bearer wrongtoken"})
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+
+class _FakeRequest:
+    """Minimal Request stub with a headers dict."""
+
+    def __init__(self, headers: dict[str, str] | None = None):
+        self.headers = headers or {}
+
+
+class TestCheckAuth:
+    """Auth token validation via _check_auth."""
+
+    def test_open_mode_no_token(self, monkeypatch):
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        result = _check_auth(_FakeRequest())
+        assert result is None
+
+    def test_missing_authorization_header(self, monkeypatch):
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", "secret123")
+        result = _check_auth(_FakeRequest({}))
+        assert result is not None
+        assert result.status_code == 401
+        assert b"missing_token" in result.body
+
+    def test_invalid_token(self, monkeypatch):
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", "secret123")
+        result = _check_auth(_FakeRequest({"authorization": "Bearer wrong"}))
+        assert result is not None
+        assert result.status_code == 401
+        assert b"invalid_token" in result.body
+
+    def test_valid_token(self, monkeypatch):
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", "secret123")
+        result = _check_auth(_FakeRequest({"authorization": "Bearer secret123"}))
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Anthropic SSE parser
+# ---------------------------------------------------------------------------
+
+
+class TestParseAnthropicSse:
+    """Anthropic SSE token parsing and stop_reason extraction."""
+
+    def test_message_start_with_cache_tokens(self):
+        line = (
+            'data: {"type": "message_start", "message": {"usage": '
+            '{"input_tokens": 10, "cache_creation_input_tokens": 50, '
+            '"cache_read_input_tokens": 100}}}'
+        )
+        inp, out, stop = _parse_anthropic_sse(line, 0, 0, None)
+        assert inp == 160  # 10 + 50 + 100
+        assert out == 0
+        assert stop is None
+
+    def test_message_delta_output_tokens_and_stop(self):
+        line = (
+            'data: {"type": "message_delta", "usage": {"output_tokens": 42}, '
+            '"delta": {"stop_reason": "end_turn"}}'
+        )
+        inp, out, stop = _parse_anthropic_sse(line, 100, 0, None)
+        assert inp == 100
+        assert out == 42
+        assert stop == "end_turn"
+
+    def test_non_data_line_ignored(self):
+        line = "event: message_start"
+        inp, out, stop = _parse_anthropic_sse(line, 5, 3, None)
+        assert (inp, out, stop) == (5, 3, None)
+
+    def test_done_sentinel(self):
+        line = "data: [DONE]"
+        inp, out, stop = _parse_anthropic_sse(line, 10, 20, "end_turn")
+        assert (inp, out, stop) == (10, 20, "end_turn")
+
+
+# ---------------------------------------------------------------------------
+# Google stream parser
+# ---------------------------------------------------------------------------
+
+
+class TestParseGoogleStream:
+    """Google streaming token parsing."""
+
+    def test_usage_metadata(self):
+        line = 'data: {"usageMetadata": {"promptTokenCount": 30, "candidatesTokenCount": 12}}'
+        inp, out, stop = _parse_google_stream(line, 0, 0, None)
+        assert inp == 30
+        assert out == 12
+
+    def test_finish_reason(self):
+        line = 'data: {"candidates": [{"finishReason": "STOP"}]}'
+        inp, out, stop = _parse_google_stream(line, 0, 0, None)
+        assert stop == "STOP"
+
+    def test_bare_json_line(self):
+        line = '{"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2}}'
+        inp, out, stop = _parse_google_stream(line, 0, 0, None)
+        assert inp == 5
+        assert out == 2
+
+    def test_finish_reason_unspecified_ignored(self):
+        line = 'data: {"candidates": [{"finishReason": "FINISH_REASON_UNSPECIFIED"}]}'
+        inp, out, stop = _parse_google_stream(line, 0, 0, None)
+        assert stop is None
+
+
+# ---------------------------------------------------------------------------
+# Anthropic response attrs
+# ---------------------------------------------------------------------------
+
+
+class TestSetAnthropicResponseAttrs:
+    """Verify _set_anthropic_response_attrs populates span correctly."""
+
+    def test_token_counts_with_cache(self):
+        span = _FakeSpan()
+        data = {
+            "usage": {
+                "input_tokens": 5,
+                "cache_creation_input_tokens": 20,
+                "cache_read_input_tokens": 75,
+                "output_tokens": 30,
+            },
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "response"}],
+        }
+        _set_anthropic_response_attrs(span, data, elapsed_ms=99)
+        assert span.attrs["prov.llm.prompt_tokens"] == 100  # 5 + 20 + 75
+        assert span.attrs["prov.llm.completion_tokens"] == 30
+        assert span.attrs["prov.llm.total_tokens"] == 130
+        assert span.attrs["prov.llm.stop_reason"] == "end_turn"
+        assert span.attrs["agentweave.latency_ms"] == 99
+        # gen_ai.* dual-emit
+        assert span.attrs["gen_ai.usage.input_tokens"] == 100
+        assert span.attrs["gen_ai.usage.output_tokens"] == 30
+        assert span.attrs["gen_ai.response.finish_reasons"] == ["end_turn"]
+
+    def test_no_stop_reason(self):
+        span = _FakeSpan()
+        data = {"usage": {"input_tokens": 10, "output_tokens": 5}}
+        _set_anthropic_response_attrs(span, data, elapsed_ms=50)
+        assert span.attrs["prov.llm.prompt_tokens"] == 10
+        assert "prov.llm.stop_reason" not in span.attrs
+        assert "gen_ai.response.finish_reasons" not in span.attrs
+
+
+# ---------------------------------------------------------------------------
+# Google response attrs
+# ---------------------------------------------------------------------------
+
+
+class TestSetGoogleResponseAttrs:
+    """Verify _set_google_response_attrs populates span correctly."""
+
+    def test_usage_and_stop(self):
+        span = _FakeSpan()
+        data = {
+            "usageMetadata": {
+                "promptTokenCount": 25,
+                "candidatesTokenCount": 10,
+                "totalTokenCount": 35,
+            },
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": "hello"}]},
+                }
+            ],
+        }
+        _set_google_response_attrs(span, data, elapsed_ms=77)
+        assert span.attrs["prov.llm.prompt_tokens"] == 25
+        assert span.attrs["prov.llm.completion_tokens"] == 10
+        assert span.attrs["prov.llm.total_tokens"] == 35
+        assert span.attrs["prov.llm.stop_reason"] == "STOP"
+        assert span.attrs["agentweave.latency_ms"] == 77
+        # gen_ai.* dual-emit
+        assert span.attrs["gen_ai.usage.input_tokens"] == 25
+        assert span.attrs["gen_ai.usage.output_tokens"] == 10
+        assert span.attrs["gen_ai.response.finish_reasons"] == ["STOP"]
+
+    def test_no_candidates(self):
+        span = _FakeSpan()
+        data = {
+            "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 3, "totalTokenCount": 11},
+        }
+        _set_google_response_attrs(span, data, elapsed_ms=20)
+        assert span.attrs["prov.llm.prompt_tokens"] == 8
+        assert "prov.llm.stop_reason" not in span.attrs
+        assert "gen_ai.response.finish_reasons" not in span.attrs
+
+
+# ---------------------------------------------------------------------------
+# Response text extractors
+# ---------------------------------------------------------------------------
+
+
+class TestResponseText:
+    """Text extraction for Anthropic and Google response formats."""
+
+    def test_anthropic_response_text(self):
+        data = {"content": [{"type": "text", "text": "Hello from Claude"}]}
+        assert _anthropic_response_text(data) == "Hello from Claude"
+
+    def test_anthropic_response_text_empty(self):
+        assert _anthropic_response_text({}) == ""
+
+    def test_google_response_text(self):
+        data = {"candidates": [{"content": {"parts": [{"text": "Hello from Gemini"}]}}]}
+        assert _google_response_text(data) == "Hello from Gemini"
+
+    def test_google_response_text_empty(self):
+        assert _google_response_text({}) == ""
+
+
+# ---------------------------------------------------------------------------
+# Prompt capture (_set_request_attrs)
+# ---------------------------------------------------------------------------
+
+
+class TestPromptCapture:
+    """Verify prompt preview is captured when enabled."""
+
+    def _call(self, monkeypatch, provider, body):
+        monkeypatch.setenv("AGENTWEAVE_CAPTURE_PROMPTS", "true")
+        # Avoid config side effects
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider=provider,
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body=body,
+        )
+        return span
+
+    def test_anthropic_string_content(self, monkeypatch):
+        body = {"messages": [{"role": "user", "content": "What is 2+2?"}]}
+        span = self._call(monkeypatch, "anthropic", body)
+        assert span.attrs["prov.llm.prompt_preview"] == "What is 2+2?"
+
+    def test_anthropic_list_content(self, monkeypatch):
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Hello"},
+                        {"type": "text", "text": "World"},
+                    ],
+                }
+            ]
+        }
+        span = self._call(monkeypatch, "anthropic", body)
+        assert span.attrs["prov.llm.prompt_preview"] == "Hello World"
+
+    def test_google_content(self, monkeypatch):
+        body = {"contents": [{"parts": [{"text": "Tell me a joke"}]}]}
+        span = self._call(monkeypatch, "google", body)
+        assert span.attrs["prov.llm.prompt_preview"] == "Tell me a joke"
+
+    def test_disabled_by_env(self, monkeypatch):
+        monkeypatch.setenv("AGENTWEAVE_CAPTURE_PROMPTS", "false")
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="m", provider="anthropic", agent_id="a",
+            agent_model="m", path="v1/messages",
+            body={"messages": [{"role": "user", "content": "secret"}]},
+        )
+        assert "prov.llm.prompt_preview" not in span.attrs
+
+
+# ---------------------------------------------------------------------------
+# Header forwarding
+# ---------------------------------------------------------------------------
+
+
+class TestHeaderForwarding:
+    """Verify header strip logic matches proxy behavior."""
+
+    def _filter_headers(self, raw_headers: dict[str, str], token_set: bool) -> dict[str, str]:
+        """Replicate the header-filtering logic from the proxy() route."""
+        filtered = {
+            k: v for k, v in raw_headers.items()
+            if k.lower() not in _SKIP_HEADERS_ALWAYS
+        }
+        if token_set:
+            filtered.pop("authorization", None)
+        return filtered
+
+    def test_skip_headers_always_stripped(self):
+        headers = {
+            "host": "localhost",
+            "content-length": "123",
+            "x-agentweave-agent-id": "my-agent",
+            "x-api-key": "sk-ant-123",
+            "x-custom": "keep-me",
+        }
+        result = self._filter_headers(headers, token_set=False)
+        assert "host" not in result
+        assert "content-length" not in result
+        assert "x-agentweave-agent-id" not in result
+        assert result["x-api-key"] == "sk-ant-123"
+        assert result["x-custom"] == "keep-me"
+
+    def test_auth_stripped_when_proxy_token_set(self):
+        headers = {
+            "authorization": "Bearer proxy-token",
+            "x-api-key": "sk-ant-123",
+        }
+        result = self._filter_headers(headers, token_set=True)
+        assert "authorization" not in result
+        assert result["x-api-key"] == "sk-ant-123"
+
+    def test_auth_forwarded_when_no_proxy_token(self):
+        headers = {
+            "authorization": "Bearer sk-ant-123",
+            "x-api-key": "sk-ant-123",
+        }
+        result = self._filter_headers(headers, token_set=False)
+        assert result["authorization"] == "Bearer sk-ant-123"
