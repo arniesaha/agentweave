@@ -151,6 +151,12 @@ def _is_streaming(provider: str, path: str, body: dict) -> bool:
 # Main route
 # ---------------------------------------------------------------------------
 
+@app.get("/health", include_in_schema=True)
+async def health() -> dict:
+    """Liveness/readiness probe — no auth required."""
+    return {"status": "ok", "version": app.version}
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], response_model=None)
 async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse:
     if (denied := _check_auth(request)) is not None:

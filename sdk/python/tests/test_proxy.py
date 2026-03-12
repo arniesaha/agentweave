@@ -124,3 +124,25 @@ class TestParseOpenaiSse:
         assert inp == 15
         assert out == 4
         assert stop == "stop"
+
+
+class TestHealthEndpoint:
+    """Verify /health returns 200 without auth."""
+
+    def test_health_no_auth(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        client = TestClient(app)
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "version" in data
+
+    def test_health_with_auth(self):
+        """Auth header should be ignored on /health."""
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        client = TestClient(app)
+        resp = client.get("/health", headers={"Authorization": "Bearer wrongtoken"})
+        assert resp.status_code == 200
