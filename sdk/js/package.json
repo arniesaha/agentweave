@@ -1,5 +1,5 @@
 {
-  "name": "@agentweave/sdk",
+  "name": "agentweave-sdk",
   "version": "0.1.0",
   "description": "AgentWeave TypeScript SDK",
   "main": "dist/index.js",
