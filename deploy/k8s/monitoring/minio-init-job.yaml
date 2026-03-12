@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-init-bucket
+  namespace: monitoring
+spec:
+  template:
+    metadata:
+      labels:
+        app: minio-init
+    spec:
+      initContainers:
+        - name: wait-for-minio
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for MinIO to be ready..."
+              until wget -qO- http://minio.monitoring.svc.cluster.local:9000/minio/health/live; do
+                echo "MinIO not ready, retrying in 3s..."
+                sleep 3
+              done
+              echo "MinIO is ready."
+      containers:
+        - name: create-bucket
+          image: minio/mc:RELEASE.2024-01-16T16-06-34Z
+          command:
+            - sh
+            - -c
+            - |
+              mc alias set local http://minio.monitoring.svc.cluster.local:9000 minioadmin minioadmin123
+              mc mb --ignore-existing local/tempo
+              echo "Bucket 'tempo' is ready."
+      restartPolicy: OnFailure
+  backoffLimit: 5
