@@ -34,12 +34,9 @@ spec:
           envFrom:
             - configMapRef:
                 name: agentweave-proxy-max
-          env:
-            - name: AGENTWEAVE_PROXY_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: agentweave-proxy
-                  key: proxy-token
+          # No AGENTWEAVE_PROXY_TOKEN — proxy-max is LAN-only (NodePort 30401).
+          # Max's Google SDK sends x-goog-api-key, not Authorization: Bearer,
+          # so token auth would reject all Gemini calls.
           livenessProbe:
             httpGet:
               path: /health

@@ -21,7 +21,8 @@ spec:
         runAsGroup: 1000
       containers:
         - name: proxy
-          image: ghcr.io/arniesaha/agentweave:latest
+          image: localhost:5000/agentweave-proxy:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 4000
               name: http
