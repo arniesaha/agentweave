@@ -44,13 +44,13 @@ spec:
               memory: 256Mi
           livenessProbe:
             httpGet:
-              path: /docs
+              path: /health
               port: 4000
             initialDelaySeconds: 5
-            periodSeconds: 30
+            periodSeconds: 15
           readinessProbe:
             httpGet:
-              path: /docs
+              path: /health
               port: 4000
             initialDelaySeconds: 3
             periodSeconds: 10
