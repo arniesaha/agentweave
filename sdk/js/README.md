@@ -5,7 +5,7 @@ AgentWeave SDK provides decorators and tools to instrument multi-agent systems w
 ## Installation
 
 ```bash
-npm install agentweave
+npm install @agentweave/sdk
 ```
 
 ## Usage

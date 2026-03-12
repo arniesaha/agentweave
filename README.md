@@ -75,7 +75,7 @@ graph LR
 | SDK | Language | Install |
 |-----|----------|---------|
 | [sdk/python](./sdk/python) | Python | `pip install agentweave-sdk` |
-| [sdk/js](./sdk/js) | TypeScript / JavaScript | `npm install agentweave` |
+| [sdk/js](./sdk/js) | TypeScript / JavaScript | `npm install @agentweave/sdk` |
 | [sdk/go](./sdk/go) | Go | `go get github.com/arniesaha/agentweave-go` |
 
 ## Quickstart (Python)
