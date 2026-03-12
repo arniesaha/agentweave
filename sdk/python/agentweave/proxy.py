@@ -1,17 +1,20 @@
 """AgentWeave Multi-Provider AI Proxy.
 
-Intercepts requests to Anthropic and Google Gemini APIs, emits an OTel span
-per call with token counts, model, stop reason, and latency, then forwards
-the response transparently to the caller.
+Intercepts requests to Anthropic, Google Gemini, and OpenAI APIs, emits an
+OTel span per call with token counts, model, stop reason, and latency, then
+forwards the response transparently to the caller.
 
 Provider is detected automatically from the request path:
   /v1/messages              → Anthropic  (api.anthropic.com)
   /v1beta/models/...        → Google     (generativelanguage.googleapis.com)
   /v1/models/...            → Google     (generativelanguage.googleapis.com)
+  /v1/chat/completions      → OpenAI     (api.openai.com)
+  /v1/completions           → OpenAI     (api.openai.com)
+  /v1/embeddings            → OpenAI     (api.openai.com)
 
 Works for both streaming and non-streaming requests. Zero code changes needed
-in calling agents — just point ANTHROPIC_BASE_URL / GOOGLE_GENAI_BASE_URL at
-this proxy.
+in calling agents — just point ANTHROPIC_BASE_URL / GOOGLE_GENAI_BASE_URL /
+OPENAI_BASE_URL at this proxy.
 
 Usage::
 
@@ -23,6 +26,9 @@ Usage::
     # Google / Gemini agents (pi-mono / Max)
     export GOOGLE_GENAI_BASE_URL=http://localhost:4000
     # or set in Google SDK: genai.configure(client_options={"api_endpoint": "localhost:4000"})
+
+    # OpenAI agents
+    export OPENAI_BASE_URL=http://localhost:4000
 
     # Tag calls by agent
     # X-AgentWeave-Agent-Id: max-v1
@@ -52,6 +58,7 @@ logger = logging.getLogger("agentweave.proxy")
 # --- Upstream base URLs ---
 _ANTHROPIC_BASE = "https://api.anthropic.com"
 _GOOGLE_BASE = "https://generativelanguage.googleapis.com"
+_OPENAI_BASE = "https://api.openai.com"
 
 # Headers always stripped before forwarding (hop-by-hop + proxy-specific)
 _SKIP_HEADERS_ALWAYS = {
@@ -69,7 +76,7 @@ _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 
 app = FastAPI(
     title="AgentWeave Proxy",
-    description="Multi-provider AI observability proxy (Anthropic + Google Gemini)",
+    description="Multi-provider AI observability proxy (Anthropic + Google Gemini + OpenAI)",
     version="0.2.0",
 )
 
@@ -100,17 +107,27 @@ def _check_auth(request: Request) -> JSONResponse | None:
 # Provider detection
 # ---------------------------------------------------------------------------
 
+_OPENAI_PATHS = {"v1/chat/completions", "v1/completions", "v1/embeddings"}
+
+
 def _detect_provider(path: str) -> str:
-    """Return 'google' or 'anthropic' based on the request path."""
+    """Return 'google', 'openai', or 'anthropic' based on the request path."""
     if path.startswith("v1beta/") or (
         path.startswith("v1/") and "/models/" in path
     ):
         return "google"
+    if path in _OPENAI_PATHS:
+        return "openai"
     return "anthropic"
 
 
 def _upstream_url(provider: str, path: str, query_string: str) -> str:
-    base = _GOOGLE_BASE if provider == "google" else _ANTHROPIC_BASE
+    if provider == "google":
+        base = _GOOGLE_BASE
+    elif provider == "openai":
+        base = _OPENAI_BASE
+    else:
+        base = _ANTHROPIC_BASE
     url = f"{base}/{path}"
     if query_string:
         url += f"?{query_string}"
@@ -191,7 +208,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     )
 
     if is_stream:
-        media = "text/event-stream" if provider == "anthropic" else "application/json"
+        media = "application/json" if provider == "google" else "text/event-stream"
         return StreamingResponse(_stream_and_trace(**kwargs), media_type=media)
     return await _request_and_trace(**kwargs)
 
@@ -261,6 +278,10 @@ async def _stream_and_trace(
 
                         if provider == "anthropic":
                             input_tokens, output_tokens, stop_reason = _parse_anthropic_sse(
+                                line, input_tokens, output_tokens, stop_reason
+                            )
+                        elif provider == "openai":
+                            input_tokens, output_tokens, stop_reason = _parse_openai_sse(
                                 line, input_tokens, output_tokens, stop_reason
                             )
                         else:  # google
@@ -358,6 +379,31 @@ def _parse_google_stream(
     return input_tokens, output_tokens, stop_reason
 
 
+def _parse_openai_sse(
+    line: str, input_tokens: int, output_tokens: int, stop_reason: str | None
+) -> tuple[int, int, str | None]:
+    if not line.startswith("data: "):
+        return input_tokens, output_tokens, stop_reason
+    payload = line[6:]
+    if payload == "[DONE]":
+        return input_tokens, output_tokens, stop_reason
+    try:
+        chunk = json.loads(payload)
+        # Token usage from final chunk (when stream_options.include_usage=true)
+        usage = chunk.get("usage")
+        if usage:
+            input_tokens = usage.get("prompt_tokens", input_tokens)
+            output_tokens = usage.get("completion_tokens", output_tokens)
+        choices = chunk.get("choices", [])
+        if choices:
+            reason = choices[0].get("finish_reason")
+            if reason:
+                stop_reason = reason
+    except (json.JSONDecodeError, KeyError, IndexError):
+        pass
+    return input_tokens, output_tokens, stop_reason
+
+
 # ---------------------------------------------------------------------------
 # Response attribute extractors
 # ---------------------------------------------------------------------------
@@ -367,6 +413,8 @@ def _extract_and_set_response(
 ) -> None:
     if provider == "google":
         _set_google_response_attrs(span, data, elapsed_ms)
+    elif provider == "openai":
+        _set_openai_response_attrs(span, data, elapsed_ms)
     else:
         _set_anthropic_response_attrs(span, data, elapsed_ms)
 
@@ -426,11 +474,42 @@ def _anthropic_response_text(data: dict) -> str:
     return ""
 
 
+def _set_openai_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
+    usage = data.get("usage", {})
+    pt = usage.get("prompt_tokens", 0)
+    ct = usage.get("completion_tokens", 0)
+    tt = usage.get("total_tokens", pt + ct)
+    span.set_attribute(schema.PROV_LLM_PROMPT_TOKENS, pt)
+    span.set_attribute(schema.PROV_LLM_COMPLETION_TOKENS, ct)
+    span.set_attribute(schema.PROV_LLM_TOTAL_TOKENS, tt)
+    choices = data.get("choices", [])
+    stop = None
+    if choices:
+        stop = choices[0].get("finish_reason")
+        if stop:
+            span.set_attribute(schema.PROV_LLM_STOP_REASON, stop)
+    span.set_attribute("agentweave.latency_ms", elapsed_ms)
+    _maybe_set_response_preview(span, _openai_response_text(data))
+
+    # OTel gen_ai.* dual-emit
+    span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
+    span.set_attribute(schema.GEN_AI_USAGE_OUTPUT_TOKENS, ct)
+    if stop:
+        span.set_attribute(schema.GEN_AI_RESPONSE_FINISH_REASONS, [stop])
+
+
 def _google_response_text(data: dict) -> str:
     try:
         return (
             data["candidates"][0]["content"]["parts"][0].get("text", "")
         )
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def _openai_response_text(data: dict) -> str:
+    try:
+        return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
         return ""
 
@@ -501,7 +580,7 @@ def run(host: str = "0.0.0.0", port: int = 4000) -> None:
     """Start the proxy server (called from CLI)."""
     import uvicorn
     logger.info(f"AgentWeave proxy listening on {host}:{port}")
-    logger.info("Providers: anthropic (/v1/messages), google (/v1beta/models/...)")
+    logger.info("Providers: anthropic (/v1/messages), google (/v1beta/models/...), openai (/v1/chat/completions)")
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 

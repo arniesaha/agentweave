@@ -38,6 +38,7 @@ graph LR
         AN[api.anthropic.com]
         GO["generativelanguage
         .googleapis.com"]
+        OA[api.openai.com]
     end
 
     subgraph Observability
@@ -49,11 +50,11 @@ graph LR
 
     A1 -- "ANTHROPIC_BASE_URL" --> P
     A2 -- "GOOGLE_GENAI_BASE_URL" --> P
-    A3 -. "auto_instrument() or
-    @trace_llm decorator" .-> OT
+    A3 -- "OPENAI_BASE_URL" --> P
 
     P -- "/v1/messages" --> AN
     P -- "/v1beta/models/*" --> GO
+    P -- "/v1/chat/completions" --> OA
     P -- "OTel spans" --> OT
     OT --> GR
 ```
@@ -201,6 +202,7 @@ agentweave proxy start --port 4000 --endpoint http://localhost:4318 --agent-id m
 # Point agents at the proxy — no code changes needed
 export ANTHROPIC_BASE_URL=http://localhost:4000
 export GOOGLE_GENAI_BASE_URL=http://localhost:4000
+export OPENAI_BASE_URL=http://localhost:4000
 ```
 
 One port, all providers. Every LLM call gets a span automatically.
