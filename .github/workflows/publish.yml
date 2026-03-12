@@ -57,6 +57,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: sdk/python/dist/
+          skip-existing: true
 
   # ── TypeScript / JavaScript ─────────────────────────────
   test-js:
