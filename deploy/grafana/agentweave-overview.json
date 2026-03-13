@@ -657,7 +657,7 @@
     },
     {
       "id": 9,
-      "title": "Call Rate by Agent (per min)",
+      "title": "LLM Call Volume (15m buckets)",
       "type": "timeseries",
       "gridPos": {
         "x": 0,
@@ -675,8 +675,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(traces_spanmetrics_calls_total{service=\"agentweave-proxy\"}[5m]) * 60",
-          "legendFormat": "{{prov_agent_id}} / {{prov_llm_model}}",
+          "expr": "increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_agent_id!=\"\"}[15m])",
+          "legendFormat": "{{prov_agent_id}} \u2014 {{prov_llm_model}}",
           "refId": "A"
         }
       ],
@@ -692,8 +692,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "reqpm",
-          "decimals": 2
+          "unit": "short",
+          "decimals": 0
         },
         "overrides": []
       }
@@ -878,7 +878,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (prov_project) (traces_spanmetrics_calls_total{service=\"agentweave-proxy\"})",
+          "expr": "sum by (prov_project) (traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_project!=\"\"})",
           "legendFormat": "{{prov_project}}",
           "refId": "A",
           "instant": true
@@ -897,7 +897,18 @@
         "overrides": []
       },
       "options": {
-        "xField": "Time"
+        "xField": "prov_project",
+        "orientation": "auto",
+        "barWidth": 0.97,
+        "groupWidth": 0.7,
+        "fillOpacity": 80,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
       },
       "transformations": []
     },
@@ -957,7 +968,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (prov_agent_id) (traces_spanmetrics_calls_total{service=\"agentweave-proxy\"})",
+          "expr": "sum by (prov_agent_id) (traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_agent_id!=\"\"})",
           "legendFormat": "{{prov_agent_id}}",
           "refId": "A",
           "instant": true
