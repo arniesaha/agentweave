@@ -42,14 +42,17 @@ curl http://localhost:4000/v1/messages \
 
 ### From OpenClaw (static headers)
 
-Add to `models.providers.anthropic.headers` in `openclaw.json`:
+OpenClaw supports a `headers` field on any provider entry. Headers are merged into every outgoing
+LLM request — no code changes needed in agents.
+
+Add to `models.providers.<provider>.headers` in `~/.openclaw/openclaw.json`:
 
 ```json
 {
   "models": {
     "providers": {
       "anthropic": {
-        "baseUrl": "http://localhost:4000",
+        "baseUrl": "http://192.168.1.70:30400",
         "headers": {
           "X-AgentWeave-Session-Id": "nix-main",
           "X-AgentWeave-Project": "nix",
@@ -61,9 +64,32 @@ Add to `models.providers.anthropic.headers` in `openclaw.json`:
 }
 ```
 
-Every LLM call OpenClaw makes will be tagged automatically. No code changes needed.
+Then reload OpenClaw (no full restart needed):
 
-> **Note:** `X-AgentWeave-Turn` can't be a static header since it needs to increment per message. For dynamic turn injection, a proxy-side counter keyed on session ID would be needed (see [open issue](#turn-counter)).
+```bash
+# Hot reload via SIGUSR1
+pkill -USR1 -f 'node.*openclaw'
+
+# Or via the gateway tool / CLI
+openclaw gateway restart
+```
+
+#### Live deployment — Nix (NAS)
+
+As of 2026-03-12, Nix's OpenClaw is wired with the following static headers on the `anthropic` provider
+(proxy NodePort `30400`, namespace `agentweave`):
+
+| Header | Value |
+|--------|-------|
+| `X-AgentWeave-Session-Id` | `nix-main` |
+| `X-AgentWeave-Project` | `nix` |
+| `X-AgentWeave-Agent-Id` | `nix-v1` |
+
+Every Claude call Nix makes is tagged and visible in Grafana → Session Explorer under project `nix`.
+
+> **Note:** `X-AgentWeave-Turn` can't be a static header since it needs to increment per message.
+> For dynamic turn injection, options are: (a) native OpenClaw support to inject session turn from
+> its internal counter, or (b) a proxy-side stateful counter keyed on `X-AgentWeave-Session-Id`.
 
 ## Grafana panels
 
