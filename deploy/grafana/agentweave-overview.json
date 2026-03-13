@@ -657,8 +657,8 @@
     },
     {
       "id": 9,
-      "title": "LLM Call Volume (15m buckets)",
-      "type": "timeseries",
+      "title": "Total Calls by Agent",
+      "type": "bargauge",
       "gridPos": {
         "x": 0,
         "y": 34,
@@ -675,16 +675,23 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_agent_id!=\"\"}[15m])",
-          "legendFormat": "{{prov_agent_id}} \u2014 {{prov_llm_model}}",
-          "refId": "A"
+          "expr": "sum by (prov_agent_id) (traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_agent_id!=\"\"})",
+          "legendFormat": "{{prov_agent_id}}",
+          "refId": "A",
+          "instant": true
         }
       ],
       "transformations": [],
       "options": {
-        "tooltip": {
-          "mode": "multi"
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
         },
+        "showUnfilled": true,
+        "valueMode": "color",
         "legend": {
           "displayMode": "list",
           "placement": "bottom"
@@ -693,7 +700,16 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
         },
         "overrides": []
       }
