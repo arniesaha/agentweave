@@ -537,13 +537,13 @@
     },
     {
       "id": 7,
-      "title": "Recent Traces",
+      "title": "Recent LLM Calls",
       "type": "table",
       "gridPos": {
         "x": 0,
         "y": 12,
         "w": 24,
-        "h": 12
+        "h": 10
       },
       "datasource": {
         "type": "tempo",
@@ -556,15 +556,22 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && name =~ \"${model}\" }",
+          "query": "{ resource.service.name = \"agentweave-proxy\" }",
           "tableType": "traces",
-          "limit": 50,
+          "limit": 30,
           "refId": "A"
         }
       ],
       "options": {
-        "frameIndex": 0,
-        "showHeader": true
+        "sortBy": [
+          {
+            "displayName": "Start time",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false
+        }
       },
       "fieldConfig": {
         "defaults": {
@@ -617,51 +624,12 @@
       }
     },
     {
-      "id": 8,
-      "title": "Session Explorer",
-      "type": "table",
-      "gridPos": {
-        "x": 0,
-        "y": 24,
-        "w": 24,
-        "h": 10
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "cffj9et53r9j4f"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "tempo",
-            "uid": "cffj9et53r9j4f"
-          },
-          "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.session.id != \"\" && span.prov.project =~ \"${project}\" }",
-          "tableType": "traces",
-          "limit": 100,
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "frameIndex": 0,
-        "showHeader": true
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto"
-          }
-        }
-      }
-    },
-    {
       "id": 10,
       "title": "Turn Depth Histogram",
       "type": "histogram",
       "gridPos": {
         "x": 0,
-        "y": 34,
+        "y": 22,
         "w": 24,
         "h": 8
       },
@@ -708,120 +676,6 @@
       }
     },
     {
-      "id": 11,
-      "title": "Recent LLM Calls",
-      "type": "table",
-      "datasource": {
-        "type": "tempo",
-        "uid": "cffj9et53r9j4f"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "tempo",
-            "uid": "cffj9et53r9j4f"
-          },
-          "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.agent.id != \"\" }",
-          "limit": 20,
-          "refId": "A"
-        }
-      ],
-      "gridPos": {
-        "x": 0,
-        "y": 50,
-        "w": 24,
-        "h": 10
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceID"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Trace ID"
-              },
-              {
-                "id": "custom.width",
-                "value": 220
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Time"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Start Time"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Name"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Operation"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Duration"
-              },
-              {
-                "id": "unit",
-                "value": "ms"
-              },
-              {
-                "id": "custom.width",
-                "value": 100
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "sortBy": [
-          {
-            "displayName": "Start Time",
-            "desc": true
-          }
-        ],
-        "footer": {
-          "show": false
-        }
-      },
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Service": true
-            },
-            "renameByName": {}
-          }
-        }
-      ]
-    },
-    {
       "id": 12,
       "title": "Calls by Project (selected window)",
       "type": "barchart",
@@ -843,7 +697,7 @@
       ],
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 30,
         "w": 8,
         "h": 8
       },
@@ -890,7 +744,7 @@
       ],
       "gridPos": {
         "x": 8,
-        "y": 42,
+        "y": 30,
         "w": 8,
         "h": 8
       },
@@ -933,7 +787,7 @@
       ],
       "gridPos": {
         "x": 16,
-        "y": 42,
+        "y": 30,
         "w": 8,
         "h": 8
       },
