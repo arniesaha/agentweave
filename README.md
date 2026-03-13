@@ -20,11 +20,13 @@ agent.nix                          94ms
 
 ```mermaid
 graph LR
-    subgraph Agents["Agents"]
+    subgraph Agents["Agents — proxy mode"]
         A1["Anthropic Agent"]
         A2["Gemini Agent"]
         A3["OpenAI Agent"]
     end
+
+    SDK["Any Agent — SDK decorators / auto_instrument()"]
 
     subgraph Proxy["AgentWeave Proxy :4000"]
         P["Multi-Provider Proxy"]
@@ -37,13 +39,14 @@ graph LR
     end
 
     subgraph Observability
-        OT["OTLP Collector"]
+        OT["OTLP Collector — Tempo / Jaeger / Langfuse"]
         GR["Grafana Dashboard"]
     end
 
     A1 -- "ANTHROPIC_BASE_URL" --> P
     A2 -- "GOOGLE_GENAI_BASE_URL" --> P
     A3 -- "OPENAI_BASE_URL" --> P
+    SDK -- "OTel spans" --> OT
 
     P -- "/v1/messages" --> AN
     P -- "/v1beta/models/*" --> GO
