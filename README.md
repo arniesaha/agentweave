@@ -1,8 +1,10 @@
 # AgentWeave
 
-Observability for multi-agent AI systems. Track what your agents decided, why they decided it, and how much it cost.
+**Agent runtime observability and provenance layer for multi-agent AI systems.**
 
-Three decorators — or zero, with auto-instrumentation. Full decision provenance. Works with any OTLP backend.
+When agents delegate, loop, and fanout across tools and models, the final output tells you nothing. AgentWeave makes the decision chain the first-class artifact — every span carries [W3C PROV-O](https://www.w3.org/TR/prov-o/) provenance on [OpenTelemetry](https://opentelemetry.io/): which agent acted, which model ran, what was consumed, what was generated, and how much it cost.
+
+Three paths to instrumentation — decorators, auto-instrumentation, or zero-code proxy. Any OTLP backend.
 
 ```
 agent.nix                          94ms
@@ -13,8 +15,6 @@ agent.nix                          94ms
 ├── llm.claude-sonnet-4-6          80ms  ← found it
 └── tool.deploy_portfolio           48ms
 ```
-
-When an agent delegates to another agent, calls an LLM ten times, and finally deploys a result — you see the output but not the chain. AgentWeave makes the chain the first-class artifact. Every span carries [W3C PROV-O](https://www.w3.org/TR/prov-o/) provenance on [OpenTelemetry](https://opentelemetry.io/): what was consumed, what was generated, which agent made the call, which model ran it.
 
 ## How it works
 
