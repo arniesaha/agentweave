@@ -675,10 +675,8 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.project != \"\" }",
-          "tableType": "traces",
-          "limit": 500,
+          "queryType": "traceqlMetrics",
+          "query": "{resource.service.name=\"agentweave-proxy\"&&span.prov.project!=\"\"}|count_over_time()by(span.prov.project)",
           "refId": "A"
         }
       ],
@@ -819,7 +817,7 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceqlMetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.llm.total_tokens > 0 } | sum(span.prov.llm.total_tokens) by(span.prov.agent.model)",
+          "query": "{resource.service.name=\"agentweave-proxy\"&&span.prov.llm.total_tokens>0}|sum_over_time(span.prov.llm.total_tokens)by(span.prov.llm.model)",
           "refId": "A"
         }
       ],
@@ -870,7 +868,7 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceqlMetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.gen_ai.usage.input_tokens > 0 } | sum(span.gen_ai.usage.input_tokens)",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.gen_ai.usage.input_tokens > 0 } |sum_over_time(span.gen_ai.usage.input_tokens)",
           "refId": "A",
           "hide": true
         },
@@ -880,19 +878,9 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceqlMetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.gen_ai.usage.output_tokens > 0 } | sum(span.gen_ai.usage.output_tokens)",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.gen_ai.usage.output_tokens > 0 } |sum_over_time(span.gen_ai.usage.output_tokens)",
           "refId": "B",
           "hide": true
-        },
-        {
-          "datasource": {
-            "type": "__expr__",
-            "uid": "__expr__"
-          },
-          "type": "math",
-          "expression": "$A * 0.000003 + $B * 0.000015",
-          "refId": "Cost",
-          "hide": false
         }
       ],
       "options": {
@@ -1130,7 +1118,7 @@
     },
     {
       "id": 14,
-      "title": "Avg Turns per Session by Project",
+      "title": "LLM Calls per Project",
       "type": "barchart",
       "description": "Mean prov.session.turn grouped by project \u2014 shows conversation depth per project",
       "gridPos": {
@@ -1149,10 +1137,8 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.project != \"\" }",
-          "tableType": "traces",
-          "limit": 500,
+          "queryType": "traceqlMetrics",
+          "query": "{resource.service.name=\"agentweave-proxy\"&&span.prov.project!=\"\"}|count_over_time()by(span.prov.project)",
           "refId": "A"
         }
       ],
@@ -1223,8 +1209,8 @@
     },
     {
       "id": 15,
-      "title": "Task Latency Distribution (prov.llm.latency_ms)",
-      "type": "histogram",
+      "title": "Avg Latency by Agent (ms)",
+      "type": "timeseries",
       "description": "Distribution of LLM call latency. Key buckets: 0\u20135s, 5\u201330s, 30s\u20132min, 2min+",
       "gridPos": {
         "x": 12,
@@ -1242,10 +1228,8 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.agentweave.latency_ms > 0 }",
-          "tableType": "traces",
-          "limit": 500,
+          "queryType": "traceqlMetrics",
+          "query": "{resource.service.name=\"agentweave-proxy\"&&span.agentweave.latency_ms>0}|avg_over_time(span.agentweave.latency_ms)by(span.prov.agent.id)",
           "refId": "A"
         }
       ],
@@ -1309,10 +1293,8 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.agent.id != \"\" && span.prov.llm.total_tokens > 0 }",
-          "tableType": "traces",
-          "limit": 500,
+          "queryType": "traceqlMetrics",
+          "query": "{resource.service.name=\"agentweave-proxy\"&&span.prov.llm.total_tokens>0}|sum_over_time(span.prov.llm.total_tokens)by(span.prov.agent.id)",
           "refId": "A"
         }
       ],
