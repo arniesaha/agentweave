@@ -575,9 +575,11 @@ def _set_request_attrs(
     span.set_attribute(schema.GEN_AI_REQUEST_MODEL, agent_model)
     span.set_attribute(schema.GEN_AI_AGENT_NAME, agent_id)
 
-    cfg = AgentWeaveConfig.get_or_none()
-    if cfg and cfg.agent_id:
-        span.set_attribute(schema.PROV_AGENT_ID, cfg.agent_id)
+    # Only fall back to cfg.agent_id if no per-request agent_id was provided via header
+    if not agent_id:
+        cfg = AgentWeaveConfig.get_or_none()
+        if cfg and cfg.agent_id:
+            span.set_attribute(schema.PROV_AGENT_ID, cfg.agent_id)
 
     if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() not in ("1", "true", "yes"):
         return
