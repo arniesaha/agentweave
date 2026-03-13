@@ -2,6 +2,7 @@ import { traceTool, traceAgent, traceLlm } from '../src/decorators';
 import { AgentWeaveConfig } from '../src/config';
 import { BasicTracerProvider, SimpleSpanProcessor, InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import { SpanStatusCode } from '@opentelemetry/api';
 import * as schema from '../src/schema';
 
 const contextManager = new AsyncLocalStorageContextManager();
@@ -178,5 +179,160 @@ describe('context propagation', () => {
     expect(parentSpan).toBeDefined();
     // Child's parent span ID should match the parent's span ID
     expect(childSpan.parentSpanId).toBe(parentSpan.spanContext().spanId);
+  });
+
+  it('deep nesting: agent → llm → tool forms 3-level parent chain', async () => {
+    const tool = traceTool('deepTool')(async () => 'tool-result');
+    const llm = traceLlm({ provider: 'anthropic', model: 'claude-sonnet-4-6' })(async () => {
+      const r = await tool();
+      return { usage: { input_tokens: 10, output_tokens: 20 }, stop_reason: 'end_turn', content: [{ text: r }] };
+    });
+    const agent = traceAgent('deepAgent')(async () => {
+      return llm();
+    });
+
+    await agent();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans.length).toBe(3);
+
+    const toolSpan = spans.find(s => s.name === 'tool.deepTool')!;
+    const llmSpan = spans.find(s => s.name === 'llm.claude-sonnet-4-6')!;
+    const agentSpan = spans.find(s => s.name === 'agent.deepAgent')!;
+
+    expect(toolSpan).toBeDefined();
+    expect(llmSpan).toBeDefined();
+    expect(agentSpan).toBeDefined();
+
+    expect(toolSpan.parentSpanId).toBe(llmSpan.spanContext().spanId);
+    expect(llmSpan.parentSpanId).toBe(agentSpan.spanContext().spanId);
+  });
+});
+
+describe('error handling', () => {
+  describe('traceTool', () => {
+    it('re-throws error and records ERROR status on span (async)', async () => {
+      const err = new Error('tool-async-fail');
+      const tracedFn = traceTool('failTool')(async () => { throw err; });
+
+      await expect(tracedFn()).rejects.toThrow('tool-async-fail');
+
+      const spans = exporter.getFinishedSpans();
+      expect(spans.length).toBe(1);
+      expect(spans[0].status.code).toBe(SpanStatusCode.ERROR);
+      expect(spans[0].events.length).toBeGreaterThanOrEqual(1);
+      expect(spans[0].events.some(e => e.name === 'exception')).toBe(true);
+    });
+
+    it('re-throws error and records ERROR status on span (sync)', () => {
+      const err = new Error('tool-sync-fail');
+      const tracedFn = traceTool('failToolSync')(() => { throw err; });
+
+      expect(() => tracedFn()).toThrow('tool-sync-fail');
+
+      const spans = exporter.getFinishedSpans();
+      expect(spans.length).toBe(1);
+      expect(spans[0].status.code).toBe(SpanStatusCode.ERROR);
+      expect(spans[0].events.some(e => e.name === 'exception')).toBe(true);
+    });
+  });
+
+  describe('traceLlm', () => {
+    it('re-throws error and records ERROR status on span (async)', async () => {
+      const tracedFn = traceLlm({ provider: 'anthropic', model: 'claude-sonnet-4-6' })(
+        async () => { throw new Error('llm-async-fail'); }
+      );
+
+      await expect(tracedFn()).rejects.toThrow('llm-async-fail');
+
+      const spans = exporter.getFinishedSpans();
+      expect(spans.length).toBe(1);
+      expect(spans[0].status.code).toBe(SpanStatusCode.ERROR);
+      expect(spans[0].events.some(e => e.name === 'exception')).toBe(true);
+    });
+
+    it('re-throws error and records ERROR status on span (sync)', () => {
+      const tracedFn = traceLlm({ provider: 'openai', model: 'gpt-4' })(
+        () => { throw new Error('llm-sync-fail'); }
+      );
+
+      expect(() => tracedFn()).toThrow('llm-sync-fail');
+
+      const spans = exporter.getFinishedSpans();
+      expect(spans.length).toBe(1);
+      expect(spans[0].status.code).toBe(SpanStatusCode.ERROR);
+      expect(spans[0].events.some(e => e.name === 'exception')).toBe(true);
+    });
+  });
+
+  describe('traceAgent', () => {
+    it('re-throws error and records exception on span (async)', async () => {
+      const tracedFn = traceAgent('failAgent')(async () => { throw new Error('agent-async-fail'); });
+
+      await expect(tracedFn()).rejects.toThrow('agent-async-fail');
+
+      const spans = exporter.getFinishedSpans();
+      expect(spans.length).toBe(1);
+      // traceAgent does not call span.setStatus(ERROR) itself — withSpan only records the exception
+      expect(spans[0].events.some(e => e.name === 'exception')).toBe(true);
+    });
+
+    it('re-throws error and records exception on span (sync)', () => {
+      const tracedFn = traceAgent('failAgentSync')(() => { throw new Error('agent-sync-fail'); });
+
+      expect(() => tracedFn()).toThrow('agent-sync-fail');
+
+      const spans = exporter.getFinishedSpans();
+      expect(spans.length).toBe(1);
+      expect(spans[0].events.some(e => e.name === 'exception')).toBe(true);
+    });
+  });
+});
+
+describe('traceTool — sync I/O capture', () => {
+  it('captures input and output on sync functions', () => {
+    const tracedFn = traceTool({ name: 'syncIoTool', capturesInput: true, capturesOutput: true })(
+      (arg: string) => `sync:${arg}`
+    );
+    const result = tracedFn('data');
+
+    expect(result).toBe('sync:data');
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[schema.PROV_USED]).toBe('data');
+    expect(spans[0].attributes[`${schema.PROV_ENTITY}.output.value`]).toBe('sync:data');
+  });
+});
+
+describe('traceLlm — edge cases', () => {
+  it('handles missing usage gracefully without crashing', async () => {
+    const tracedFn = traceLlm({ provider: 'anthropic', model: 'claude-sonnet-4-6' })(
+      async () => ({ stop_reason: 'end_turn', content: [{ text: 'no usage' }] })
+    );
+
+    const result = await tracedFn();
+    expect(result.stop_reason).toBe('end_turn');
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans.length).toBe(1);
+    expect(spans[0].attributes[schema.PROV_LLM_PROMPT_TOKENS]).toBeUndefined();
+    expect(spans[0].attributes[schema.PROV_LLM_COMPLETION_TOKENS]).toBeUndefined();
+    expect(spans[0].attributes[schema.PROV_LLM_TOTAL_TOKENS]).toBeUndefined();
+    expect(spans[0].attributes[schema.PROV_LLM_STOP_REASON]).toBe('end_turn');
+  });
+
+  it('captures prompt input via capturesInput', async () => {
+    const tracedFn = traceLlm({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      capturesInput: true,
+    })(async () => ({
+      usage: { input_tokens: 10, output_tokens: 20 },
+      stop_reason: 'end_turn',
+    }));
+
+    await tracedFn('What is 2+2?');
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[schema.PROV_USED]).toBe('What is 2+2?');
   });
 });
