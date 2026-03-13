@@ -698,7 +698,24 @@
           "unit": "none",
           "decimals": 0
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
       }
     },
     {
@@ -755,7 +772,7 @@
     },
     {
       "id": 11,
-      "title": "Recent Span Details (Agent | Model | Session | Tokens | Latency)",
+      "title": "Recent LLM Calls",
       "type": "table",
       "datasource": {
         "type": "tempo",
@@ -768,7 +785,7 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.agent.id != \"\" } | select(span.prov.agent.id, span.prov.llm.model, span.prov.session.id, span.prov.llm.total_tokens, span.agentweave.latency_ms)",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.agent.id != \"\" }",
           "limit": 20,
           "refId": "A"
         }
@@ -780,77 +797,65 @@
         "h": 10
       },
       "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "filterable": true
-          }
-        },
+        "defaults": {},
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "span.agentweave.latency_ms"
+              "options": "traceID"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Latency (ms)"
+                "value": "Trace ID"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Start Time"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Name"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Operation"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Duration"
               },
               {
                 "id": "unit",
                 "value": "ms"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "span.prov.llm.total_tokens"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Total Tokens"
               },
               {
-                "id": "unit",
-                "value": "none"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "span.prov.agent.id"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Agent"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "span.prov.llm.model"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Model"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "span.prov.session.id"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Session"
+                "id": "custom.width",
+                "value": 100
               }
             ]
           }
@@ -859,7 +864,7 @@
       "options": {
         "sortBy": [
           {
-            "displayName": "Start time",
+            "displayName": "Start Time",
             "desc": true
           }
         ],
@@ -872,7 +877,6 @@
           "id": "organize",
           "options": {
             "excludeByName": {
-              "Trace ID": true,
               "Service": true
             },
             "renameByName": {}
