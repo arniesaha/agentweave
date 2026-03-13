@@ -1,41 +1,69 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: tempo-config-minio
-  namespace: monitoring
-data:
-  tempo.yaml: |
-    server:
-      http_listen_port: 3200
+server:
+  http_listen_port: 3200
 
-    distributor:
-      receivers:
-        otlp:
-          protocols:
-            grpc:
-              endpoint: "0.0.0.0:4317"
-            http:
-              endpoint: "0.0.0.0:4318"
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+        grpc:
+          endpoint: 0.0.0.0:4317
 
-    ingester:
-      trace_idle_period: 10s
-      max_block_bytes: 1048576
-      max_block_duration: 5m
+ingester:
+  lifecycler:
+    ring:
+      replication_factor: 1
+      kvstore:
+        store: inmemory
+  trace_idle_period: 10s
+  max_block_duration: 5m
 
-    compactor:
-      compaction:
-        block_retention: 720h
+compactor:
+  compaction:
+    block_retention: 720h
+    compacted_block_retention: 24h
+    compaction_window: 4h
 
-    storage:
-      trace:
-        backend: s3
-        s3:
-          endpoint: minio.monitoring.svc.cluster.local:9000
-          bucket: tempo
-          access_key: minioadmin
-          secret_key: minioadmin123
-          insecure: true
-        wal:
-          path: /var/tempo/wal
-        local:
-          path: /var/tempo/blocks
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
+        send_exemplars: true
+  processor:
+    span_metrics:
+      dimensions:
+        - prov.agent.id
+        - prov.project
+        - prov.llm.provider
+        - prov.llm.model
+      histogram_buckets: [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120]
+    service_graphs:
+      dimensions:
+        - prov.agent.id
+  traces_storage:
+    path: /var/tempo/generator/traces
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics]
+
+storage:
+  trace:
+    backend: s3
+    s3:
+      endpoint: minio.monitoring.svc.cluster.local:9000
+      bucket: tempo
+      access_key: minioadmin
+      secret_key: minioadmin123
+      insecure: true
+    wal:
+      path: /var/tempo/wal
+    pool:
+      max_workers: 100
+      queue_depth: 10000
