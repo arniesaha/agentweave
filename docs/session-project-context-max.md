@@ -1,10 +1,15 @@
 # AgentWeave Header Integration — Max (Mac Mini)
 
 Max runs as a TypeScript agent in [agent-max (pi-mono)](https://github.com/arniesaha/agent-max).
-It is **not** an OpenClaw instance — header injection needs to happen in the agent-max codebase,
+It is **not** an OpenClaw instance — header injection happens in the agent-max codebase,
 not via OpenClaw config.
 
-Nix's side is already done — this doc covers what needs to happen on Max.
+Nix's side is already done — this doc covers what was done on Max.
+
+## Status: Done
+
+All three headers (`Agent-Id`, `Session-Id`, `Project`) are live. Max's LLM calls
+appear in Grafana tagged under `prov.project = max` and `prov.agent.id = max-v1`.
 
 ## What was done on Nix (reference)
 
@@ -29,44 +34,88 @@ Nix's side is already done — this doc covers what needs to happen on Max.
 
 OpenClaw was restarted via SIGUSR1 and all Anthropic calls now appear in Grafana tagged under project `nix`.
 
-## What needs to happen on Max
+## What was done on Max
 
-Max uses Google/Gemini via the `@google/generative-ai` SDK (or equivalent). The AgentWeave proxy-max
-instance is running on the NAS at NodePort **30401** and handles Google routes (`/v1beta/models/...`).
+Max uses `pi-ai` (`@mariozechner/pi-ai`) which manages the Google GenAI and Anthropic SDKs
+internally. The SDKs are not instantiated directly — instead, `getModel()` returns a model
+object and `streamSimple()` handles streaming. Headers are injected via a `streamFn` wrapper
+in the Agent constructor.
 
-### 1. Point Max's LLM client at the proxy
+### How it works
 
-In agent-max (`src/agent.ts` or wherever the Gemini client is initialized), change the base URL:
+In `src/agent.ts`, a custom `streamFn` wraps `streamSimple` to inject all AgentWeave headers
+into every LLM call (both Google and Anthropic):
 
 ```typescript
-// Before
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY)
+import { streamSimple } from "@mariozechner/pi-ai";
 
-// After — route through AgentWeave proxy
-import { GoogleGenerativeAI, GoogleGenerativeAIClientOptions } from "@google/generative-ai"
+// Wrap streamSimple to inject AgentWeave proxy auth + tracing headers
+const proxyToken = process.env.AGENTWEAVE_PROXY_TOKEN;
+const agentWeaveStreamFn: typeof streamSimple = (m, ctx, opts) =>
+  streamSimple(m, ctx, {
+    ...opts,
+    headers: {
+      ...opts?.headers,
+      "X-AgentWeave-Agent-Id": "max-v1",
+      "X-AgentWeave-Session-Id": "max-main",
+      "X-AgentWeave-Project": "max",
+      // Only for Anthropic — Google uses query param auth
+      ...(proxyToken && provider === "anthropic"
+        ? { Authorization: `Bearer ${proxyToken}` }
+        : {}),
+    },
+  });
 
-const clientOptions: GoogleGenerativeAIClientOptions = {
-  baseUrl: "http://192.168.1.70:30401",
-  customHeaders: {
-    "X-AgentWeave-Session-Id": "max-main",
-    "X-AgentWeave-Project": "max",
-    "X-AgentWeave-Agent-Id": "max-v1",
-  },
-}
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!, clientOptions)
+const agent = new Agent({
+  // ...
+  streamFn: agentWeaveStreamFn,
+});
 ```
 
-> The proxy forwards to `https://generativelanguage.googleapis.com` automatically — the API key still travels in the request as usual.
+### Why `streamFn` instead of SDK-level config
 
-### 2. Build and deploy
+- `pi-ai` hardcodes `baseUrl` in its model registry — patching `model.baseUrl` after
+  `getModel()` is the only way to override it
+- `pi-ai` doesn't expose a `headers` option in the Agent constructor — the `streamFn`
+  wrapper is needed to inject custom headers into streaming calls
+- The `Authorization: Bearer <token>` is only sent for Anthropic calls; sending it for
+  Google calls would conflict with Google's API key auth (`key=` query param)
+
+### Base URL routing
+
+Both providers are routed through the AgentWeave proxy on the NAS via env vars:
+
+```
+ANTHROPIC_BASE_URL=http://192.168.1.70:30401
+GOOGLE_GENAI_BASE_URL=http://192.168.1.70:30401
+```
+
+For Google, `/v1beta` is appended automatically (`model.baseUrl` is set to
+`${GOOGLE_GENAI_BASE_URL}/v1beta`) because pi-ai clears `apiVersion` when a custom
+`baseUrl` is set.
+
+### Native SDK tracing (Phase 2)
+
+In addition to the proxy headers, Max also has native AgentWeave TS SDK integration
+(`src/tracing.ts`) for tool-level spans:
+
+- `AgentWeaveConfig.setup()` is called at startup, sending spans directly to Tempo
+  at `http://192.168.1.70:30418`
+- All tools are wrapped with `traceTool()` for granular span tracing
+- W3C trace context (`traceparent`) is injected into Nix A2A calls via
+  `@opentelemetry/api` propagation for cross-agent trace linking
+
+### Managed via launchd
+
+Max runs as a launchd service (`com.arnab.agent-max`). Restart with:
 
 ```bash
 cd ~/max/projects/agent-max
 npm run build
-# restart agent-max launchd service or however it's deployed
+launchctl stop com.arnab.agent-max && sleep 5 && launchctl start com.arnab.agent-max
 ```
 
-### 3. Verify traces appear in Grafana
+### Verify traces appear in Grafana
 
 Open `http://o11y.arnabsaha.com` → AgentWeave Overview → Session Explorer.
 After Max makes an LLM call, a row with `prov.project = max` and `prov.agent.id = max-v1` should appear.
