@@ -41,6 +41,11 @@ PROV_AGENT_ID = "prov.agent.id"
 PROV_AGENT_MODEL = "prov.agent.model"
 PROV_AGENT_VERSION = "prov.agent.version"
 
+# prov:Session — session and project context propagated via proxy headers
+PROV_SESSION_ID = "prov.session.id"
+PROV_PROJECT = "prov.project"
+PROV_SESSION_TURN = "prov.session.turn"
+
 # prov:wasGeneratedBy — output linked to producing activity
 PROV_WAS_GENERATED_BY = "prov.wasGeneratedBy"
 

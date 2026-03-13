@@ -47,6 +47,24 @@
             }
           ],
           "hide": 0
+        },
+        {
+          "name": "project",
+          "label": "Project",
+          "type": "custom",
+          "query": ".*",
+          "current": {
+            "text": "All",
+            "value": ".*"
+          },
+          "options": [
+            {
+              "text": "All",
+              "value": ".*",
+              "selected": true
+            }
+          ],
+          "hide": 0
         }
       ]
     },
@@ -597,6 +615,187 @@
               ]
             }
           ]
+        }
+      },
+      {
+        "id": 8,
+        "title": "Session Explorer",
+        "type": "table",
+        "gridPos": {
+          "x": 0,
+          "y": 24,
+          "w": 24,
+          "h": 10
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.session.id != \"\" && span.prov.project =~ \"${project}\" }",
+            "tableType": "traces",
+            "limit": 100,
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "frameIndex": 0,
+          "showHeader": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "auto"
+            }
+          }
+        }
+      },
+      {
+        "id": 9,
+        "title": "Project Rollup",
+        "type": "barchart",
+        "gridPos": {
+          "x": 0,
+          "y": 34,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.project != \"\" }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "groupBy",
+            "options": {
+              "fields": {
+                "prov.project": {
+                  "aggregations": [],
+                  "operation": "groupby"
+                },
+                "traceID": {
+                  "aggregations": [
+                    "count"
+                  ],
+                  "operation": "aggregate"
+                }
+              }
+            }
+          },
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "prov.project": "Project",
+                "traceID (count)": "Calls"
+              }
+            }
+          },
+          {
+            "id": "sortBy",
+            "options": {
+              "fields": [
+                {
+                  "displayName": "Calls",
+                  "desc": true
+                }
+              ]
+            }
+          }
+        ],
+        "options": {
+          "xField": "Project",
+          "orientation": "auto",
+          "fillOpacity": 80,
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          },
+          "tooltip": {
+            "mode": "single"
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "custom": {
+              "lineWidth": 1,
+              "fillOpacity": 80
+            }
+          }
+        }
+      },
+      {
+        "id": 10,
+        "title": "Turn Depth Histogram",
+        "type": "histogram",
+        "gridPos": {
+          "x": 12,
+          "y": 34,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.session.turn > 0 && span.prov.project =~ \"${project}\" }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "bucketSize": 1,
+          "combine": false,
+          "fillOpacity": 80,
+          "gradientMode": "none",
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          },
+          "tooltip": {
+            "mode": "single"
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "custom": {
+              "fillOpacity": 80,
+              "lineWidth": 1
+            }
+          }
         }
       }
     ]

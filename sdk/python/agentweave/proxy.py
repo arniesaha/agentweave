@@ -65,6 +65,9 @@ _SKIP_HEADERS_ALWAYS = {
     "host", "content-length", "transfer-encoding", "connection",
     "x-agentweave-agent-id",
     "x-agentweave-agent-model",
+    "x-agentweave-session-id",
+    "x-agentweave-project",
+    "x-agentweave-turn",
 }
 
 # Runtime auth token. Set AGENTWEAVE_PROXY_TOKEN or --auth-token.
@@ -186,6 +189,16 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         or model
     )
 
+    session_id = request.headers.get("x-agentweave-session-id")
+    project = request.headers.get("x-agentweave-project")
+    turn: int | None = None
+    turn_raw = request.headers.get("x-agentweave-turn")
+    if turn_raw is not None:
+        try:
+            turn = int(turn_raw)
+        except (ValueError, TypeError):
+            logger.warning("x-agentweave-turn is not a valid integer: %r", turn_raw)
+
     forward_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in _SKIP_HEADERS_ALWAYS
@@ -211,6 +224,9 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         agent_id=agent_id,
         agent_model=agent_model,
         path=path,
+        session_id=session_id,
+        project=project,
+        turn=turn,
     )
 
     if is_stream:
@@ -226,12 +242,14 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
 async def _request_and_trace(
     upstream_url: str, method: str, headers: dict, body: dict, body_bytes: bytes,
     model: str, provider: str, agent_id: str, agent_model: str, path: str,
+    session_id: str | None = None, project: str | None = None, turn: int | None = None,
 ) -> JSONResponse:
     tracer = get_tracer()
     with tracer.start_as_current_span(f"{schema.SPAN_PREFIX_LLM}.{model}") as span:
         _set_request_attrs(span, model=model, provider=provider,
                            agent_id=agent_id, agent_model=agent_model,
-                           path=path, body=body)
+                           path=path, body=body,
+                           session_id=session_id, project=project, turn=turn)
         start = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=300) as client:
@@ -256,12 +274,14 @@ async def _request_and_trace(
 async def _stream_and_trace(
     upstream_url: str, method: str, headers: dict, body: dict, body_bytes: bytes,
     model: str, provider: str, agent_id: str, agent_model: str, path: str,
+    session_id: str | None = None, project: str | None = None, turn: int | None = None,
 ) -> AsyncIterator[bytes]:
     tracer = get_tracer()
     span = tracer.start_span(f"{schema.SPAN_PREFIX_LLM}.{model}")
     _set_request_attrs(span, model=model, provider=provider,
                        agent_id=agent_id, agent_model=agent_model,
-                       path=path, body=body)
+                       path=path, body=body,
+                       session_id=session_id, project=project, turn=turn)
 
     input_tokens = output_tokens = 0
     stop_reason = None
@@ -532,6 +552,7 @@ def _maybe_set_response_preview(span: Any, text: str) -> None:
 def _set_request_attrs(
     span: Any, model: str, provider: str, agent_id: str, agent_model: str,
     path: str, body: dict,
+    session_id: str | None = None, project: str | None = None, turn: int | None = None,
 ) -> None:
     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
     span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
@@ -540,6 +561,13 @@ def _set_request_attrs(
     span.set_attribute(schema.PROV_AGENT_MODEL, agent_model)
     span.set_attribute(schema.PROV_WAS_ASSOCIATED_WITH, agent_id)
     span.set_attribute("http.route", f"/{path}")
+
+    if session_id is not None:
+        span.set_attribute(schema.PROV_SESSION_ID, session_id)
+    if project is not None:
+        span.set_attribute(schema.PROV_PROJECT, project)
+    if turn is not None:
+        span.set_attribute(schema.PROV_SESSION_TURN, turn)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
