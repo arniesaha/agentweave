@@ -658,7 +658,7 @@
     {
       "id": 9,
       "title": "Total Calls by Agent",
-      "type": "bargauge",
+      "type": "stat",
       "gridPos": {
         "x": 0,
         "y": 34,
@@ -683,33 +683,20 @@
       ],
       "transformations": [],
       "options": {
-        "orientation": "horizontal",
-        "displayMode": "gradient",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
           ]
         },
-        "showUnfilled": true,
-        "valueMode": "color",
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       }
