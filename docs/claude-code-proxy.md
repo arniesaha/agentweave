@@ -16,22 +16,25 @@ Add the `env` block to `~/.claude/settings.json`:
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://192.168.1.70:30401",
-    "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-mac"
+    "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-mac\nX-AgentWeave-Session-Id: claude-code-main\nX-AgentWeave-Project: claude-code"
   }
 }
 ```
 
-This routes all Claude Code API calls through the proxy with agent ID
-`claude-code-mac`, which appears in Grafana spans as
-`prov.agent.id = claude-code-mac`.
+This routes all Claude Code API calls through the proxy with:
+- `prov.agent.id = claude-code-mac`
+- `prov.session.id = claude-code-main`
+- `prov.project = claude-code`
+
+Multiple headers are `\n`-separated in the JSON string.
 
 Changes take effect on **new** Claude Code sessions only.
 
 ## How it works
 
 - `ANTHROPIC_BASE_URL` redirects API calls from `api.anthropic.com` to the proxy
-- `ANTHROPIC_CUSTOM_HEADERS` sends `X-AgentWeave-Agent-Id: claude-code-mac`
-  with every request so the proxy tags spans with the correct agent ID
+- `ANTHROPIC_CUSTOM_HEADERS` sends `X-AgentWeave-Agent-Id`, `X-AgentWeave-Session-Id`,
+  and `X-AgentWeave-Project` with every request so the proxy tags spans correctly
 - The proxy forwards requests to Anthropic, emits OTel spans to Tempo,
   and returns the response transparently
 
@@ -60,7 +63,7 @@ ANTHROPIC_BASE_URL="" claude
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Claude Code hangs or errors on startup | Proxy unreachable | Revert settings (see above) |
-| Spans show `agent.id = unknown` | Missing custom header | Ensure `ANTHROPIC_CUSTOM_HEADERS` is set |
+| Spans show `agent.id = unknown` | Missing custom headers | Ensure `ANTHROPIC_CUSTOM_HEADERS` is set with all three headers |
 | Spans show `agent.id = max-v1` not `claude-code-mac` | Header not forwarded | Check proxy version strips/reads `X-AgentWeave-Agent-Id` |
 | Connection refused on `:30401` | proxy-max not deployed | Deploy `proxy-max.yaml` on NAS k8s first |
 
