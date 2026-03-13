@@ -766,7 +766,7 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.session.turn > 0 && span.prov.project =~ \"${project}\" }",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.session.id != \"\" && span.prov.project =~ \"${project}\" }",
           "tableType": "traces",
           "limit": 500,
           "refId": "A"
@@ -1150,7 +1150,7 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.project != \"\" && span.prov.session.turn > 0 }",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.project != \"\" }",
           "tableType": "traces",
           "limit": 500,
           "refId": "A"
@@ -1243,7 +1243,7 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.llm.latency_ms > 0 }",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.agentweave.latency_ms > 0 }",
           "tableType": "traces",
           "limit": 500,
           "refId": "A"

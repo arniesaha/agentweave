@@ -45,13 +45,20 @@ metrics_generator:
     service_graphs:
       dimensions:
         - prov.agent.id
+    local_blocks:
+      max_live_traces: 50000
+      max_block_duration: 2h
+      max_block_bytes: 1073741824
+      flush_check_period: 30s
+      trace_idle_period: 30s
+      complete_block_timeout: 2h
   traces_storage:
     path: /var/tempo/generator/traces
 
 overrides:
   defaults:
     metrics_generator:
-      processors: [service-graphs, span-metrics]
+      processors: [service-graphs, span-metrics, local-blocks]
 
 storage:
   trace:
