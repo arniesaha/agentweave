@@ -39,6 +39,9 @@ class TestDetectProvider:
     def test_google_v1_models(self):
         assert _detect_provider("v1/models/gemini-2.5-pro:generateContent") == "google"
 
+    def test_openai_responses(self):
+        assert _detect_provider("v1/responses") == "openai"
+
     def test_anthropic_fallback(self):
         assert _detect_provider("v1/unknown/path") == "anthropic"
 
@@ -80,6 +83,23 @@ class TestSetOpenaiResponseAttrs:
         assert span.attrs["prov.llm.prompt_tokens"] == 1
         assert "prov.llm.stop_reason" not in span.attrs
 
+    def test_responses_api_token_shape(self):
+        """Responses API uses input_tokens/output_tokens instead of prompt_tokens/completion_tokens."""
+        span = _FakeSpan()
+        data = {
+            "id": "resp_abc123",
+            "output": [{"type": "message", "content": [{"type": "text", "text": "hi"}]}],
+            "usage": {"input_tokens": 25, "output_tokens": 12, "total_tokens": 37},
+        }
+        _set_openai_response_attrs(span, data, elapsed_ms=55)
+        assert span.attrs["prov.llm.prompt_tokens"] == 25
+        assert span.attrs["prov.llm.completion_tokens"] == 12
+        assert span.attrs["prov.llm.total_tokens"] == 37
+        assert span.attrs["agentweave.latency_ms"] == 55
+        # gen_ai.* dual-emit
+        assert span.attrs["gen_ai.usage.input_tokens"] == 25
+        assert span.attrs["gen_ai.usage.output_tokens"] == 12
+
 
 class TestOpenaiResponseText:
     """Verify text extraction from OpenAI response format."""
@@ -114,6 +134,13 @@ class TestParseOpenaiSse:
         line = "data: [DONE]"
         inp, out, stop = _parse_openai_sse(line, 5, 3, "stop")
         assert (inp, out, stop) == (5, 3, "stop")
+
+    def test_responses_api_usage_chunk(self):
+        """Responses API uses input_tokens/output_tokens in SSE usage chunks."""
+        line = 'data: {"usage": {"input_tokens": 30, "output_tokens": 15}}'
+        inp, out, stop = _parse_openai_sse(line, 0, 0, None)
+        assert inp == 30
+        assert out == 15
 
     def test_non_data_line(self):
         line = "event: message"
