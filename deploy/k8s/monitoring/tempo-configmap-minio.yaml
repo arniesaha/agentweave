@@ -19,6 +19,13 @@ ingester:
   trace_idle_period: 10s
   max_block_duration: 5m
 
+query_frontend:
+  max_retries: 2
+  search:
+    max_duration: 0
+  metrics:
+    max_duration: 3h
+
 compactor:
   compaction:
     block_retention: 720h
