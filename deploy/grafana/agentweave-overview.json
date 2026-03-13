@@ -823,7 +823,7 @@
     },
     {
       "id": 12,
-      "title": "Calls by Project",
+      "title": "Calls by Project (selected window)",
       "type": "barchart",
       "datasource": {
         "type": "prometheus",
@@ -835,7 +835,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (prov_project) (traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_project!=\"\"})",
+          "expr": "sum by (prov_project) (increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_project!=\"\"}[$__range]))",
           "legendFormat": "{{prov_project}}",
           "refId": "A",
           "instant": true
@@ -913,7 +913,7 @@
     },
     {
       "id": 14,
-      "title": "Calls by Agent",
+      "title": "Calls by Agent (selected window)",
       "type": "piechart",
       "datasource": {
         "type": "prometheus",
@@ -925,7 +925,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (prov_agent_id) (traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_agent_id!=\"\"})",
+          "expr": "sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_agent_id!=\"\"}[$__range]))",
           "legendFormat": "{{prov_agent_id}}",
           "refId": "A",
           "instant": true
