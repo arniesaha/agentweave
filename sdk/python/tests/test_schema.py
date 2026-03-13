@@ -44,6 +44,11 @@ class TestProvAttributes:
         assert schema.SPAN_PREFIX_TOOL == "tool"
         assert schema.SPAN_PREFIX_AGENT == "agent"
 
+    def test_session_attributes(self):
+        assert schema.PROV_SESSION_ID == "prov.session.id"
+        assert schema.PROV_PROJECT == "prov.project"
+        assert schema.PROV_SESSION_TURN == "prov.session.turn"
+
     def test_all_prov_attributes_start_with_prov(self):
         """All PROV_ constants should have values starting with 'prov.'."""
         for attr_name in dir(schema):

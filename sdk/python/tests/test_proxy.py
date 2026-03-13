@@ -478,6 +478,19 @@ class TestHeaderForwarding:
         assert "authorization" not in result
         assert result["x-api-key"] == "sk-ant-123"
 
+    def test_session_headers_stripped(self):
+        headers = {
+            "x-agentweave-session-id": "sess-123",
+            "x-agentweave-project": "launchpad",
+            "x-agentweave-turn": "5",
+            "x-api-key": "sk-ant-123",
+        }
+        result = self._filter_headers(headers, token_set=False)
+        assert "x-agentweave-session-id" not in result
+        assert "x-agentweave-project" not in result
+        assert "x-agentweave-turn" not in result
+        assert result["x-api-key"] == "sk-ant-123"
+
     def test_auth_forwarded_when_no_proxy_token(self):
         headers = {
             "authorization": "Bearer sk-ant-123",
@@ -485,3 +498,47 @@ class TestHeaderForwarding:
         }
         result = self._filter_headers(headers, token_set=False)
         assert result["authorization"] == "Bearer sk-ant-123"
+
+
+# ---------------------------------------------------------------------------
+# Session context
+# ---------------------------------------------------------------------------
+
+
+class TestSessionContext:
+    """Verify session/project/turn attributes are set on spans."""
+
+    def _call(self, monkeypatch, session_id=None, project=None, turn=None):
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+            session_id=session_id, project=project, turn=turn,
+        )
+        return span
+
+    def test_all_set(self, monkeypatch):
+        span = self._call(monkeypatch, session_id="sess-abc", project="launchpad", turn=3)
+        assert span.attrs["prov.session.id"] == "sess-abc"
+        assert span.attrs["prov.project"] == "launchpad"
+        assert span.attrs["prov.session.turn"] == 3
+
+    def test_partial_set(self, monkeypatch):
+        span = self._call(monkeypatch, session_id="sess-xyz")
+        assert span.attrs["prov.session.id"] == "sess-xyz"
+        assert "prov.project" not in span.attrs
+        assert "prov.session.turn" not in span.attrs
+
+    def test_none_set(self, monkeypatch):
+        span = self._call(monkeypatch)
+        assert "prov.session.id" not in span.attrs
+        assert "prov.project" not in span.attrs
+        assert "prov.session.turn" not in span.attrs
+
+    def test_turn_is_int(self, monkeypatch):
+        span = self._call(monkeypatch, turn=7)
+        assert span.attrs["prov.session.turn"] == 7
+        assert isinstance(span.attrs["prov.session.turn"], int)
