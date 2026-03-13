@@ -10,7 +10,7 @@
     ],
     "timezone": "browser",
     "schemaVersion": 38,
-    "version": 10,
+    "version": 11,
     "refresh": "30s",
     "time": {
       "from": "now-24h",
@@ -794,6 +794,587 @@
             "custom": {
               "fillOpacity": 80,
               "lineWidth": 1
+            }
+          }
+        }
+      },
+      {
+        "id": 11,
+        "title": "Token Budget: Tokens per Day by Model",
+        "type": "timeseries",
+        "description": "Sum of prov.llm.total_tokens per time window, broken out by model",
+        "gridPos": {
+          "x": 0,
+          "y": 42,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceqlMetrics",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.llm.total_tokens > 0 } | sum(span.prov.llm.total_tokens) by(span.prov.agent.model)",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          },
+          "tooltip": {
+            "mode": "multi",
+            "sort": "desc"
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "none",
+            "color": {
+              "mode": "palette-classic"
+            },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 15,
+              "spanNulls": false,
+              "showPoints": "auto"
+            }
+          }
+        }
+      },
+      {
+        "id": 12,
+        "title": "Cost Estimate Trend ($/window, Sonnet rates)",
+        "type": "timeseries",
+        "description": "Daily cost = input_tokens\u00d7$0.000003 + output_tokens\u00d7$0.000015",
+        "gridPos": {
+          "x": 12,
+          "y": 42,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceqlMetrics",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && span.gen_ai.usage.input_tokens > 0 } | sum(span.gen_ai.usage.input_tokens)",
+            "refId": "A",
+            "hide": true
+          },
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceqlMetrics",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && span.gen_ai.usage.output_tokens > 0 } | sum(span.gen_ai.usage.output_tokens)",
+            "refId": "B",
+            "hide": true
+          },
+          {
+            "datasource": {
+              "type": "__expr__",
+              "uid": "__expr__"
+            },
+            "type": "math",
+            "expression": "$A * 0.000003 + $B * 0.000015",
+            "refId": "Cost",
+            "hide": false
+          }
+        ],
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          },
+          "tooltip": {
+            "mode": "single"
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "color": {
+              "mode": "fixed",
+              "fixedColor": "green"
+            },
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 20,
+              "spanNulls": false
+            },
+            "displayName": "Estimated Cost"
+          }
+        }
+      },
+      {
+        "id": 13,
+        "title": "Top 5 Most Expensive Sessions",
+        "type": "table",
+        "description": "Sessions ranked by estimated cost (input\u00d7$3/M + output\u00d7$15/M). Limit 5.",
+        "gridPos": {
+          "x": 0,
+          "y": 50,
+          "w": 24,
+          "h": 10
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.session.id != \"\" && span.gen_ai.usage.input_tokens > 0 }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "groupBy",
+            "options": {
+              "fields": {
+                "prov.session.id": {
+                  "aggregations": [],
+                  "operation": "groupby"
+                },
+                "gen_ai.usage.input_tokens": {
+                  "aggregations": [
+                    "sum"
+                  ],
+                  "operation": "aggregate"
+                },
+                "gen_ai.usage.output_tokens": {
+                  "aggregations": [
+                    "sum"
+                  ],
+                  "operation": "aggregate"
+                },
+                "prov.project": {
+                  "aggregations": [
+                    "firstNotNull"
+                  ],
+                  "operation": "aggregate"
+                },
+                "prov.agent.id": {
+                  "aggregations": [
+                    "firstNotNull"
+                  ],
+                  "operation": "aggregate"
+                }
+              }
+            }
+          },
+          {
+            "id": "calculateField",
+            "options": {
+              "alias": "InputCost",
+              "mode": "binary",
+              "binary": {
+                "left": "gen_ai.usage.input_tokens (sum)",
+                "right": "0.000003",
+                "operator": "*"
+              }
+            }
+          },
+          {
+            "id": "calculateField",
+            "options": {
+              "alias": "OutputCost",
+              "mode": "binary",
+              "binary": {
+                "left": "gen_ai.usage.output_tokens (sum)",
+                "right": "0.000015",
+                "operator": "*"
+              }
+            }
+          },
+          {
+            "id": "calculateField",
+            "options": {
+              "alias": "Cost (USD)",
+              "mode": "binary",
+              "binary": {
+                "left": "InputCost",
+                "right": "OutputCost",
+                "operator": "+"
+              }
+            }
+          },
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "InputCost": true,
+                "OutputCost": true
+              },
+              "renameByName": {
+                "prov.session.id": "Session ID",
+                "gen_ai.usage.input_tokens (sum)": "Input Tokens",
+                "gen_ai.usage.output_tokens (sum)": "Output Tokens",
+                "prov.project (firstNotNull)": "Project",
+                "prov.agent.id (firstNotNull)": "Agent"
+              }
+            }
+          },
+          {
+            "id": "sortBy",
+            "options": {
+              "fields": [
+                {
+                  "displayName": "Cost (USD)",
+                  "desc": true
+                }
+              ]
+            }
+          },
+          {
+            "id": "limit",
+            "options": {
+              "limitField": 5
+            }
+          }
+        ],
+        "options": {
+          "frameIndex": 0,
+          "showHeader": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "auto"
+            }
+          },
+          "overrides": [
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Cost (USD)"
+              },
+              "properties": [
+                {
+                  "id": "unit",
+                  "value": "currencyUSD"
+                },
+                {
+                  "id": "custom.displayMode",
+                  "value": "color-background"
+                },
+                {
+                  "id": "thresholds",
+                  "value": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      },
+                      {
+                        "color": "yellow",
+                        "value": 0.01
+                      },
+                      {
+                        "color": "red",
+                        "value": 0.1
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Input Tokens"
+              },
+              "properties": [
+                {
+                  "id": "unit",
+                  "value": "locale"
+                }
+              ]
+            },
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Output Tokens"
+              },
+              "properties": [
+                {
+                  "id": "unit",
+                  "value": "locale"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": 14,
+        "title": "Avg Turns per Session by Project",
+        "type": "barchart",
+        "description": "Mean prov.session.turn grouped by project \u2014 shows conversation depth per project",
+        "gridPos": {
+          "x": 0,
+          "y": 60,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.project != \"\" && span.prov.session.turn > 0 }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "groupBy",
+            "options": {
+              "fields": {
+                "prov.project": {
+                  "aggregations": [],
+                  "operation": "groupby"
+                },
+                "prov.session.turn": {
+                  "aggregations": [
+                    "mean"
+                  ],
+                  "operation": "aggregate"
+                }
+              }
+            }
+          },
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "prov.project": "Project",
+                "prov.session.turn (mean)": "Avg Turns"
+              }
+            }
+          },
+          {
+            "id": "sortBy",
+            "options": {
+              "fields": [
+                {
+                  "displayName": "Avg Turns",
+                  "desc": true
+                }
+              ]
+            }
+          }
+        ],
+        "options": {
+          "xField": "Project",
+          "orientation": "auto",
+          "fillOpacity": 80,
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          },
+          "tooltip": {
+            "mode": "single"
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "custom": {
+              "lineWidth": 1,
+              "fillOpacity": 80
+            },
+            "unit": "none",
+            "decimals": 1
+          }
+        }
+      },
+      {
+        "id": 15,
+        "title": "Task Latency Distribution (prov.llm.latency_ms)",
+        "type": "histogram",
+        "description": "Distribution of LLM call latency. Key buckets: 0\u20135s, 5\u201330s, 30s\u20132min, 2min+",
+        "gridPos": {
+          "x": 12,
+          "y": 60,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.llm.latency_ms > 0 }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "filterFieldsByName",
+            "options": {
+              "include": {
+                "names": [
+                  "prov.llm.latency_ms"
+                ]
+              }
+            }
+          }
+        ],
+        "options": {
+          "bucketSize": 5000,
+          "combine": false,
+          "fillOpacity": 80,
+          "gradientMode": "none",
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          },
+          "tooltip": {
+            "mode": "single"
+          },
+          "xTickLabelMaxLength": 12
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "color": {
+              "mode": "palette-classic"
+            },
+            "custom": {
+              "fillOpacity": 80,
+              "lineWidth": 1
+            }
+          }
+        }
+      },
+      {
+        "id": 16,
+        "title": "Agent Attribution: Token Share (nix-v1 vs max-v1)",
+        "type": "piechart",
+        "description": "Fraction of total prov.llm.total_tokens attributed to each agent",
+        "gridPos": {
+          "x": 0,
+          "y": 68,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "tempo",
+          "uid": "cffj9et53r9j4f"
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "tempo",
+              "uid": "cffj9et53r9j4f"
+            },
+            "queryType": "traceql",
+            "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.agent.id != \"\" && span.prov.llm.total_tokens > 0 }",
+            "tableType": "traces",
+            "limit": 500,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "groupBy",
+            "options": {
+              "fields": {
+                "prov.agent.id": {
+                  "aggregations": [],
+                  "operation": "groupby"
+                },
+                "prov.llm.total_tokens": {
+                  "aggregations": [
+                    "sum"
+                  ],
+                  "operation": "aggregate"
+                }
+              }
+            }
+          },
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "prov.agent.id": "Agent",
+                "prov.llm.total_tokens (sum)": "Total Tokens"
+              }
+            }
+          },
+          {
+            "id": "rowsToFields",
+            "options": {
+              "nameField": "Agent",
+              "valueField": "Total Tokens"
+            }
+          }
+        ],
+        "options": {
+          "pieType": "pie",
+          "displayLabels": [
+            "name",
+            "percent"
+          ],
+          "legend": {
+            "displayMode": "table",
+            "placement": "right",
+            "values": [
+              "value",
+              "percent"
+            ]
+          },
+          "tooltip": {
+            "mode": "single"
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "none",
+            "color": {
+              "mode": "palette-classic"
             }
           }
         }
