@@ -657,8 +657,8 @@
     },
     {
       "id": 9,
-      "title": "Project Rollup",
-      "type": "barchart",
+      "title": "Calls (nix)",
+      "type": "stat",
       "gridPos": {
         "x": 0,
         "y": 34,
@@ -675,72 +675,30 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceqlMetrics",
-          "query": "{resource.service.name=\"agentweave-proxy\"&&span.prov.project!=\"\"}|count_over_time()by(span.prov.project)",
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.project = \"nix\" }",
+          "limit": 500,
           "refId": "A"
         }
       ],
-      "transformations": [
-        {
-          "id": "groupBy",
-          "options": {
-            "fields": {
-              "prov.project": {
-                "aggregations": [],
-                "operation": "groupby"
-              },
-              "traceID": {
-                "aggregations": [
-                  "count"
-                ],
-                "operation": "aggregate"
-              }
-            }
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "renameByName": {
-              "prov.project": "Project",
-              "traceID (count)": "Calls"
-            }
-          }
-        },
-        {
-          "id": "sortBy",
-          "options": {
-            "fields": [
-              {
-                "displayName": "Calls",
-                "desc": true
-              }
-            ]
-          }
-        }
-      ],
+      "transformations": [],
       "options": {
-        "xField": "Project",
-        "orientation": "auto",
-        "fillOpacity": 80,
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ]
         },
-        "tooltip": {
-          "mode": "single"
-        }
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "area"
       },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 80
-          }
-        }
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
       }
     },
     {
@@ -797,8 +755,8 @@
     },
     {
       "id": 11,
-      "title": "Token Budget: Tokens per Day by Model",
-      "type": "timeseries",
+      "title": "Calls w/ Token Data",
+      "type": "stat",
       "description": "Sum of prov.llm.total_tokens per time window, broken out by model",
       "gridPos": {
         "x": 0,
@@ -816,40 +774,36 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceqlMetrics",
-          "query": "{resource.service.name=\"agentweave-proxy\"&&span.prov.llm.total_tokens>0}|sum_over_time(span.prov.llm.total_tokens)by(span.prov.llm.model)",
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.llm.total_tokens > 0 }",
+          "limit": 500,
           "refId": "A"
         }
       ],
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ]
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "area"
       },
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 15,
-            "spanNulls": false,
-            "showPoints": "auto"
-          }
-        }
-      }
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "transformations": []
     },
     {
       "id": 12,
-      "title": "Cost Estimate Trend ($/window, Sonnet rates)",
-      "type": "timeseries",
+      "title": "Total Calls",
+      "type": "stat",
       "description": "Daily cost = input_tokens\u00d7$0.000003 + output_tokens\u00d7$0.000015",
       "gridPos": {
         "x": 12,
@@ -867,46 +821,31 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceqlMetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.gen_ai.usage.input_tokens > 0 } |sum_over_time(span.gen_ai.usage.input_tokens)",
-          "refId": "A",
-          "hide": true
-        },
-        {
-          "datasource": {
-            "type": "tempo",
-            "uid": "cffj9et53r9j4f"
-          },
-          "queryType": "traceqlMetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.gen_ai.usage.output_tokens > 0 } |sum_over_time(span.gen_ai.usage.output_tokens)",
-          "refId": "B",
-          "hide": true
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"agentweave-proxy\" }",
+          "limit": 500,
+          "refId": "A"
         }
       ],
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ]
         },
-        "tooltip": {
-          "mode": "single"
-        }
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "area"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "green"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false
-          },
-          "displayName": "Estimated Cost"
-        }
-      }
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "transformations": []
     },
     {
       "id": 13,
@@ -930,121 +869,22 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.session.id != \"\" && span.gen_ai.usage.input_tokens > 0 }",
-          "tableType": "traces",
-          "limit": 500,
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.session.id != \"\" } | select(span.prov.session.id, span.prov.llm.total_tokens, span.prov.llm.model)",
+          "limit": 20,
           "refId": "A"
         }
       ],
-      "transformations": [
-        {
-          "id": "groupBy",
-          "options": {
-            "fields": {
-              "prov.session.id": {
-                "aggregations": [],
-                "operation": "groupby"
-              },
-              "gen_ai.usage.input_tokens": {
-                "aggregations": [
-                  "sum"
-                ],
-                "operation": "aggregate"
-              },
-              "gen_ai.usage.output_tokens": {
-                "aggregations": [
-                  "sum"
-                ],
-                "operation": "aggregate"
-              },
-              "prov.project": {
-                "aggregations": [
-                  "firstNotNull"
-                ],
-                "operation": "aggregate"
-              },
-              "prov.agent.id": {
-                "aggregations": [
-                  "firstNotNull"
-                ],
-                "operation": "aggregate"
-              }
-            }
-          }
-        },
-        {
-          "id": "calculateField",
-          "options": {
-            "alias": "InputCost",
-            "mode": "binary",
-            "binary": {
-              "left": "gen_ai.usage.input_tokens (sum)",
-              "right": "0.000003",
-              "operator": "*"
-            }
-          }
-        },
-        {
-          "id": "calculateField",
-          "options": {
-            "alias": "OutputCost",
-            "mode": "binary",
-            "binary": {
-              "left": "gen_ai.usage.output_tokens (sum)",
-              "right": "0.000015",
-              "operator": "*"
-            }
-          }
-        },
-        {
-          "id": "calculateField",
-          "options": {
-            "alias": "Cost (USD)",
-            "mode": "binary",
-            "binary": {
-              "left": "InputCost",
-              "right": "OutputCost",
-              "operator": "+"
-            }
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "InputCost": true,
-              "OutputCost": true
-            },
-            "renameByName": {
-              "prov.session.id": "Session ID",
-              "gen_ai.usage.input_tokens (sum)": "Input Tokens",
-              "gen_ai.usage.output_tokens (sum)": "Output Tokens",
-              "prov.project (firstNotNull)": "Project",
-              "prov.agent.id (firstNotNull)": "Agent"
-            }
-          }
-        },
-        {
-          "id": "sortBy",
-          "options": {
-            "fields": [
-              {
-                "displayName": "Cost (USD)",
-                "desc": true
-              }
-            ]
-          }
-        },
-        {
-          "id": "limit",
-          "options": {
-            "limitField": 5
-          }
-        }
-      ],
+      "transformations": [],
       "options": {
-        "frameIndex": 0,
-        "showHeader": true
+        "sortBy": [
+          {
+            "displayName": "span.prov.llm.total_tokens",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false
+        }
       },
       "fieldConfig": {
         "defaults": {
@@ -1118,8 +958,8 @@
     },
     {
       "id": 14,
-      "title": "LLM Calls per Project",
-      "type": "barchart",
+      "title": "Nix-v1 Calls",
+      "type": "stat",
       "description": "Mean prov.session.turn grouped by project \u2014 shows conversation depth per project",
       "gridPos": {
         "x": 0,
@@ -1137,80 +977,36 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceqlMetrics",
-          "query": "{resource.service.name=\"agentweave-proxy\"&&span.prov.project!=\"\"}|count_over_time()by(span.prov.project)",
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.agent.id = \"nix-v1\" }",
+          "limit": 500,
           "refId": "A"
         }
       ],
-      "transformations": [
-        {
-          "id": "groupBy",
-          "options": {
-            "fields": {
-              "prov.project": {
-                "aggregations": [],
-                "operation": "groupby"
-              },
-              "prov.session.turn": {
-                "aggregations": [
-                  "mean"
-                ],
-                "operation": "aggregate"
-              }
-            }
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "renameByName": {
-              "prov.project": "Project",
-              "prov.session.turn (mean)": "Avg Turns"
-            }
-          }
-        },
-        {
-          "id": "sortBy",
-          "options": {
-            "fields": [
-              {
-                "displayName": "Avg Turns",
-                "desc": true
-              }
-            ]
-          }
-        }
-      ],
+      "transformations": [],
       "options": {
-        "xField": "Project",
-        "orientation": "auto",
-        "fillOpacity": 80,
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ]
         },
-        "tooltip": {
-          "mode": "single"
-        }
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "area"
       },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 80
-          },
           "unit": "none",
-          "decimals": 1
-        }
+          "decimals": 0
+        },
+        "overrides": []
       }
     },
     {
       "id": 15,
-      "title": "Avg Latency by Agent (ms)",
-      "type": "timeseries",
+      "title": "Latency by Span (ms)",
+      "type": "table",
       "description": "Distribution of LLM call latency. Key buckets: 0\u20135s, 5\u201330s, 30s\u20132min, 2min+",
       "gridPos": {
         "x": 12,
@@ -1228,36 +1024,23 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceqlMetrics",
-          "query": "{resource.service.name=\"agentweave-proxy\"&&span.agentweave.latency_ms>0}|avg_over_time(span.agentweave.latency_ms)by(span.prov.agent.id)",
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.agentweave.latency_ms > 0 } | select(span.prov.agent.id, span.prov.llm.model, span.agentweave.latency_ms)",
+          "limit": 20,
           "refId": "A"
         }
       ],
-      "transformations": [
-        {
-          "id": "filterFieldsByName",
-          "options": {
-            "include": {
-              "names": [
-                "prov.llm.latency_ms"
-              ]
-            }
-          }
-        }
-      ],
+      "transformations": [],
       "options": {
-        "bucketSize": 5000,
-        "combine": false,
-        "fillOpacity": 80,
-        "gradientMode": "none",
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "single"
-        },
-        "xTickLabelMaxLength": 12
+        "sortBy": [
+          {
+            "displayName": "span.agentweave.latency_ms",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false
+        }
       },
       "fieldConfig": {
         "defaults": {
@@ -1274,8 +1057,8 @@
     },
     {
       "id": 16,
-      "title": "Agent Attribution: Token Share (nix-v1 vs max-v1)",
-      "type": "piechart",
+      "title": "Agent Attribution",
+      "type": "table",
       "description": "Fraction of total prov.llm.total_tokens attributed to each agent",
       "gridPos": {
         "x": 0,
@@ -1293,63 +1076,20 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceqlMetrics",
-          "query": "{resource.service.name=\"agentweave-proxy\"&&span.prov.llm.total_tokens>0}|sum_over_time(span.prov.llm.total_tokens)by(span.prov.agent.id)",
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.agent.id != \"\" } | select(span.prov.agent.id, span.prov.llm.model, span.prov.llm.total_tokens)",
+          "limit": 500,
           "refId": "A"
         }
       ],
-      "transformations": [
-        {
-          "id": "groupBy",
-          "options": {
-            "fields": {
-              "prov.agent.id": {
-                "aggregations": [],
-                "operation": "groupby"
-              },
-              "prov.llm.total_tokens": {
-                "aggregations": [
-                  "sum"
-                ],
-                "operation": "aggregate"
-              }
-            }
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "renameByName": {
-              "prov.agent.id": "Agent",
-              "prov.llm.total_tokens (sum)": "Total Tokens"
-            }
-          }
-        },
-        {
-          "id": "rowsToFields",
-          "options": {
-            "nameField": "Agent",
-            "valueField": "Total Tokens"
-          }
-        }
-      ],
+      "transformations": [],
       "options": {
-        "pieType": "pie",
-        "displayLabels": [
-          "name",
-          "percent"
-        ],
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "values": [
-            "value",
-            "percent"
-          ]
-        },
-        "tooltip": {
-          "mode": "single"
-        }
+        "sortBy": [
+          {
+            "displayName": "span.prov.llm.total_tokens",
+            "desc": true
+          }
+        ]
       },
       "fieldConfig": {
         "defaults": {
