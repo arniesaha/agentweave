@@ -656,59 +656,13 @@
       }
     },
     {
-      "id": 9,
-      "title": "Total Calls by Agent",
-      "type": "stat",
-      "gridPos": {
-        "x": 0,
-        "y": 34,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "cffj9et53r9j4f"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (prov_agent_id) (traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_agent_id!=\"\"})",
-          "legendFormat": "{{prov_agent_id}}",
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "transformations": [],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0
-        },
-        "overrides": []
-      }
-    },
-    {
       "id": 10,
       "title": "Turn Depth Histogram",
       "type": "histogram",
       "gridPos": {
-        "x": 12,
+        "x": 0,
         "y": 34,
-        "w": 12,
+        "w": 24,
         "h": 8
       },
       "datasource": {
