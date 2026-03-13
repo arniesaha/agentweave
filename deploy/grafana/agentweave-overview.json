@@ -657,8 +657,8 @@
     },
     {
       "id": 9,
-      "title": "Sessions Active",
-      "type": "stat",
+      "title": "Call Rate by Agent (per min)",
+      "type": "timeseries",
       "gridPos": {
         "x": 0,
         "y": 34,
@@ -672,50 +672,30 @@
       "targets": [
         {
           "datasource": {
-            "type": "tempo",
-            "uid": "cffj9et53r9j4f"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
-          "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.session.id != \"\" }",
-          "limit": 500,
+          "expr": "rate(traces_spanmetrics_calls_total{service=\"agentweave-proxy\"}[5m]) * 60",
+          "legendFormat": "{{prov_agent_id}} / {{prov_llm_model}}",
           "refId": "A"
         }
       ],
       "transformations": [],
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ]
+        "tooltip": {
+          "mode": "multi"
         },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "value",
-        "graphMode": "none"
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
-          "decimals": 0
+          "unit": "reqpm",
+          "decimals": 2
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "none"
-              },
-              {
-                "id": "decimals",
-                "value": 0
-              }
-            ]
-          }
-        ]
+        "overrides": []
       }
     },
     {
@@ -792,7 +772,7 @@
       ],
       "gridPos": {
         "x": 0,
-        "y": 68,
+        "y": 50,
         "w": 24,
         "h": 10
       },
@@ -883,6 +863,124 @@
           }
         }
       ]
+    },
+    {
+      "id": 12,
+      "title": "Calls by Project",
+      "type": "barchart",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (prov_project) (traces_spanmetrics_calls_total{service=\"agentweave-proxy\"})",
+          "legendFormat": "{{prov_project}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "Time"
+      },
+      "transformations": []
+    },
+    {
+      "id": 13,
+      "title": "P95 Latency by Model (ms)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, prov_llm_model) (rate(traces_spanmetrics_latency_bucket{service=\"agentweave-proxy\"}[5m]))) * 1000",
+          "legendFormat": "{{prov_llm_model}} p95",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "x": 8,
+        "y": 42,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": []
+    },
+    {
+      "id": 14,
+      "title": "Calls by Agent",
+      "type": "piechart",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (prov_agent_id) (traces_spanmetrics_calls_total{service=\"agentweave-proxy\"})",
+          "legendFormat": "{{prov_agent_id}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "gridPos": {
+        "x": 16,
+        "y": 42,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "pieType": "pie",
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        }
+      },
+      "transformations": []
     }
   ]
 }
