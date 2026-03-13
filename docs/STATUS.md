@@ -32,7 +32,7 @@
 |---|-------|--------|
 | 1 | feat: sub-agent span linking — propagate trace context across spawned agents | Open |
 | 2 | ci: publish to PyPI on version tags via GitHub Actions | Open |
-| 3 | feat: JavaScript / TypeScript SDK | Open |
+| 3 | feat: JavaScript / TypeScript SDK | ✅ Done |
 | 4 | test: validate Dockerfile + k8s manifests end-to-end | Open |
 
 ---
@@ -48,11 +48,15 @@
 - Inline exec results: Nix must message Arnab proactively on completion, not wait to be asked
 - `nix-notify.sh` works but only if the sub-agent process isn't killed first
 
-## Roadmap (discussed Mar 10, 2026)
+## SDKs Shipped ✅
 
-### SDKs
-- [ ] **TypeScript/JavaScript SDK** — publish to npm (issue #3)
-- [ ] **Go SDK** — publish to pkg.go.dev
+| SDK | Package | Status |
+|-----|---------|--------|
+| Python | `agentweave-sdk==0.1.1` on PyPI | ✅ Shipped |
+| TypeScript | `agentweave-sdk` on npm | ✅ Shipped |
+| Go | `go get github.com/arniesaha/agentweave-go` | ✅ Shipped |
+
+## Roadmap
 
 ### Infrastructure
 - [ ] **Proxy layer deployment** — validate as standalone deployment option
