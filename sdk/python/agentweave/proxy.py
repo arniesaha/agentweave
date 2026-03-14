@@ -11,6 +11,7 @@ Provider is detected automatically from the request path:
   /v1/chat/completions      → OpenAI     (api.openai.com)
   /v1/completions           → OpenAI     (api.openai.com)
   /v1/embeddings            → OpenAI     (api.openai.com)
+  /v1/responses             → OpenAI     (api.openai.com)  [Responses API]
 
 Works for both streaming and non-streaming requests. Zero code changes needed
 in calling agents — just point ANTHROPIC_BASE_URL / GOOGLE_GENAI_BASE_URL /
@@ -110,7 +111,7 @@ def _check_auth(request: Request) -> JSONResponse | None:
 # Provider detection
 # ---------------------------------------------------------------------------
 
-_OPENAI_PATHS = {"v1/chat/completions", "v1/completions", "v1/embeddings"}
+_OPENAI_PATHS = {"v1/chat/completions", "v1/completions", "v1/embeddings", "v1/responses"}
 
 
 def _detect_provider(path: str) -> str:
@@ -423,8 +424,10 @@ def _parse_openai_sse(
         # Token usage from final chunk (when stream_options.include_usage=true)
         usage = chunk.get("usage")
         if usage:
-            input_tokens = usage.get("prompt_tokens", input_tokens)
-            output_tokens = usage.get("completion_tokens", output_tokens)
+            # Chat completions: prompt_tokens/completion_tokens
+            # Responses API:    input_tokens/output_tokens
+            input_tokens = usage.get("prompt_tokens") or usage.get("input_tokens", input_tokens)
+            output_tokens = usage.get("completion_tokens") or usage.get("output_tokens", output_tokens)
         choices = chunk.get("choices", [])
         if choices:
             reason = choices[0].get("finish_reason")
@@ -507,8 +510,10 @@ def _anthropic_response_text(data: dict) -> str:
 
 def _set_openai_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
     usage = data.get("usage", {})
-    pt = usage.get("prompt_tokens", 0)
-    ct = usage.get("completion_tokens", 0)
+    # Chat completions: prompt_tokens/completion_tokens
+    # Responses API:    input_tokens/output_tokens
+    pt = usage.get("prompt_tokens") or usage.get("input_tokens", 0)
+    ct = usage.get("completion_tokens") or usage.get("output_tokens", 0)
     tt = usage.get("total_tokens", pt + ct)
     span.set_attribute(schema.PROV_LLM_PROMPT_TOKENS, pt)
     span.set_attribute(schema.PROV_LLM_COMPLETION_TOKENS, ct)
