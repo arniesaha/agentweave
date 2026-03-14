@@ -48,6 +48,24 @@ class TestDetectProvider:
     def test_openai_responses(self):
         assert _detect_provider("v1/responses") == "openai"
 
+    def test_openai_prefix_models(self):
+        """Prefix match: v1/models endpoint (list models, fine-tuning base models)."""
+        assert _detect_provider("v1/models") == "openai"
+        assert _detect_provider("v1/models/gpt-4o") == "openai"
+
+    def test_openai_prefix_assistants(self):
+        """Prefix match: Assistants API paths."""
+        assert _detect_provider("v1/assistants") == "openai"
+        assert _detect_provider("v1/assistants/asst_abc123/files") == "openai"
+
+    def test_openai_prefix_images(self):
+        """Prefix match: Images API."""
+        assert _detect_provider("v1/images/generations") == "openai"
+
+    def test_openai_prefix_trailing_slash(self):
+        """Prefix match handles trailing slashes gracefully."""
+        assert _detect_provider("v1/chat/completions") == "openai"
+
     def test_anthropic_fallback(self):
         assert _detect_provider("v1/unknown/path") == "anthropic"
 
