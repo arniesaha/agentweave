@@ -69,6 +69,8 @@ _SKIP_HEADERS_ALWAYS = {
     "x-agentweave-session-id",
     "x-agentweave-project",
     "x-agentweave-turn",
+    "x-agentweave-parent-session-id",
+    "x-agentweave-agent-type",
 }
 
 # Runtime auth token. Set AGENTWEAVE_PROXY_TOKEN or --auth-token.
@@ -208,6 +210,9 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         except (ValueError, TypeError):
             logger.warning("x-agentweave-turn is not a valid integer: %r", turn_raw)
 
+    parent_session_id = request.headers.get("x-agentweave-parent-session-id")
+    agent_type = request.headers.get("x-agentweave-agent-type")
+
     forward_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in _SKIP_HEADERS_ALWAYS
@@ -236,6 +241,8 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         session_id=session_id,
         project=project,
         turn=turn,
+        parent_session_id=parent_session_id,
+        agent_type=agent_type,
     )
 
     if is_stream:
@@ -252,13 +259,15 @@ async def _request_and_trace(
     upstream_url: str, method: str, headers: dict, body: dict, body_bytes: bytes,
     model: str, provider: str, agent_id: str, agent_model: str, path: str,
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
+    parent_session_id: str | None = None, agent_type: str | None = None,
 ) -> JSONResponse:
     tracer = get_tracer()
     with tracer.start_as_current_span(f"{schema.SPAN_PREFIX_LLM}.{model}") as span:
         _set_request_attrs(span, model=model, provider=provider,
                            agent_id=agent_id, agent_model=agent_model,
                            path=path, body=body,
-                           session_id=session_id, project=project, turn=turn)
+                           session_id=session_id, project=project, turn=turn,
+                           parent_session_id=parent_session_id, agent_type=agent_type)
         start = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=300) as client:
@@ -284,13 +293,15 @@ async def _stream_and_trace(
     upstream_url: str, method: str, headers: dict, body: dict, body_bytes: bytes,
     model: str, provider: str, agent_id: str, agent_model: str, path: str,
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
+    parent_session_id: str | None = None, agent_type: str | None = None,
 ) -> AsyncIterator[bytes]:
     tracer = get_tracer()
     span = tracer.start_span(f"{schema.SPAN_PREFIX_LLM}.{model}")
     _set_request_attrs(span, model=model, provider=provider,
                        agent_id=agent_id, agent_model=agent_model,
                        path=path, body=body,
-                       session_id=session_id, project=project, turn=turn)
+                       session_id=session_id, project=project, turn=turn,
+                       parent_session_id=parent_session_id, agent_type=agent_type)
 
     input_tokens = output_tokens = 0
     stop_reason = None
@@ -566,6 +577,7 @@ def _set_request_attrs(
     span: Any, model: str, provider: str, agent_id: str, agent_model: str,
     path: str, body: dict,
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
+    parent_session_id: str | None = None, agent_type: str | None = None,
 ) -> None:
     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
     span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
@@ -581,6 +593,10 @@ def _set_request_attrs(
         span.set_attribute(schema.PROV_PROJECT, project)
     if turn is not None:
         span.set_attribute(schema.PROV_SESSION_TURN, turn)
+    if parent_session_id is not None:
+        span.set_attribute(schema.PROV_PARENT_SESSION_ID, parent_session_id)
+    if agent_type is not None:
+        span.set_attribute(schema.PROV_AGENT_TYPE, agent_type)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)

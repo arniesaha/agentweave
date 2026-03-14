@@ -593,3 +593,36 @@ class TestSessionContext:
         span = self._call(monkeypatch, turn=7)
         assert span.attrs["prov.session.turn"] == 7
         assert isinstance(span.attrs["prov.session.turn"], int)
+
+
+# ---------------------------------------------------------------------------
+# Sub-agent attribution
+# ---------------------------------------------------------------------------
+
+
+class TestSubAgentAttribution:
+    """Verify parent session id and agent type attributes are set on spans."""
+
+    def _call(self, monkeypatch, parent_session_id=None, agent_type=None):
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+            parent_session_id=parent_session_id, agent_type=agent_type,
+        )
+        return span
+
+    def test_parent_session_id_recorded(self, monkeypatch):
+        span = self._call(monkeypatch, parent_session_id="parent-sess-42")
+        assert span.attrs["prov.parent.session.id"] == "parent-sess-42"
+
+    def test_agent_type_recorded(self, monkeypatch):
+        span = self._call(monkeypatch, agent_type="subagent")
+        assert span.attrs["prov.agent.type"] == "subagent"
+
+    def test_main_agent_no_parent(self, monkeypatch):
+        span = self._call(monkeypatch)
+        assert "prov.parent.session.id" not in span.attrs

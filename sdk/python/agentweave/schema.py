@@ -45,6 +45,8 @@ PROV_AGENT_VERSION = "prov.agent.version"
 PROV_SESSION_ID = "prov.session.id"
 PROV_PROJECT = "prov.project"
 PROV_SESSION_TURN = "prov.session.turn"
+PROV_PARENT_SESSION_ID = "prov.parent.session.id"   # session that spawned this sub-agent
+PROV_AGENT_TYPE = "prov.agent.type"                  # "main" | "subagent" | "delegated"
 
 # prov:wasGeneratedBy — output linked to producing activity
 PROV_WAS_GENERATED_BY = "prov.wasGeneratedBy"
