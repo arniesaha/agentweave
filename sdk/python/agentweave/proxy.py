@@ -112,15 +112,18 @@ def _check_auth(request: Request) -> JSONResponse | None:
 # ---------------------------------------------------------------------------
 
 _OPENAI_PATHS = {"v1/chat/completions", "v1/completions", "v1/embeddings", "v1/responses"}
+_OPENAI_PREFIXES = ("v1/chat/", "v1/completions", "v1/embeddings", "v1/responses", "v1/models", "v1/files", "v1/fine_tuning", "v1/assistants", "v1/threads", "v1/images", "v1/audio")
 
 
 def _detect_provider(path: str) -> str:
     """Return 'google', 'openai', or 'anthropic' based on the request path."""
+    # Google: v1beta/* or v1/models/{model}:action (colon-action syntax is Google-specific)
     if path.startswith("v1beta/") or (
-        path.startswith("v1/") and "/models/" in path
+        path.startswith("v1/") and "/models/" in path and ":" in path
     ):
         return "google"
-    if path in _OPENAI_PATHS:
+    # OpenAI: exact match (fast path) then prefix match for future/unknown endpoints
+    if path in _OPENAI_PATHS or any(path.startswith(p) for p in _OPENAI_PREFIXES):
         return "openai"
     return "anthropic"
 
