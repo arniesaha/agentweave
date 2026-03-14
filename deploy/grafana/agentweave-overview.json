@@ -91,7 +91,7 @@
           "queryType": "traceql",
           "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
           "tableType": "traces",
-          "limit": 500,
+          "limit": 10000,
           "refId": "A"
         }
       ],
@@ -306,7 +306,7 @@
           "queryType": "traceql",
           "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
           "tableType": "traces",
-          "limit": 500,
+          "limit": 10000,
           "refId": "A"
         }
       ],
