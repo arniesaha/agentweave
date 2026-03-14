@@ -1,5 +1,11 @@
 """Tests for the AgentWeave proxy — provider detection, parsers, auth, and header forwarding."""
 
+import pytest
+
+pytest.importorskip("fastapi", reason="proxy deps not installed — install with agentweave[proxy]")
+
+pytestmark = pytest.mark.proxy
+
 import agentweave.proxy as proxy_module
 from agentweave.proxy import (
     _check_auth,

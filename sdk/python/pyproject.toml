@@ -60,3 +60,6 @@ packages = ["agentweave"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "proxy: tests requiring proxy dependencies (fastapi, uvicorn, httpx)",
+]
