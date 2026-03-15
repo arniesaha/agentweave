@@ -72,6 +72,10 @@ PROV_LLM_STOP_REASON = "prov.llm.stop_reason"
 PROV_LLM_PROMPT_PREVIEW = "prov.llm.prompt_preview"    # first 512 chars of prompt
 PROV_LLM_RESPONSE_PREVIEW = "prov.llm.response_preview"  # first 512 chars of response
 
+# Cost tracking — USD per LLM call
+# -1.0 means model was not found in the pricing table (unknown cost)
+COST_USD = "cost.usd"
+
 # --- Provider IDs ---
 PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_GOOGLE = "google"
@@ -122,3 +126,11 @@ GEN_AI_AGENT_NAME = "gen_ai.agent.name"
 # gen_ai.operation.name values
 GEN_AI_OP_CHAT = "chat"
 GEN_AI_OP_INVOKE_AGENT = "invoke_agent"
+
+# ---------------------------------------------------------------------------
+# Cache token tracking (Anthropic prompt caching)
+# ---------------------------------------------------------------------------
+
+TOKENS_CACHE_READ = "tokens.cache_read"
+TOKENS_CACHE_WRITE = "tokens.cache_write"
+CACHE_HIT_RATE = "cache.hit_rate"

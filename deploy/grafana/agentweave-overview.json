@@ -76,7 +76,7 @@
         },
         "options": [],
         "hide": 0,
-        "description": "Filter traces by session.id — set via @trace_agent(session_id=...) or X-AgentWeave-Session-Id header"
+        "description": "Filter traces by session.id \u2014 set via @trace_agent(session_id=...) or X-AgentWeave-Session-Id header"
       }
     ]
   },
@@ -777,6 +777,292 @@
         }
       },
       "transformations": []
+    },
+    {
+      "id": 15,
+      "title": "Total Cost (USD)",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
+          },
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.cost.usd > 0 } | sum_over_time(span.cost.usd) by (resource.service.name)",
+          "refId": "A"
+        }
+      ],
+      "transformations": [],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "unit": "currencyUSD",
+          "displayName": "Total Cost"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 16,
+      "title": "Cost by Model (USD)",
+      "type": "barchart",
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (prov_llm_model) (increase(traces_spanmetrics_cost_usd_total{service=\"agentweave-proxy\", prov_llm_model!=\"\"}[$__range]))",
+          "legendFormat": "{{prov_llm_model}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "valueLabel": "prov_llm_model"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "prov_llm_model": "Model",
+              "Value": "Cost (USD)"
+            }
+          }
+        }
+      ],
+      "options": {
+        "xField": "Model",
+        "orientation": "auto",
+        "fillOpacity": 80,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "currencyUSD",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 17,
+      "title": "Cost over Time (USD)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 42,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (prov_llm_model) (rate(traces_spanmetrics_cost_usd_total{service=\"agentweave-proxy\"}[5m]))",
+          "legendFormat": "{{prov_llm_model}}",
+          "refId": "A"
+        }
+      ],
+      "transformations": [],
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 18,
+      "title": "Cache Hit Rate (Anthropic)",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 50,
+        "w": 12,
+        "h": 4
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
+          },
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.llm.provider = \"anthropic\" } | avg(span.cache.hit_rate) by (resource.service.name)",
+          "refId": "A"
+        }
+      ],
+      "transformations": [],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.3
+              },
+              {
+                "color": "green",
+                "value": 0.7
+              }
+            ]
+          },
+          "unit": "percentunit",
+          "displayName": "Cache Hit Rate",
+          "description": "cache_read / (cache_read + cache_write + input_tokens) — Anthropic prompt caching"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 19,
+      "title": "Cache Saves (USD est.)",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 50,
+        "w": 12,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(traces_spanmetrics_tokens_cache_read_total{service=\"agentweave-proxy\"}[$__range])) * 0.0000027",
+          "legendFormat": "Savings USD",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "transformations": [],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "unit": "currencyUSD",
+          "displayName": "Cache Saves",
+          "description": "cache_read_tokens × $2.70/MTok savings (claude-3-5-sonnet: $3.00 regular − $0.30 cache_read)"
+        },
+        "overrides": []
+      }
     }
   ]
 }

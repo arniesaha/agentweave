@@ -54,6 +54,7 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, StatusCode, Trace
 from agentweave import schema
 from agentweave.config import AgentWeaveConfig
 from agentweave.exporter import get_tracer, _provider
+from agentweave.pricing import compute_cost
 
 logger = logging.getLogger("agentweave.proxy")
 
@@ -313,7 +314,7 @@ async def _request_and_trace(
                 )
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             data = resp.json()
-            _extract_and_set_response(span, data=data, provider=provider, elapsed_ms=elapsed_ms)
+            _extract_and_set_response(span, data=data, provider=provider, elapsed_ms=elapsed_ms, model=model)
             span.set_status(StatusCode.OK)
             return JSONResponse(content=data, status_code=resp.status_code)
         except Exception as exc:
@@ -342,6 +343,7 @@ async def _stream_and_trace(
                        det_trace_id_raw=det_trace_id_raw)
 
     input_tokens = output_tokens = 0
+    cache_read = cache_write = 0  # Anthropic prompt-caching counters
     stop_reason = None
     start = time.perf_counter()
 
@@ -364,6 +366,11 @@ async def _stream_and_trace(
                             input_tokens, output_tokens, stop_reason = _parse_anthropic_sse(
                                 line, input_tokens, output_tokens, stop_reason
                             )
+                            cw, cr = _extract_anthropic_cache_tokens(line)
+                            if cw > cache_write:
+                                cache_write = cw
+                            if cr > cache_read:
+                                cache_read = cr
                         elif provider == "openai":
                             input_tokens, output_tokens, stop_reason = _parse_openai_sse(
                                 line, input_tokens, output_tokens, stop_reason
@@ -384,6 +391,18 @@ async def _stream_and_trace(
         if stop_reason:
             span.set_attribute(schema.PROV_LLM_STOP_REASON, stop_reason)
         span.set_attribute("agentweave.latency_ms", elapsed_ms)
+
+        # Cache token breakdown — Anthropic-specific; emit zeros for other providers
+        # so Grafana queries never encounter missing fields.
+        span.set_attribute(schema.TOKENS_CACHE_READ, cache_read)
+        span.set_attribute(schema.TOKENS_CACHE_WRITE, cache_write)
+        # input_tokens for Anthropic streaming = raw + cache_write + cache_read
+        hit_rate = (cache_read / input_tokens) if (provider == "anthropic" and input_tokens > 0) else 0.0
+        span.set_attribute(schema.CACHE_HIT_RATE, hit_rate)
+
+        # Cost tracking for streaming responses
+        if input_tokens > 0 or output_tokens > 0:
+            span.set_attribute(schema.COST_USD, compute_cost(model, input_tokens, output_tokens))
 
         # OTel gen_ai.* dual-emit for streaming responses
         span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
@@ -438,6 +457,31 @@ def _parse_anthropic_sse(
     except (json.JSONDecodeError, KeyError):
         pass
     return input_tokens, output_tokens, stop_reason
+
+
+def _extract_anthropic_cache_tokens(line: str) -> tuple[int, int]:
+    """Extract ``(cache_write, cache_read)`` from an Anthropic SSE ``message_start`` line.
+
+    Returns ``(cache_creation_input_tokens, cache_read_input_tokens)`` or ``(0, 0)``
+    when the line is not a message_start event or the fields are absent.
+    This is Anthropic-specific; callers should gate on ``provider == "anthropic"``.
+    """
+    if not line.startswith("data: "):
+        return 0, 0
+    payload = line[6:]
+    if payload == "[DONE]":
+        return 0, 0
+    try:
+        event = json.loads(payload)
+        if event.get("type") == "message_start":
+            usage = event.get("message", {}).get("usage", {})
+            return (
+                usage.get("cache_creation_input_tokens", 0),
+                usage.get("cache_read_input_tokens", 0),
+            )
+    except (json.JSONDecodeError, KeyError):
+        pass
+    return 0, 0
 
 
 def _parse_google_stream(
@@ -495,24 +539,23 @@ def _parse_openai_sse(
 # ---------------------------------------------------------------------------
 
 def _extract_and_set_response(
-    span: Any, data: dict, provider: str, elapsed_ms: int
+    span: Any, data: dict, provider: str, elapsed_ms: int, model: str = ""
 ) -> None:
     if provider == "google":
-        _set_google_response_attrs(span, data, elapsed_ms)
+        _set_google_response_attrs(span, data, elapsed_ms, model=model)
     elif provider == "openai":
-        _set_openai_response_attrs(span, data, elapsed_ms)
+        _set_openai_response_attrs(span, data, elapsed_ms, model=model)
     else:
-        _set_anthropic_response_attrs(span, data, elapsed_ms)
+        _set_anthropic_response_attrs(span, data, elapsed_ms, model=model)
 
 
-def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
+def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int, model: str = "") -> None:
     usage = data.get("usage", {})
+    raw_input = usage.get("input_tokens", 0)
+    cache_write = usage.get("cache_creation_input_tokens", 0)
+    cache_read = usage.get("cache_read_input_tokens", 0)
     # Sum all input token categories to account for prompt caching
-    pt = (
-        usage.get("input_tokens", 0)
-        + usage.get("cache_creation_input_tokens", 0)
-        + usage.get("cache_read_input_tokens", 0)
-    )
+    pt = raw_input + cache_write + cache_read
     ct = usage.get("output_tokens", 0)
     span.set_attribute(schema.PROV_LLM_PROMPT_TOKENS, pt)
     span.set_attribute(schema.PROV_LLM_COMPLETION_TOKENS, ct)
@@ -523,6 +566,17 @@ def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int) -> Non
     span.set_attribute("agentweave.latency_ms", elapsed_ms)
     _maybe_set_response_preview(span, _anthropic_response_text(data))
 
+    # Cache token breakdown (Anthropic-specific)
+    span.set_attribute(schema.TOKENS_CACHE_READ, cache_read)
+    span.set_attribute(schema.TOKENS_CACHE_WRITE, cache_write)
+    denominator = raw_input + cache_write + cache_read
+    hit_rate = (cache_read / denominator) if denominator > 0 else 0.0
+    span.set_attribute(schema.CACHE_HIT_RATE, hit_rate)
+
+    # Cost tracking
+    if model and (pt > 0 or ct > 0):
+        span.set_attribute(schema.COST_USD, compute_cost(model, pt, ct))
+
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
     span.set_attribute(schema.GEN_AI_USAGE_OUTPUT_TOKENS, ct)
@@ -530,7 +584,7 @@ def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int) -> Non
         span.set_attribute(schema.GEN_AI_RESPONSE_FINISH_REASONS, [stop])
 
 
-def _set_google_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
+def _set_google_response_attrs(span: Any, data: dict, elapsed_ms: int, model: str = "") -> None:
     usage = data.get("usageMetadata", {})
     pt = usage.get("promptTokenCount", 0)
     ct = usage.get("candidatesTokenCount", 0)
@@ -546,6 +600,15 @@ def _set_google_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
     span.set_attribute("agentweave.latency_ms", elapsed_ms)
     _maybe_set_response_preview(span, _google_response_text(data))
 
+    # Cache tokens not applicable for Google — emit zeros so Grafana queries don't break
+    span.set_attribute(schema.TOKENS_CACHE_READ, 0)
+    span.set_attribute(schema.TOKENS_CACHE_WRITE, 0)
+    span.set_attribute(schema.CACHE_HIT_RATE, 0.0)
+
+    # Cost tracking
+    if model and (pt > 0 or ct > 0):
+        span.set_attribute(schema.COST_USD, compute_cost(model, pt, ct))
+
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
     span.set_attribute(schema.GEN_AI_USAGE_OUTPUT_TOKENS, ct)
@@ -560,7 +623,7 @@ def _anthropic_response_text(data: dict) -> str:
     return ""
 
 
-def _set_openai_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
+def _set_openai_response_attrs(span: Any, data: dict, elapsed_ms: int, model: str = "") -> None:
     usage = data.get("usage", {})
     # Chat completions: prompt_tokens/completion_tokens
     # Responses API:    input_tokens/output_tokens
@@ -578,6 +641,15 @@ def _set_openai_response_attrs(span: Any, data: dict, elapsed_ms: int) -> None:
             span.set_attribute(schema.PROV_LLM_STOP_REASON, stop)
     span.set_attribute("agentweave.latency_ms", elapsed_ms)
     _maybe_set_response_preview(span, _openai_response_text(data))
+
+    # Cache tokens not applicable for OpenAI — emit zeros so Grafana queries don't break
+    span.set_attribute(schema.TOKENS_CACHE_READ, 0)
+    span.set_attribute(schema.TOKENS_CACHE_WRITE, 0)
+    span.set_attribute(schema.CACHE_HIT_RATE, 0.0)
+
+    # Cost tracking
+    if model and (pt > 0 or ct > 0):
+        span.set_attribute(schema.COST_USD, compute_cost(model, pt, ct))
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
