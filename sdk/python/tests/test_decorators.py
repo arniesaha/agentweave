@@ -308,6 +308,53 @@ class TestTraceAgent:
         assert tool_span.context.trace_id == agent_span.context.trace_id
 
 
+class TestTraceAgentSessionId:
+    """Tests for @trace_agent session_id parameter."""
+
+    def test_session_id_sets_attribute(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="session_agent", session_id="conv-abc123")
+        def handle(msg: str) -> str:
+            return "response"
+
+        handle("hello")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert attrs[schema.SESSION_ID] == "conv-abc123"
+        assert attrs[schema.PROV_SESSION_ID] == "conv-abc123"
+
+    def test_session_id_absent_when_not_provided(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="no_session_agent")
+        def handle(msg: str) -> str:
+            return "response"
+
+        handle("hello")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert schema.SESSION_ID not in attrs
+        assert schema.PROV_SESSION_ID not in attrs
+
+    def test_session_id_async_agent(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="async_session_agent", session_id="sess-xyz")
+        async def handle(msg: str) -> str:
+            return "async response"
+
+        import asyncio
+        asyncio.run(handle("hi"))
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert attrs[schema.SESSION_ID] == "sess-xyz"
+        assert attrs[schema.PROV_SESSION_ID] == "sess-xyz"
+
+
 class TestTraceLlm:
     """Tests for @trace_llm decorator."""
 

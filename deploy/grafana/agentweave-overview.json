@@ -64,6 +64,19 @@
           }
         ],
         "hide": 0
+      },
+      {
+        "name": "session_id",
+        "label": "Session ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "description": "Filter traces by session.id — set via @trace_agent(session_id=...) or X-AgentWeave-Session-Id header"
       }
     ]
   },
@@ -88,29 +101,16 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
-          "tableType": "traces",
-          "limit": 10000,
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" } | count_over_time() by (resource.service.name)",
           "refId": "A"
         }
       ],
-      "transformations": [
-        {
-          "id": "filterFieldsByName",
-          "options": {
-            "include": {
-              "names": [
-                "Duration"
-              ]
-            }
-          }
-        }
-      ],
+      "transformations": [],
       "options": {
         "reduceOptions": {
           "calcs": [
-            "count"
+            "sum"
           ],
           "fields": "",
           "values": false
@@ -129,20 +129,7 @@
           "unit": "none",
           "displayName": "LLM Calls"
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "traceDuration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "none"
-              }
-            ]
-          }
-        ]
+        "overrides": []
       }
     },
     {
@@ -303,25 +290,12 @@
             "type": "tempo",
             "uid": "cffj9et53r9j4f"
           },
-          "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
-          "tableType": "traces",
-          "limit": 10000,
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" } | count_over_time() by (resource.service.name)",
           "refId": "A"
         }
       ],
-      "transformations": [
-        {
-          "id": "filterFieldsByName",
-          "options": {
-            "include": {
-              "names": [
-                "Duration"
-              ]
-            }
-          }
-        }
-      ],
+      "transformations": [],
       "options": {
         "reduceOptions": {
           "calcs": [

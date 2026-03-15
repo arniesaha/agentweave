@@ -593,3 +593,15 @@ class TestSessionContext:
         span = self._call(monkeypatch, turn=7)
         assert span.attrs["prov.session.turn"] == 7
         assert isinstance(span.attrs["prov.session.turn"], int)
+
+    def test_session_id_dual_emit(self, monkeypatch):
+        """session.id must be emitted alongside prov.session.id."""
+        span = self._call(monkeypatch, session_id="conv-abc123")
+        assert span.attrs["session.id"] == "conv-abc123"
+        assert span.attrs["prov.session.id"] == "conv-abc123"
+
+    def test_session_id_not_set_when_none(self, monkeypatch):
+        """Neither session.id nor prov.session.id should appear when not provided."""
+        span = self._call(monkeypatch)
+        assert "session.id" not in span.attrs
+        assert "prov.session.id" not in span.attrs

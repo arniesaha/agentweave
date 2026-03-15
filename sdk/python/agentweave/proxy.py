@@ -37,6 +37,7 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -48,7 +49,7 @@ from typing import Any, AsyncIterator
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from opentelemetry.trace import StatusCode
+from opentelemetry.trace import NonRecordingSpan, SpanContext, StatusCode, TraceFlags
 
 from agentweave import schema
 from agentweave.config import AgentWeaveConfig
@@ -69,7 +70,43 @@ _SKIP_HEADERS_ALWAYS = {
     "x-agentweave-session-id",
     "x-agentweave-project",
     "x-agentweave-turn",
+    "x-agentweave-trace-id",
 }
+
+# ---------------------------------------------------------------------------
+# Deterministic trace ID helpers
+# ---------------------------------------------------------------------------
+
+_TRACE_ID_RE = re.compile(r'^[0-9a-fA-F]{32}$')
+
+
+def _normalize_trace_id(raw: str) -> int | None:
+    """Normalize a caller-supplied trace ID to a 128-bit integer.
+
+    Accepts a valid 32-char hex string or any arbitrary string (hashed via
+    SHA-256 to produce a stable 32-char hex).  Returns ``None`` for empty input.
+    """
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    if _TRACE_ID_RE.match(raw):
+        return int(raw, 16)
+    return int(hashlib.sha256(raw.encode()).hexdigest()[:32], 16)
+
+
+def _context_for_trace_id(trace_id_int: int):
+    """Return an OTel context that seeds child spans with *trace_id_int*."""
+    from opentelemetry import trace as _trace
+    parent_span_id = int.from_bytes(secrets.token_bytes(8), "big")
+    span_ctx = SpanContext(
+        trace_id=trace_id_int,
+        span_id=parent_span_id,
+        is_remote=True,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    return _trace.set_span_in_context(NonRecordingSpan(span_ctx))
 
 # Runtime auth token. Set AGENTWEAVE_PROXY_TOKEN or --auth-token.
 # Empty = open mode (dev/localhost only).
@@ -208,6 +245,10 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         except (ValueError, TypeError):
             logger.warning("x-agentweave-turn is not a valid integer: %r", turn_raw)
 
+    # Deterministic trace ID — allows callers to pin a retry to the same trace
+    det_trace_id_raw: str | None = request.headers.get("x-agentweave-trace-id")
+    det_trace_id_int: int | None = _normalize_trace_id(det_trace_id_raw) if det_trace_id_raw else None
+
     forward_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in _SKIP_HEADERS_ALWAYS
@@ -236,6 +277,8 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         session_id=session_id,
         project=project,
         turn=turn,
+        det_trace_id_int=det_trace_id_int,
+        det_trace_id_raw=det_trace_id_raw,
     )
 
     if is_stream:
@@ -252,13 +295,16 @@ async def _request_and_trace(
     upstream_url: str, method: str, headers: dict, body: dict, body_bytes: bytes,
     model: str, provider: str, agent_id: str, agent_model: str, path: str,
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
+    det_trace_id_int: int | None = None, det_trace_id_raw: str | None = None,
 ) -> JSONResponse:
     tracer = get_tracer()
-    with tracer.start_as_current_span(f"{schema.SPAN_PREFIX_LLM}.{model}") as span:
+    _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
+    with tracer.start_as_current_span(f"{schema.SPAN_PREFIX_LLM}.{model}", context=_span_ctx) as span:
         _set_request_attrs(span, model=model, provider=provider,
                            agent_id=agent_id, agent_model=agent_model,
                            path=path, body=body,
-                           session_id=session_id, project=project, turn=turn)
+                           session_id=session_id, project=project, turn=turn,
+                           det_trace_id_raw=det_trace_id_raw)
         start = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=300) as client:
@@ -284,13 +330,16 @@ async def _stream_and_trace(
     upstream_url: str, method: str, headers: dict, body: dict, body_bytes: bytes,
     model: str, provider: str, agent_id: str, agent_model: str, path: str,
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
+    det_trace_id_int: int | None = None, det_trace_id_raw: str | None = None,
 ) -> AsyncIterator[bytes]:
     tracer = get_tracer()
-    span = tracer.start_span(f"{schema.SPAN_PREFIX_LLM}.{model}")
+    _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
+    span = tracer.start_span(f"{schema.SPAN_PREFIX_LLM}.{model}", context=_span_ctx)
     _set_request_attrs(span, model=model, provider=provider,
                        agent_id=agent_id, agent_model=agent_model,
                        path=path, body=body,
-                       session_id=session_id, project=project, turn=turn)
+                       session_id=session_id, project=project, turn=turn,
+                       det_trace_id_raw=det_trace_id_raw)
 
     input_tokens = output_tokens = 0
     stop_reason = None
@@ -566,6 +615,7 @@ def _set_request_attrs(
     span: Any, model: str, provider: str, agent_id: str, agent_model: str,
     path: str, body: dict,
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
+    det_trace_id_raw: str | None = None,
 ) -> None:
     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
     span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
@@ -576,11 +626,14 @@ def _set_request_attrs(
     span.set_attribute("http.route", f"/{path}")
 
     if session_id is not None:
+        span.set_attribute(schema.SESSION_ID, session_id)
         span.set_attribute(schema.PROV_SESSION_ID, session_id)
     if project is not None:
         span.set_attribute(schema.PROV_PROJECT, project)
     if turn is not None:
         span.set_attribute(schema.PROV_SESSION_TURN, turn)
+    if det_trace_id_raw is not None:
+        span.set_attribute(schema.AGENTWEAVE_TRACE_ID, det_trace_id_raw)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)

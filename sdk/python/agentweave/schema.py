@@ -46,6 +46,10 @@ PROV_SESSION_ID = "prov.session.id"
 PROV_PROJECT = "prov.project"
 PROV_SESSION_TURN = "prov.session.turn"
 
+# session.id — canonical session attribute (dual-emitted alongside prov.session.id)
+# Set via @trace_agent(session_id=...) or X-AgentWeave-Session-Id proxy header.
+SESSION_ID = "session.id"
+
 # prov:wasGeneratedBy — output linked to producing activity
 PROV_WAS_GENERATED_BY = "prov.wasGeneratedBy"
 
@@ -97,6 +101,10 @@ SPAN_PREFIX_LLM = "llm"
 # --- Auto-instrumentation ---
 
 AUTO_INSTRUMENTED = "agentweave.auto_instrumented"
+
+# --- Deterministic trace ID ---
+
+AGENTWEAVE_TRACE_ID = "agentweave.trace_id"
 
 # ---------------------------------------------------------------------------
 # OTel gen_ai.* semantic convention attributes (dual-emitted alongside prov.*)
