@@ -16,6 +16,7 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
 from agentweave import schema
 from agentweave.exporter import get_tracer
+from agentweave.pricing import compute_cost
 
 # ── Deterministic trace ID helpers ───────────────────────────────────────────
 
@@ -269,7 +270,7 @@ def trace_agent(fn: Optional[Callable] = None, *, name: Optional[str] = None, co
 
 # ── trace_llm ─────────────────────────────────────────────────────────────────
 
-def _extract_llm_attrs(response: Any, captures_output: bool) -> dict:
+def _extract_llm_attrs(response: Any, captures_output: bool, model: str = "", cost_usd_override: Optional[float] = None) -> dict:
     """Extract token counts, stop reason, and response preview from any LLM response."""
     attrs: dict = {}
 
@@ -308,6 +309,16 @@ def _extract_llm_attrs(response: Any, captures_output: bool) -> dict:
     if schema.PROV_LLM_COMPLETION_TOKENS in attrs:
         attrs[schema.GEN_AI_USAGE_OUTPUT_TOKENS] = attrs[schema.PROV_LLM_COMPLETION_TOKENS]
 
+    # Cost tracking — use override if provided, else compute from token counts
+    if cost_usd_override is not None:
+        attrs[schema.COST_USD] = cost_usd_override
+    elif model and (
+        schema.PROV_LLM_PROMPT_TOKENS in attrs or schema.PROV_LLM_COMPLETION_TOKENS in attrs
+    ):
+        pt = attrs.get(schema.PROV_LLM_PROMPT_TOKENS, 0)
+        ct = attrs.get(schema.PROV_LLM_COMPLETION_TOKENS, 0)
+        attrs[schema.COST_USD] = compute_cost(model, pt, ct)
+
     # Response preview
     if captures_output:
         preview: Optional[str] = None
@@ -326,11 +337,25 @@ def _extract_llm_attrs(response: Any, captures_output: bool) -> dict:
     return attrs
 
 
-def trace_llm(provider: str, model: str, captures_input: bool = False, captures_output: bool = False):
-    """Trace an LLM call with provider/model attributes and token extraction.
+def trace_llm(
+    provider: str,
+    model: str,
+    captures_input: bool = False,
+    captures_output: bool = False,
+    cost_usd: Optional[float] = None,
+):
+    """Trace an LLM call with provider/model attributes, token extraction, and cost tracking.
+
+    Pass ``cost_usd`` to override the auto-computed cost (e.g. when you have
+    exact billing data from the provider's response).  When omitted, cost is
+    computed automatically from token counts using the built-in pricing table.
 
     Usage::
         @trace_llm(provider="anthropic", model="claude-sonnet-4-6", captures_output=True)
+        def call_claude(messages): ...
+
+        # Manual cost override
+        @trace_llm(provider="anthropic", model="claude-sonnet-4-6", cost_usd=0.005)
         def call_claude(messages): ...
     """
     span_name = f"{schema.SPAN_PREFIX_LLM}.{model}"
@@ -352,7 +377,7 @@ def trace_llm(provider: str, model: str, captures_input: bool = False, captures_
                     # Set after config attrs so explicit model param wins over cfg.agent_model
                     span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
                     result = await fn(*args, **kwargs)
-                    for k, v in _extract_llm_attrs(result, captures_output).items():
+                    for k, v in _extract_llm_attrs(result, captures_output, model=model, cost_usd_override=cost_usd).items():
                         span.set_attribute(k, v)
                     return result
             return async_wrapper
@@ -372,7 +397,7 @@ def trace_llm(provider: str, model: str, captures_input: bool = False, captures_
                     # Set after config attrs so explicit model param wins over cfg.agent_model
                     span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
                     result = fn(*args, **kwargs)
-                    for k, v in _extract_llm_attrs(result, captures_output).items():
+                    for k, v in _extract_llm_attrs(result, captures_output, model=model, cost_usd_override=cost_usd).items():
                         span.set_attribute(k, v)
                     return result
             return sync_wrapper
