@@ -10,6 +10,7 @@ import agentweave.proxy as proxy_module
 from agentweave.proxy import (
     _check_auth,
     _detect_provider,
+    _extract_anthropic_cache_tokens,
     _openai_response_text,
     _parse_anthropic_sse,
     _parse_google_stream,
@@ -686,3 +687,146 @@ class TestDeterministicTraceIdHeader:
             path="v1/messages", body={},
         )
         assert "agentweave.trace_id" not in span.attrs
+
+
+# ---------------------------------------------------------------------------
+# Cache token breakdown (issue #61)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractAnthropicCacheTokens:
+    """Unit tests for _extract_anthropic_cache_tokens helper."""
+
+    def test_extracts_cache_creation_and_read(self):
+        line = (
+            'data: {"type": "message_start", "message": {"usage": '
+            '{"input_tokens": 10, "cache_creation_input_tokens": 50, '
+            '"cache_read_input_tokens": 100}}}'
+        )
+        cw, cr = _extract_anthropic_cache_tokens(line)
+        assert cw == 50
+        assert cr == 100
+
+    def test_non_message_start_returns_zeros(self):
+        line = 'data: {"type": "message_delta", "usage": {"output_tokens": 5}}'
+        cw, cr = _extract_anthropic_cache_tokens(line)
+        assert cw == 0
+        assert cr == 0
+
+    def test_no_cache_fields_returns_zeros(self):
+        line = 'data: {"type": "message_start", "message": {"usage": {"input_tokens": 10}}}'
+        cw, cr = _extract_anthropic_cache_tokens(line)
+        assert cw == 0
+        assert cr == 0
+
+    def test_non_data_line_returns_zeros(self):
+        assert _extract_anthropic_cache_tokens("event: message_start") == (0, 0)
+
+    def test_done_sentinel_returns_zeros(self):
+        assert _extract_anthropic_cache_tokens("data: [DONE]") == (0, 0)
+
+    def test_partial_cache_fields(self):
+        """Only cache_read present, no cache_write."""
+        line = (
+            'data: {"type": "message_start", "message": {"usage": '
+            '{"input_tokens": 5, "cache_read_input_tokens": 300}}}'
+        )
+        cw, cr = _extract_anthropic_cache_tokens(line)
+        assert cw == 0
+        assert cr == 300
+
+
+class TestCacheTokenBreakdownAttrs:
+    """Verify cache span attributes are emitted correctly per provider."""
+
+    def test_anthropic_full_cache_response(self):
+        """cache_read, cache_write, and hit_rate set for Anthropic response with cache fields."""
+        span = _FakeSpan()
+        data = {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 200,
+                "cache_read_input_tokens": 800,
+            },
+            "stop_reason": "end_turn",
+        }
+        _set_anthropic_response_attrs(span, data, elapsed_ms=42)
+        assert span.attrs["tokens.cache_read"] == 800
+        assert span.attrs["tokens.cache_write"] == 200
+        # hit_rate = 800 / (100 + 200 + 800) = 800/1100
+        expected_rate = 800 / 1100
+        assert abs(span.attrs["cache.hit_rate"] - expected_rate) < 1e-9
+
+    def test_anthropic_no_cache_fields_emits_zeros(self):
+        """When cache fields absent, emit zeros and 0.0 hit_rate."""
+        span = _FakeSpan()
+        data = {"usage": {"input_tokens": 100, "output_tokens": 50}}
+        _set_anthropic_response_attrs(span, data, elapsed_ms=10)
+        assert span.attrs["tokens.cache_read"] == 0
+        assert span.attrs["tokens.cache_write"] == 0
+        assert span.attrs["cache.hit_rate"] == 0.0
+
+    def test_anthropic_zero_usage_no_division_error(self):
+        """All-zero usage must not raise ZeroDivisionError."""
+        span = _FakeSpan()
+        data = {"usage": {}}
+        _set_anthropic_response_attrs(span, data, elapsed_ms=5)
+        assert span.attrs["cache.hit_rate"] == 0.0
+
+    def test_anthropic_cache_only_reads_hit_rate_is_one(self):
+        """If all input is cache_read, hit_rate should be 1.0."""
+        span = _FakeSpan()
+        data = {
+            "usage": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 500,
+                "output_tokens": 20,
+            }
+        }
+        _set_anthropic_response_attrs(span, data, elapsed_ms=5)
+        assert span.attrs["tokens.cache_read"] == 500
+        assert span.attrs["tokens.cache_write"] == 0
+        assert span.attrs["cache.hit_rate"] == 1.0
+
+    def test_google_response_emits_zero_cache_attrs(self):
+        """Google responses always emit zero cache tokens so Grafana queries don't break."""
+        span = _FakeSpan()
+        data = {
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 15,
+            }
+        }
+        _set_google_response_attrs(span, data, elapsed_ms=10)
+        assert span.attrs["tokens.cache_read"] == 0
+        assert span.attrs["tokens.cache_write"] == 0
+        assert span.attrs["cache.hit_rate"] == 0.0
+
+    def test_openai_response_emits_zero_cache_attrs(self):
+        """OpenAI responses always emit zero cache tokens so Grafana queries don't break."""
+        span = _FakeSpan()
+        data = {
+            "choices": [{"finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        _set_openai_response_attrs(span, data, elapsed_ms=10)
+        assert span.attrs["tokens.cache_read"] == 0
+        assert span.attrs["tokens.cache_write"] == 0
+        assert span.attrs["cache.hit_rate"] == 0.0
+
+    def test_anthropic_prompt_tokens_still_summed(self):
+        """prov.llm.prompt_tokens must still equal raw + cache_write + cache_read."""
+        span = _FakeSpan()
+        data = {
+            "usage": {
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 30,
+                "cache_read_input_tokens": 60,
+                "output_tokens": 5,
+            }
+        }
+        _set_anthropic_response_attrs(span, data, elapsed_ms=1)
+        assert span.attrs["prov.llm.prompt_tokens"] == 100  # 10 + 30 + 60
