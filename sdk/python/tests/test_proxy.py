@@ -605,3 +605,84 @@ class TestSessionContext:
         span = self._call(monkeypatch)
         assert "session.id" not in span.attrs
         assert "prov.session.id" not in span.attrs
+
+
+
+# ---------------------------------------------------------------------------
+# Deterministic trace ID (_normalize_trace_id + _set_request_attrs)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeTraceId:
+    """Unit tests for the _normalize_trace_id helper."""
+
+    def test_valid_hex_32_chars(self):
+        from agentweave.proxy import _normalize_trace_id
+        hex_id = "a" * 32
+        assert _normalize_trace_id(hex_id) == int(hex_id, 16)
+
+    def test_mixed_case_hex(self):
+        from agentweave.proxy import _normalize_trace_id
+        hex_id = "A" * 16 + "b" * 16
+        assert _normalize_trace_id(hex_id) == int(hex_id, 16)
+
+    def test_arbitrary_string_is_hashed(self):
+        import hashlib
+        from agentweave.proxy import _normalize_trace_id
+        arbitrary = "order-abc123-attempt-1"
+        expected = int(hashlib.sha256(arbitrary.encode()).hexdigest()[:32], 16)
+        assert _normalize_trace_id(arbitrary) == expected
+
+    def test_same_input_same_output(self):
+        from agentweave.proxy import _normalize_trace_id
+        val = "order-abc123"
+        assert _normalize_trace_id(val) == _normalize_trace_id(val)
+
+    def test_empty_string_returns_none(self):
+        from agentweave.proxy import _normalize_trace_id
+        assert _normalize_trace_id("") is None
+
+    def test_whitespace_string_returns_none(self):
+        from agentweave.proxy import _normalize_trace_id
+        assert _normalize_trace_id("   ") is None
+
+    def test_too_short_hex_is_hashed(self):
+        """A hex string that is <32 chars should be hashed, not used directly."""
+        import hashlib
+        from agentweave.proxy import _normalize_trace_id
+        short_hex = "deadbeef"
+        expected = int(hashlib.sha256(short_hex.encode()).hexdigest()[:32], 16)
+        assert _normalize_trace_id(short_hex) == expected
+
+
+class TestDeterministicTraceIdHeader:
+    """Verify X-AgentWeave-Trace-Id is stripped from forwarded headers and sets span attribute."""
+
+    def test_trace_id_header_stripped(self):
+        """x-agentweave-trace-id must not be forwarded upstream."""
+        assert "x-agentweave-trace-id" in _SKIP_HEADERS_ALWAYS
+
+    def test_trace_id_attribute_set_on_span(self, monkeypatch):
+        """agentweave.trace_id attribute is set on the span when header is present."""
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+            det_trace_id_raw="order-abc123-attempt-1",
+        )
+        assert span.attrs["agentweave.trace_id"] == "order-abc123-attempt-1"
+
+    def test_trace_id_attribute_absent_when_not_provided(self, monkeypatch):
+        """agentweave.trace_id should not appear when header is absent."""
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+        )
+        assert "agentweave.trace_id" not in span.attrs
