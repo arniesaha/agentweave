@@ -5,15 +5,15 @@ set -uo pipefail
 # --- Configuration (override via env) ---
 NODE_IP="${AGENTWEAVE_NODE_IP:-192.168.1.70}"
 PROXY_PORT="${AGENTWEAVE_PROXY_NODEPORT:-30400}"
-TEMPO_PORT="${AGENTWEAVE_TEMPO_NODEPORT:-30418}"
-TEMPO_QUERY_PORT="${AGENTWEAVE_TEMPO_QUERY_PORT:-3200}"
-GRAFANA_PORT="${AGENTWEAVE_GRAFANA_PORT:-3000}"
-PROXY_TOKEN="${AGENTWEAVE_PROXY_TOKEN:-}"
-ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+TEMPO_QUERY_PORT="${AGENTWEAVE_TEMPO_QUERY_PORT:-31989}"  # Tempo HTTP query port (NodePort)
+GRAFANA_PORT="${AGENTWEAVE_GRAFANA_PORT:-30300}"           # Grafana NodePort
+OPENCLAW_PORT="${AGENTWEAVE_OPENCLAW_PORT:-18789}"         # OpenClaw gateway (has Anthropic key)
+OPENCLAW_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"               # Optional: OpenClaw gateway token
 
 PROXY_URL="http://${NODE_IP}:${PROXY_PORT}"
 TEMPO_QUERY_URL="http://${NODE_IP}:${TEMPO_QUERY_PORT}"
 GRAFANA_URL="http://${NODE_IP}:${GRAFANA_PORT}"
+OPENCLAW_URL="http://localhost:${OPENCLAW_PORT}"           # OpenClaw runs on localhost
 
 PASS=0
 FAIL=0
@@ -35,41 +35,36 @@ HEALTH_RESP=$(curl -sf --max-time 10 "${PROXY_URL}/health" 2>&1) && {
 }
 
 # ============================================================
-# Check 2: Send a minimal LLM call through the proxy
+# Check 2: Send a minimal LLM call via OpenClaw → proxy → Anthropic
+# Uses OpenClaw's HTTP completions endpoint (OpenClaw holds the API key)
+# This verifies the real production path: OpenClaw → AgentWeave proxy → Anthropic
 # ============================================================
-ts "--- Check 2/4: LLM call through proxy ---"
+ts "--- Check 2/4: LLM call via OpenClaw → proxy ---"
 
-if [ -z "${ANTHROPIC_API_KEY}" ]; then
-  check_fail "ANTHROPIC_API_KEY not set — cannot send test LLM call"
-else
-  AUTH_HEADER=""
-  if [ -n "${PROXY_TOKEN}" ]; then
-    AUTH_HEADER="Authorization: Bearer ${PROXY_TOKEN}"
-  fi
-
-  LLM_RESP=$(curl -sf --max-time 30 \
-    -X POST "${PROXY_URL}/v1/messages" \
-    -H "Content-Type: application/json" \
-    -H "x-api-key: ${ANTHROPIC_API_KEY}" \
-    -H "anthropic-version: 2023-06-01" \
-    -H "x-agentweave-agent-id: smoke-test" \
-    -H "x-agentweave-project: agentweave-verify" \
-    ${AUTH_HEADER:+-H "${AUTH_HEADER}"} \
-    -d '{
-      "model": "claude-haiku-4-5-20251001",
-      "max_tokens": 16,
-      "messages": [{"role": "user", "content": "Say ok"}]
-    }' 2>&1) && {
-    # Check for a valid response with content
-    if echo "${LLM_RESP}" | grep -q '"type":"message"'; then
-      check_pass "LLM call succeeded (got message response)"
-    else
-      check_fail "LLM call returned unexpected response: ${LLM_RESP:0:200}"
-    fi
-  } || {
-    check_fail "LLM call failed — curl error or non-2xx response"
-  }
+AUTH_ARGS=()
+if [ -n "${OPENCLAW_TOKEN}" ]; then
+  AUTH_ARGS=(-H "Authorization: Bearer ${OPENCLAW_TOKEN}")
 fi
+
+LLM_RESP=$(curl -sf --max-time 30 \
+  -X POST "${OPENCLAW_URL}/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "x-agentweave-agent-id: smoke-test" \
+  -H "x-agentweave-project: agentweave-verify" \
+  "${AUTH_ARGS[@]}" \
+  -d '{
+    "model": "anthropic/claude-haiku-4-5",
+    "max_tokens": 16,
+    "messages": [{"role": "user", "content": "Say ok"}]
+  }' 2>&1) && {
+  if echo "${LLM_RESP}" | grep -q '"choices"'; then
+    check_pass "LLM call via OpenClaw succeeded (got completions response)"
+  else
+    check_fail "LLM call returned unexpected response: ${LLM_RESP:0:200}"
+  fi
+} || {
+  check_fail "LLM call failed — curl error or non-2xx: ${LLM_RESP:0:200}"
+}
 
 # ============================================================
 # Check 3: Verify span appeared in Tempo
@@ -103,18 +98,21 @@ fi
 # ============================================================
 ts "--- Check 4/4: Grafana LLM call count ---"
 
-# Query Prometheus via Grafana's datasource proxy for the span metrics
-# that Tempo's metrics-generator writes to Prometheus
+# Query Prometheus directly (NodePort not exposed — use Grafana proxy endpoint)
+# Grafana is on NodePort 30300, Prometheus ClusterIP 10.43.3.20:9090
+# Grafana datasource uid can be found via /api/datasources
 PROM_QUERY="traces_spanmetrics_calls_total"
-GRAFANA_RESP=$(curl -sf --max-time 10 \
-  "${GRAFANA_URL}/api/datasources/proxy/1/api/v1/query?query=${PROM_QUERY}" \
+GRAFANA_CREDS="${GRAFANA_USER:-admin}:${GRAFANA_PASSWORD:-observability123}"
+
+# Try Grafana datasource proxy (finds Prometheus datasource by name)
+GRAFANA_RESP=$(curl -sf --max-time 10 -u "${GRAFANA_CREDS}" \
+  "${GRAFANA_URL}/api/datasources/proxy/uid/prometheus/api/v1/query?query=${PROM_QUERY}" \
   2>&1) || true
 
-if [ -z "${GRAFANA_RESP}" ]; then
-  # Fallback: try Prometheus directly
-  PROM_URL="http://${NODE_IP}:9090"
-  GRAFANA_RESP=$(curl -sf --max-time 10 \
-    "${PROM_URL}/api/v1/query?query=${PROM_QUERY}" \
+if [ -z "${GRAFANA_RESP}" ] || ! echo "${GRAFANA_RESP}" | grep -q '"result"'; then
+  # Fallback: query via Grafana's generic datasource proxy (datasource id=1)
+  GRAFANA_RESP=$(curl -sf --max-time 10 -u "${GRAFANA_CREDS}" \
+    "${GRAFANA_URL}/api/datasources/proxy/1/api/v1/query?query=${PROM_QUERY}" \
     2>&1) || true
 fi
 
