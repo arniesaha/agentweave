@@ -58,6 +58,21 @@ class AgentWeaveConfig(BaseModel):
         return _instance
 
     @classmethod
+    def shutdown(cls) -> None:
+        """Manually close all open spans and flush the OTel exporter.
+
+        Use this for controlled teardowns (e.g. end of a script, graceful
+        shutdown hook).  Equivalent to the automatic SIGTERM/SIGINT/atexit
+        handlers but callable directly from application code.
+
+        Example::
+            import atexit
+            atexit.register(AgentWeaveConfig.shutdown)
+        """
+        from agentweave.decorators import _shutdown_handler
+        _shutdown_handler("manual")
+
+    @classmethod
     def reset(cls) -> None:
         """Reset global config (useful in tests)."""
         global _instance

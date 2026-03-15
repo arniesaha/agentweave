@@ -1,5 +1,6 @@
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { shutdownHandler } from './tracer';
 
 export class AgentWeaveConfig {
   static agentId: string;
@@ -32,5 +33,18 @@ export class AgentWeaveConfig {
       }),
     });
     sdk.start();
+  }
+
+  /**
+   * Manually close all open spans and flush the OTel exporter.
+   *
+   * Equivalent to the automatic SIGTERM/SIGINT handlers but callable directly
+   * from application code for controlled teardowns.
+   *
+   * @example
+   * process.on('beforeExit', () => AgentWeaveConfig.shutdown());
+   */
+  static shutdown(): void {
+    shutdownHandler('manual');
   }
 }
