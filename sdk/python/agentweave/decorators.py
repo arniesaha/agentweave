@@ -2,13 +2,25 @@
 
 from __future__ import annotations
 
+import atexit
 import asyncio
+import contextvars
 import functools
 import hashlib
 import inspect
 import re
 import secrets as _secrets
+import signal
+import sys
 from typing import Any, Callable, Optional
+
+# ---------------------------------------------------------------------------
+# Per-session LLM turn counter
+# ---------------------------------------------------------------------------
+# Scoped naturally per async task / thread so parallel agent sessions never
+# share state.  @trace_agent resets this to 0 at the start of each session;
+# @trace_llm increments it before setting the span attribute.
+_turn_counter: contextvars.ContextVar[int] = contextvars.ContextVar("_turn_counter", default=0)
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
@@ -84,6 +96,73 @@ def _get_config_attrs() -> dict:
     return {}
 
 
+# ── Span lifecycle tracking & graceful shutdown ───────────────────────────────
+
+# Maps a unique key → open (not-yet-ended) span instance.
+# The Python GIL protects this dict from concurrent modification.
+_open_spans: dict[str, trace.Span] = {}
+
+_handlers_registered: bool = False
+_shutdown_called: bool = False
+
+
+def _shutdown_handler(reason: str = "atexit") -> None:
+    """Close all in-flight spans, set ABORTED status, then flush the exporter.
+
+    This is called by signal handlers (SIGTERM/SIGINT) and atexit to ensure
+    dangling traces are properly closed when the process exits unexpectedly.
+    """
+    global _shutdown_called
+    if _shutdown_called:
+        return
+    _shutdown_called = True
+
+    for span_key, span in list(_open_spans.items()):
+        try:
+            span.set_attribute("shutdown.reason", reason)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, f"Process aborted: {reason}"))
+            span.end()
+        except Exception:
+            pass
+    _open_spans.clear()
+
+    # Flush the exporter so spans reach the backend before process exits.
+    try:
+        from agentweave.exporter import get_provider
+        provider = get_provider()
+        if provider is not None:
+            provider.force_flush(timeout_millis=5000)
+    except Exception:
+        pass
+
+
+def _handle_sigterm(signum: int, frame: object) -> None:
+    _shutdown_handler("sigterm")
+    sys.exit(0)
+
+
+def _handle_sigint(signum: int, frame: object) -> None:
+    _shutdown_handler("sigint")
+    raise KeyboardInterrupt
+
+
+def _register_shutdown_handlers() -> None:
+    """Register SIGTERM, SIGINT, and atexit handlers (idempotent)."""
+    global _handlers_registered
+    if _handlers_registered:
+        return
+    _handlers_registered = True
+    try:
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+    except (OSError, ValueError):
+        pass  # Not in main thread or unsupported platform
+    try:
+        signal.signal(signal.SIGINT, _handle_sigint)
+    except (OSError, ValueError):
+        pass
+    atexit.register(_shutdown_handler, "atexit")
+
+
 # ── trace_tool ────────────────────────────────────────────────────────────────
 
 def _make_tool_wrapper(fn: Callable, name: str, captures_input: bool, captures_output: bool) -> Callable:
@@ -92,44 +171,56 @@ def _make_tool_wrapper(fn: Callable, name: str, captures_input: bool, captures_o
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            _register_shutdown_handlers()
             tracer = get_tracer()
             with tracer.start_as_current_span(span_name) as span:
-                span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_TOOL_CALL)
-                for k, v in _get_config_attrs().items():
-                    span.set_attribute(k, v)
-                if captures_input:
-                    span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
+                _span_key = str(id(span))
+                _open_spans[_span_key] = span
                 try:
-                    result = await fn(*args, **kwargs)
-                    if captures_output:
-                        span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
-                        span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
-                    return result
-                except Exception as exc:
-                    span.record_exception(exc)
-                    span.set_status(trace.StatusCode.ERROR, str(exc))
-                    raise
+                    span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_TOOL_CALL)
+                    for k, v in _get_config_attrs().items():
+                        span.set_attribute(k, v)
+                    if captures_input:
+                        span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
+                    try:
+                        result = await fn(*args, **kwargs)
+                        if captures_output:
+                            span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
+                            span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
+                        return result
+                    except Exception as exc:
+                        span.record_exception(exc)
+                        span.set_status(trace.StatusCode.ERROR, str(exc))
+                        raise
+                finally:
+                    _open_spans.pop(_span_key, None)
         return async_wrapper
     else:
         @functools.wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            _register_shutdown_handlers()
             tracer = get_tracer()
             with tracer.start_as_current_span(span_name) as span:
-                span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_TOOL_CALL)
-                for k, v in _get_config_attrs().items():
-                    span.set_attribute(k, v)
-                if captures_input:
-                    span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
+                _span_key = str(id(span))
+                _open_spans[_span_key] = span
                 try:
-                    result = fn(*args, **kwargs)
-                    if captures_output:
-                        span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
-                        span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
-                    return result
-                except Exception as exc:
-                    span.record_exception(exc)
-                    span.set_status(trace.StatusCode.ERROR, str(exc))
-                    raise
+                    span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_TOOL_CALL)
+                    for k, v in _get_config_attrs().items():
+                        span.set_attribute(k, v)
+                    if captures_input:
+                        span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
+                    try:
+                        result = fn(*args, **kwargs)
+                        if captures_output:
+                            span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
+                            span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
+                        return result
+                    except Exception as exc:
+                        span.record_exception(exc)
+                        span.set_status(trace.StatusCode.ERROR, str(exc))
+                        raise
+                finally:
+                    _open_spans.pop(_span_key, None)
         return sync_wrapper
 
 
@@ -175,48 +266,64 @@ def _make_agent_wrapper(
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            _register_shutdown_handlers()
+            # Reset LLM turn counter to 0 for this agent session
+            _turn_counter.set(0)
             tracer = get_tracer()
             with tracer.start_as_current_span(span_name, context=_start_ctx()) as span:
-                span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
-                # OTel gen_ai.* dual-emit
-                span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_INVOKE_AGENT)
-                for k, v in _get_config_attrs().items():
-                    span.set_attribute(k, v)
-                if _det_trace_id_int is not None:
-                    span.set_attribute(schema.AGENTWEAVE_TRACE_ID, trace_id)
-                if session_id is not None:
-                    span.set_attribute(schema.SESSION_ID, session_id)
-                    span.set_attribute(schema.PROV_SESSION_ID, session_id)
-                if captures_input:
-                    span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
-                result = await fn(*args, **kwargs)
-                if captures_output:
-                    span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
-                    span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
-                return result
+                _span_key = str(id(span))
+                _open_spans[_span_key] = span
+                try:
+                    span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
+                    # OTel gen_ai.* dual-emit
+                    span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_INVOKE_AGENT)
+                    for k, v in _get_config_attrs().items():
+                        span.set_attribute(k, v)
+                    if _det_trace_id_int is not None:
+                        span.set_attribute(schema.AGENTWEAVE_TRACE_ID, trace_id)
+                    if session_id is not None:
+                        span.set_attribute(schema.SESSION_ID, session_id)
+                        span.set_attribute(schema.PROV_SESSION_ID, session_id)
+                    if captures_input:
+                        span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
+                    result = await fn(*args, **kwargs)
+                    if captures_output:
+                        span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
+                        span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
+                    return result
+                finally:
+                    _open_spans.pop(_span_key, None)
         return async_wrapper
     else:
         @functools.wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            _register_shutdown_handlers()
+            # Reset LLM turn counter to 0 for this agent session
+            _turn_counter.set(0)
             tracer = get_tracer()
             with tracer.start_as_current_span(span_name, context=_start_ctx()) as span:
-                span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
-                # OTel gen_ai.* dual-emit
-                span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_INVOKE_AGENT)
-                for k, v in _get_config_attrs().items():
-                    span.set_attribute(k, v)
-                if _det_trace_id_int is not None:
-                    span.set_attribute(schema.AGENTWEAVE_TRACE_ID, trace_id)
-                if session_id is not None:
-                    span.set_attribute(schema.SESSION_ID, session_id)
-                    span.set_attribute(schema.PROV_SESSION_ID, session_id)
-                if captures_input:
-                    span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
-                result = fn(*args, **kwargs)
-                if captures_output:
-                    span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
-                    span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
-                return result
+                _span_key = str(id(span))
+                _open_spans[_span_key] = span
+                try:
+                    span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
+                    # OTel gen_ai.* dual-emit
+                    span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_INVOKE_AGENT)
+                    for k, v in _get_config_attrs().items():
+                        span.set_attribute(k, v)
+                    if _det_trace_id_int is not None:
+                        span.set_attribute(schema.AGENTWEAVE_TRACE_ID, trace_id)
+                    if session_id is not None:
+                        span.set_attribute(schema.SESSION_ID, session_id)
+                        span.set_attribute(schema.PROV_SESSION_ID, session_id)
+                    if captures_input:
+                        span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
+                    result = fn(*args, **kwargs)
+                    if captures_output:
+                        span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
+                        span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
+                    return result
+                finally:
+                    _open_spans.pop(_span_key, None)
         return sync_wrapper
 
 
@@ -364,42 +471,62 @@ def trace_llm(
         if inspect.iscoroutinefunction(fn):
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                _register_shutdown_handlers()
                 tracer = get_tracer()
                 with tracer.start_as_current_span(span_name) as span:
-                    span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
-                    span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
-                    span.set_attribute(schema.PROV_LLM_MODEL, model)
-                    # OTel gen_ai.* dual-emit
-                    span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
-                    span.set_attribute(schema.GEN_AI_SYSTEM, provider)
-                    for k, v in _get_config_attrs().items():
-                        span.set_attribute(k, v)
-                    # Set after config attrs so explicit model param wins over cfg.agent_model
-                    span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
-                    result = await fn(*args, **kwargs)
-                    for k, v in _extract_llm_attrs(result, captures_output, model=model, cost_usd_override=cost_usd).items():
-                        span.set_attribute(k, v)
-                    return result
+                    _span_key = str(id(span))
+                    _open_spans[_span_key] = span
+                    try:
+                        span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
+                        span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
+                        span.set_attribute(schema.PROV_LLM_MODEL, model)
+                        # OTel gen_ai.* dual-emit
+                        span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
+                        span.set_attribute(schema.GEN_AI_SYSTEM, provider)
+                        for k, v in _get_config_attrs().items():
+                            span.set_attribute(k, v)
+                        # Set after config attrs so explicit model param wins over cfg.agent_model
+                        span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
+                        # Increment per-session turn counter and record on span
+                        _turn = _turn_counter.get() + 1
+                        _turn_counter.set(_turn)
+                        span.set_attribute(schema.AGENT_TURN_COUNT, _turn)
+                        result = await fn(*args, **kwargs)
+                        for k, v in _extract_llm_attrs(result, captures_output, model=model, cost_usd_override=cost_usd).items():
+                            span.set_attribute(k, v)
+                        return result
+                    finally:
+                        _open_spans.pop(_span_key, None)
             return async_wrapper
         else:
             @functools.wraps(fn)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+                _register_shutdown_handlers()
                 tracer = get_tracer()
                 with tracer.start_as_current_span(span_name) as span:
-                    span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
-                    span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
-                    span.set_attribute(schema.PROV_LLM_MODEL, model)
-                    # OTel gen_ai.* dual-emit
-                    span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
-                    span.set_attribute(schema.GEN_AI_SYSTEM, provider)
-                    for k, v in _get_config_attrs().items():
-                        span.set_attribute(k, v)
-                    # Set after config attrs so explicit model param wins over cfg.agent_model
-                    span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
-                    result = fn(*args, **kwargs)
-                    for k, v in _extract_llm_attrs(result, captures_output, model=model, cost_usd_override=cost_usd).items():
-                        span.set_attribute(k, v)
-                    return result
+                    _span_key = str(id(span))
+                    _open_spans[_span_key] = span
+                    try:
+                        span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
+                        span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
+                        span.set_attribute(schema.PROV_LLM_MODEL, model)
+                        # OTel gen_ai.* dual-emit
+                        span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
+                        span.set_attribute(schema.GEN_AI_SYSTEM, provider)
+                        for k, v in _get_config_attrs().items():
+                            span.set_attribute(k, v)
+                        # Set after config attrs so explicit model param wins over cfg.agent_model
+                        span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
+                        # Increment per-session turn counter and record on span
+                        _turn = _turn_counter.get() + 1
+                        _turn_counter.set(_turn)
+                        span.set_attribute(schema.AGENT_TURN_COUNT, _turn)
+                        result = fn(*args, **kwargs)
+                        for k, v in _extract_llm_attrs(result, captures_output, model=model, cost_usd_override=cost_usd).items():
+                            span.set_attribute(k, v)
+                        return result
+                    finally:
+                        _open_spans.pop(_span_key, None)
             return sync_wrapper
 
     return decorator
