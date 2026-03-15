@@ -146,6 +146,20 @@ Root span for an agent turn. Nests all downstream tool and LLM calls.
 def handle(message: str) -> str: ...
 ```
 
+#### Session grouping
+
+Pass `session_id` to group all spans from a single user conversation together.
+The value is attached as `session.id` on every span, making it a filterable
+dimension in Grafana / Tempo.
+
+```python
+@trace_agent(name="nix", session_id="conv-abc123")
+def handle(message: str) -> str: ...
+```
+
+The proxy also accepts the `X-AgentWeave-Session-Id` header for zero-code
+session tagging — see [docs/session-grouping.md](docs/session-grouping.md).
+
 ### `@trace_tool`
 
 Span for any tool call — file ops, API calls, shell commands, A2A delegation.

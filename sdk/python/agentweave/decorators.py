@@ -4,13 +4,57 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import inspect
+import re
+import secrets as _secrets
 from typing import Any, Callable, Optional
 
+from opentelemetry import context as otel_context
 from opentelemetry import trace
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
 from agentweave import schema
 from agentweave.exporter import get_tracer
+
+# ── Deterministic trace ID helpers ───────────────────────────────────────────
+
+_TRACE_ID_RE = re.compile(r'^[0-9a-fA-F]{32}$')
+
+
+def _normalize_trace_id(trace_id: str) -> int | None:
+    """Normalize a caller-supplied trace ID string to a 128-bit integer.
+
+    - If *trace_id* is already a valid 32-char hex string it is used directly.
+    - Otherwise it is SHA-256 hashed and the first 32 hex chars are used.
+    - Returns ``None`` for empty / ``None`` input.
+    """
+    if not trace_id:
+        return None
+    trace_id = trace_id.strip()
+    if not trace_id:
+        return None
+    if _TRACE_ID_RE.match(trace_id):
+        return int(trace_id, 16)
+    # Hash arbitrary string → valid 32 hex chars
+    return int(hashlib.sha256(trace_id.encode()).hexdigest()[:32], 16)
+
+
+def _context_for_trace_id(trace_id_int: int) -> Any:
+    """Return an OTel context that seeds child spans with *trace_id_int*.
+
+    Creates a synthetic remote parent :class:`NonRecordingSpan` so that any
+    span started inside this context inherits the desired trace ID without
+    itself being exported.
+    """
+    parent_span_id = int.from_bytes(_secrets.token_bytes(8), "big")
+    span_ctx = SpanContext(
+        trace_id=trace_id_int,
+        span_id=parent_span_id,
+        is_remote=True,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    return trace.set_span_in_context(NonRecordingSpan(span_ctx))
 
 
 def _get_config_attrs() -> dict:
@@ -111,19 +155,37 @@ def trace_tool(fn: Optional[Callable] = None, *, name: Optional[str] = None,
 
 # ── trace_agent ───────────────────────────────────────────────────────────────
 
-def _make_agent_wrapper(fn: Callable, name: str, captures_input: bool, captures_output: bool) -> Callable:
+def _make_agent_wrapper(
+    fn: Callable, name: str, captures_input: bool, captures_output: bool,
+    trace_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Callable:
     span_name = f"{schema.SPAN_PREFIX_AGENT}.{name}"
+
+    # Pre-compute the deterministic context once at decoration time (if provided)
+    _det_trace_id_int = _normalize_trace_id(trace_id) if trace_id else None
+
+    def _start_ctx() -> Any:
+        """Return an OTel context to use when starting the root agent span."""
+        if _det_trace_id_int is not None:
+            return _context_for_trace_id(_det_trace_id_int)
+        return None  # let OTel use the ambient context
 
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             tracer = get_tracer()
-            with tracer.start_as_current_span(span_name) as span:
+            with tracer.start_as_current_span(span_name, context=_start_ctx()) as span:
                 span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
                 # OTel gen_ai.* dual-emit
                 span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_INVOKE_AGENT)
                 for k, v in _get_config_attrs().items():
                     span.set_attribute(k, v)
+                if _det_trace_id_int is not None:
+                    span.set_attribute(schema.AGENTWEAVE_TRACE_ID, trace_id)
+                if session_id is not None:
+                    span.set_attribute(schema.SESSION_ID, session_id)
+                    span.set_attribute(schema.PROV_SESSION_ID, session_id)
                 if captures_input:
                     span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
                 result = await fn(*args, **kwargs)
@@ -136,12 +198,17 @@ def _make_agent_wrapper(fn: Callable, name: str, captures_input: bool, captures_
         @functools.wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             tracer = get_tracer()
-            with tracer.start_as_current_span(span_name) as span:
+            with tracer.start_as_current_span(span_name, context=_start_ctx()) as span:
                 span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
                 # OTel gen_ai.* dual-emit
                 span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_INVOKE_AGENT)
                 for k, v in _get_config_attrs().items():
                     span.set_attribute(k, v)
+                if _det_trace_id_int is not None:
+                    span.set_attribute(schema.AGENTWEAVE_TRACE_ID, trace_id)
+                if session_id is not None:
+                    span.set_attribute(schema.SESSION_ID, session_id)
+                    span.set_attribute(schema.PROV_SESSION_ID, session_id)
                 if captures_input:
                     span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
                 result = fn(*args, **kwargs)
@@ -153,8 +220,20 @@ def _make_agent_wrapper(fn: Callable, name: str, captures_input: bool, captures_
 
 
 def trace_agent(fn: Optional[Callable] = None, *, name: Optional[str] = None, context=None,
-                captures_input: bool = False, captures_output: bool = False):
+                captures_input: bool = False, captures_output: bool = False,
+                traceId: Optional[str] = None, session_id: Optional[str] = None):
     """Trace an agent turn. Supports bare @trace_agent or @trace_agent(name=...).
+
+    Pass ``traceId`` to pin the root span to a deterministic trace ID so that
+    retries of the same logical request can be deduplicated by your backend.
+
+    Pass ``session_id`` to group all spans from a single user conversation /
+    agent session.  The value is attached as the ``session.id`` span attribute
+    (and ``prov.session.id`` for backward compatibility) so it can be used as
+    a filterable dimension in Grafana / Tempo.
+
+    - If *traceId* is already a valid 32-char hex string it is used directly.
+    - Otherwise it is SHA-256 hashed to produce a valid OTel trace ID.
 
     Usage::
         @trace_agent
@@ -162,12 +241,28 @@ def trace_agent(fn: Optional[Callable] = None, *, name: Optional[str] = None, co
 
         @trace_agent(name="nix")
         def handle(msg): ...
+
+        # Deterministic trace ID — safe to retry without creating duplicate traces
+        @trace_agent(traceId="order-abc123-attempt-1")
+        def handle(msg): ...
+
+        @trace_agent(traceId="a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")  # 32-char hex
+        def handle(msg): ...
+
+        # Session grouping — all spans from this call share session.id
+        @trace_agent(session_id="conv-abc123")
+        def handle(msg): ...
     """
     if callable(fn):
         return _make_agent_wrapper(fn, fn.__name__, False, False)
 
     def decorator(inner_fn: Callable) -> Callable:
-        return _make_agent_wrapper(inner_fn, name or inner_fn.__name__, captures_input, captures_output)
+        return _make_agent_wrapper(
+            inner_fn, name or inner_fn.__name__,
+            captures_input, captures_output,
+            trace_id=traceId,
+            session_id=session_id,
+        )
 
     return decorator
 

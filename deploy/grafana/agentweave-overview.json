@@ -64,6 +64,19 @@
           }
         ],
         "hide": 0
+      },
+      {
+        "name": "session_id",
+        "label": "Session ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "description": "Filter traces by session.id — set via @trace_agent(session_id=...) or X-AgentWeave-Session-Id header"
       }
     ]
   },
