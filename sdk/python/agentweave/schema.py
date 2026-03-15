@@ -98,6 +98,10 @@ SPAN_PREFIX_LLM = "llm"
 
 AUTO_INSTRUMENTED = "agentweave.auto_instrumented"
 
+# --- Deterministic trace ID ---
+
+AGENTWEAVE_TRACE_ID = "agentweave.trace_id"
+
 # ---------------------------------------------------------------------------
 # OTel gen_ai.* semantic convention attributes (dual-emitted alongside prov.*)
 # Reference: https://opentelemetry.io/docs/specs/semconv/gen-ai/

@@ -308,6 +308,129 @@ class TestTraceAgent:
         assert tool_span.context.trace_id == agent_span.context.trace_id
 
 
+class TestTraceAgentDeterministicTraceId:
+    """Tests for @trace_agent traceId parameter (deterministic trace IDs)."""
+
+    def test_valid_hex_trace_id(self, _setup_test_tracer):
+        """32-char hex traceId sets the OTel trace ID on the span."""
+        exporter, _ = _setup_test_tracer
+        hex_id = "a" * 32  # valid 32-char hex
+
+        @trace_agent(name="det_agent", traceId=hex_id)
+        def handle(msg: str) -> str:
+            return "ok"
+
+        handle("hi")
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        actual_trace_id = format(span.context.trace_id, "032x")
+        assert actual_trace_id == hex_id
+        attrs = dict(span.attributes)
+        assert attrs[schema.AGENTWEAVE_TRACE_ID] == hex_id
+
+    def test_arbitrary_string_trace_id_is_hashed(self, _setup_test_tracer):
+        """Non-hex traceId is SHA-256 hashed to produce a valid OTel trace ID."""
+        import hashlib
+        exporter, _ = _setup_test_tracer
+        arbitrary_id = "order-abc123-attempt-1"
+
+        @trace_agent(name="hash_agent", traceId=arbitrary_id)
+        def handle(msg: str) -> str:
+            return "ok"
+
+        handle("hi")
+
+        spans = exporter.get_finished_spans()
+        span = spans[0]
+        expected_hex = hashlib.sha256(arbitrary_id.encode()).hexdigest()[:32]
+        assert format(span.context.trace_id, "032x") == expected_hex
+        attrs = dict(span.attributes)
+        assert attrs[schema.AGENTWEAVE_TRACE_ID] == arbitrary_id
+
+    def test_same_trace_id_across_retries(self, _setup_test_tracer):
+        """Two calls with the same traceId produce spans with identical trace IDs."""
+        exporter, _ = _setup_test_tracer
+        trace_id = "retry-request-unique-key-42"
+
+        @trace_agent(name="retry_agent", traceId=trace_id)
+        def handle(msg: str) -> str:
+            return "ok"
+
+        handle("first call")
+        handle("second call (retry)")
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 2
+        assert spans[0].context.trace_id == spans[1].context.trace_id
+
+    def test_no_trace_id_uses_random(self, _setup_test_tracer):
+        """Without traceId, two calls produce different trace IDs."""
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="random_agent")
+        def handle(msg: str) -> str:
+            return "ok"
+
+        handle("first call")
+        handle("second call")
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 2
+        assert spans[0].context.trace_id != spans[1].context.trace_id
+
+    def test_trace_id_propagates_to_child_spans(self, _setup_test_tracer):
+        """Child spans (e.g. tool calls) inherit the deterministic trace ID."""
+        exporter, _ = _setup_test_tracer
+        from agentweave.decorators import trace_tool
+        hex_id = "b" * 32
+
+        @trace_tool(name="child_tool")
+        def my_tool() -> str:
+            return "tool result"
+
+        @trace_agent(name="parent_agent", traceId=hex_id)
+        def handle(msg: str) -> str:
+            return my_tool()
+
+        handle("hi")
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 2
+        for span in spans:
+            assert format(span.context.trace_id, "032x") == hex_id
+
+    def test_async_agent_with_trace_id(self, _setup_test_tracer):
+        """traceId also works on async agents."""
+        exporter, _ = _setup_test_tracer
+        hex_id = "c" * 32
+
+        @trace_agent(name="async_det_agent", traceId=hex_id)
+        async def handle(msg: str) -> str:
+            return "async ok"
+
+        asyncio.run(handle("hi"))
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert format(spans[0].context.trace_id, "032x") == hex_id
+
+    def test_agentweave_trace_id_attribute_absent_without_trace_id(self, _setup_test_tracer):
+        """agentweave.trace_id attribute is only set when traceId is provided."""
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="no_trace_id_agent")
+        def handle(msg: str) -> str:
+            return "ok"
+
+        handle("hi")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert schema.AGENTWEAVE_TRACE_ID not in attrs
+
+
 class TestTraceLlm:
     """Tests for @trace_llm decorator."""
 
