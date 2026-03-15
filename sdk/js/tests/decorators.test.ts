@@ -336,3 +336,99 @@ describe('traceLlm — edge cases', () => {
     expect(spans[0].attributes[schema.PROV_USED]).toBe('What is 2+2?');
   });
 });
+
+// ── Shutdown handler tests ────────────────────────────────────────────────────
+
+import { _openSpans, shutdownHandler, _resetShutdownState } from '../src/tracer';
+
+describe('shutdownHandler', () => {
+  beforeEach(() => {
+    _resetShutdownState();
+    exporter.reset();
+  });
+
+  it('closes in-flight spans with ERROR status and shutdown.reason attribute', () => {
+    // Manually register a span to simulate one that is mid-flight
+    const span = provider.getTracer('test').startSpan('agent.mid_flight');
+    _openSpans.set('test-key-1', span);
+
+    shutdownHandler('sigterm');
+
+    expect(_openSpans.size).toBe(0);
+    const finished = exporter.getFinishedSpans();
+    expect(finished.length).toBe(1);
+    expect(finished[0].attributes['shutdown.reason']).toBe('sigterm');
+    expect(finished[0].status.code).toBe(SpanStatusCode.ERROR);
+  });
+
+  it('closes multiple in-flight spans', () => {
+    const tracer = provider.getTracer('test');
+    for (let i = 0; i < 3; i++) {
+      const span = tracer.startSpan(`span.${i}`);
+      _openSpans.set(`key-${i}`, span);
+    }
+
+    shutdownHandler('sigint');
+
+    expect(_openSpans.size).toBe(0);
+    const finished = exporter.getFinishedSpans();
+    expect(finished.length).toBe(3);
+    for (const sp of finished) {
+      expect(sp.attributes['shutdown.reason']).toBe('sigint');
+    }
+  });
+
+  it('is idempotent — second call is a no-op', () => {
+    const span = provider.getTracer('test').startSpan('span.once');
+    _openSpans.set('once', span);
+
+    shutdownHandler('atexit');
+    shutdownHandler('atexit'); // second call should not re-close
+
+    const finished = exporter.getFinishedSpans();
+    // Only one span was started so only one should be finished
+    expect(finished.length).toBe(1);
+  });
+
+  it('handles no open spans gracefully', () => {
+    expect(() => shutdownHandler('atexit')).not.toThrow();
+    expect(exporter.getFinishedSpans().length).toBe(0);
+  });
+
+  it('uses "sigterm" as shutdown.reason for sigterm signal', () => {
+    const span = provider.getTracer('test').startSpan('span.sigterm');
+    _openSpans.set('sigterm-key', span);
+
+    shutdownHandler('sigterm');
+
+    const finished = exporter.getFinishedSpans();
+    expect(finished[0].attributes['shutdown.reason']).toBe('sigterm');
+  });
+
+  it('uses "manual" as shutdown.reason for AgentWeaveConfig.shutdown()', () => {
+    const span = provider.getTracer('test').startSpan('span.manual');
+    _openSpans.set('manual-key', span);
+    _resetShutdownState(); // reset _shutdownCalled but keep the span
+    _openSpans.set('manual-key', span);
+
+    AgentWeaveConfig.shutdown();
+
+    const finished = exporter.getFinishedSpans();
+    expect(finished.length).toBe(1);
+    expect(finished[0].attributes['shutdown.reason']).toBe('manual');
+  });
+
+  it('_openSpans is empty after a normally-completed traceTool call', async () => {
+    _resetShutdownState();
+    const fn = traceTool('cleanupTool')(async () => 'ok');
+    await fn();
+    expect(_openSpans.size).toBe(0);
+  });
+
+  it('_openSpans is empty after a failed traceTool call', async () => {
+    _resetShutdownState();
+    const fn = traceTool('failTool')(async () => { throw new Error('boom'); });
+    await expect(fn()).rejects.toThrow('boom');
+    expect(_openSpans.size).toBe(0);
+  });
+});

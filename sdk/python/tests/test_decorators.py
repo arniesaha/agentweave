@@ -614,3 +614,171 @@ class TestTraceAgentDeterministicTraceId:
         assert schema.AGENTWEAVE_TRACE_ID not in attrs
 
 
+
+
+# ── Shutdown / span cleanup tests ─────────────────────────────────────────────
+
+class TestShutdownHandler:
+    """Tests for graceful span cleanup on process abort/shutdown."""
+
+    def _reset_shutdown_state(self):
+        """Helper: reset module-level shutdown flags between tests."""
+        import agentweave.decorators as dec
+        dec._open_spans.clear()
+        dec._shutdown_called = False
+
+    def test_shutdown_handler_closes_open_span(self, _setup_test_tracer):
+        """Simulates a mid-flight span: shutdown handler ends it with ABORTED attrs."""
+        exporter, _ = _setup_test_tracer
+        import agentweave.decorators as dec
+        self._reset_shutdown_state()
+
+        # Manually start a span and register it (simulating an in-flight decorator)
+        from agentweave.exporter import get_tracer as _get_tracer
+        tracer = _get_tracer()
+        span = tracer.start_span("agent.mid_flight")
+        span_key = str(id(span))
+        dec._open_spans[span_key] = span
+
+        dec._shutdown_handler("sigterm")
+
+        # Span should be removed from tracking
+        assert span_key not in dec._open_spans
+
+        finished = exporter.get_finished_spans()
+        assert len(finished) == 1
+        attrs = dict(finished[0].attributes)
+        assert attrs["shutdown.reason"] == "sigterm"
+        assert finished[0].status.status_code == trace.StatusCode.ERROR
+
+    def test_shutdown_handler_closes_multiple_spans(self, _setup_test_tracer):
+        """All open spans are closed by the shutdown handler."""
+        exporter, _ = _setup_test_tracer
+        import agentweave.decorators as dec
+        self._reset_shutdown_state()
+
+        from agentweave.exporter import get_tracer as _get_tracer
+        tracer = _get_tracer()
+        spans = [tracer.start_span(f"span.{i}") for i in range(3)]
+        for sp in spans:
+            dec._open_spans[str(id(sp))] = sp
+
+        dec._shutdown_handler("sigint")
+
+        assert len(dec._open_spans) == 0
+        finished = exporter.get_finished_spans()
+        assert len(finished) == 3
+        for sp in finished:
+            attrs = dict(sp.attributes)
+            assert attrs["shutdown.reason"] == "sigint"
+
+    def test_shutdown_handler_is_idempotent(self, _setup_test_tracer):
+        """Calling _shutdown_handler twice does not crash or double-close spans."""
+        exporter, _ = _setup_test_tracer
+        import agentweave.decorators as dec
+        self._reset_shutdown_state()
+
+        from agentweave.exporter import get_tracer as _get_tracer
+        tracer = _get_tracer()
+        span = tracer.start_span("span.once")
+        dec._open_spans[str(id(span))] = span
+
+        dec._shutdown_handler("atexit")
+        dec._shutdown_handler("atexit")  # second call should be a no-op
+
+        finished = exporter.get_finished_spans()
+        assert len(finished) == 1  # not duplicated
+
+    def test_shutdown_reason_sigterm(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+        import agentweave.decorators as dec
+        self._reset_shutdown_state()
+
+        from agentweave.exporter import get_tracer as _get_tracer
+        tracer = _get_tracer()
+        span = tracer.start_span("span.sigterm")
+        dec._open_spans[str(id(span))] = span
+
+        dec._shutdown_handler("sigterm")
+
+        finished = exporter.get_finished_spans()
+        assert dict(finished[0].attributes)["shutdown.reason"] == "sigterm"
+
+    def test_shutdown_reason_atexit(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+        import agentweave.decorators as dec
+        self._reset_shutdown_state()
+
+        from agentweave.exporter import get_tracer as _get_tracer
+        tracer = _get_tracer()
+        span = tracer.start_span("span.atexit")
+        dec._open_spans[str(id(span))] = span
+
+        dec._shutdown_handler("atexit")
+
+        finished = exporter.get_finished_spans()
+        assert dict(finished[0].attributes)["shutdown.reason"] == "atexit"
+
+    def test_no_open_spans_shutdown_is_noop(self, _setup_test_tracer):
+        """Shutdown with no open spans should not raise or crash."""
+        import agentweave.decorators as dec
+        self._reset_shutdown_state()
+        dec._shutdown_handler("atexit")  # no spans — should be fine
+
+    def test_config_shutdown_method(self, _setup_test_tracer):
+        """AgentWeaveConfig.shutdown() closes in-flight spans (manual teardown)."""
+        exporter, _ = _setup_test_tracer
+        import agentweave.decorators as dec
+        self._reset_shutdown_state()
+
+        from agentweave.exporter import get_tracer as _get_tracer
+        tracer = _get_tracer()
+        span = tracer.start_span("span.manual")
+        dec._open_spans[str(id(span))] = span
+
+        AgentWeaveConfig.shutdown()
+
+        finished = exporter.get_finished_spans()
+        assert len(finished) == 1
+        attrs = dict(finished[0].attributes)
+        assert attrs["shutdown.reason"] == "manual"
+
+    def test_open_spans_cleared_after_normal_execution(self, _setup_test_tracer):
+        """After a normally-completing decorated call, _open_spans is empty."""
+        import agentweave.decorators as dec
+        self._reset_shutdown_state()
+        from agentweave.decorators import trace_tool
+
+        @trace_tool(name="test_tool")
+        def my_tool() -> str:
+            return "ok"
+
+        my_tool()
+        assert len(dec._open_spans) == 0
+
+    def test_open_spans_cleared_after_exception(self, _setup_test_tracer):
+        """After a decorated call that raises, _open_spans is still emptied."""
+        import agentweave.decorators as dec
+        self._reset_shutdown_state()
+        from agentweave.decorators import trace_tool
+
+        @trace_tool(name="failing_tool")
+        def bad_tool() -> None:
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            bad_tool()
+        assert len(dec._open_spans) == 0
+
+    def test_open_spans_cleared_after_async_execution(self, _setup_test_tracer):
+        """After an async decorated call, _open_spans is empty."""
+        import agentweave.decorators as dec
+        self._reset_shutdown_state()
+        from agentweave.decorators import trace_agent
+
+        @trace_agent(name="async_agent")
+        async def my_agent() -> str:
+            return "done"
+
+        asyncio.run(my_agent())
+        assert len(dec._open_spans) == 0
