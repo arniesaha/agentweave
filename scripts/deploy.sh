@@ -31,10 +31,21 @@ ts "Push complete"
 # --- Step 3: Deploy to k8s ---
 ts "Deploying to k8s namespace '${NAMESPACE}'"
 
-# Apply base manifests first (namespace, configmap, secret, service, deployment)
+# Apply base manifests (namespace, configmap, service, deployment)
+# ⚠️  secret.yaml is intentionally NEVER applied here — it contains a CHANGE_ME placeholder.
+#     Applying it would overwrite the live proxy token and break all LAN agent comms.
+#     The proxy secret is managed out-of-band (empty = LAN-open, no auth required).
+if kubectl get secret agentweave-proxy -n "${NAMESPACE}" &>/dev/null; then
+  ts "Secret 'agentweave-proxy' already exists — skipping (managed out-of-band)"
+else
+  ts "WARNING: Secret 'agentweave-proxy' not found — creating with empty token (LAN-open mode)"
+  kubectl create secret generic agentweave-proxy \
+    --from-literal=proxy-token="" \
+    -n "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+fi
+
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/namespace.yaml"
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/configmap.yaml"
-kubectl apply -f "${REPO_ROOT}/deploy/k8s/secret.yaml"
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/service.yaml"
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/deployment.yaml"
 
