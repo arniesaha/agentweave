@@ -72,6 +72,7 @@ _SKIP_HEADERS_ALWAYS = {
     "x-agentweave-project",
     "x-agentweave-turn",
     "x-agentweave-trace-id",
+    "x-agentweave-turn-count",
 }
 
 # ---------------------------------------------------------------------------
@@ -250,6 +251,15 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     det_trace_id_raw: str | None = request.headers.get("x-agentweave-trace-id")
     det_trace_id_int: int | None = _normalize_trace_id(det_trace_id_raw) if det_trace_id_raw else None
 
+    # Per-session LLM turn counter supplied by external callers via header
+    turn_count: int | None = None
+    turn_count_raw = request.headers.get("x-agentweave-turn-count")
+    if turn_count_raw is not None:
+        try:
+            turn_count = int(turn_count_raw)
+        except (ValueError, TypeError):
+            logger.warning("x-agentweave-turn-count is not a valid integer: %r", turn_count_raw)
+
     forward_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in _SKIP_HEADERS_ALWAYS
@@ -280,6 +290,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         turn=turn,
         det_trace_id_int=det_trace_id_int,
         det_trace_id_raw=det_trace_id_raw,
+        turn_count=turn_count,
     )
 
     if is_stream:
@@ -297,6 +308,7 @@ async def _request_and_trace(
     model: str, provider: str, agent_id: str, agent_model: str, path: str,
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
     det_trace_id_int: int | None = None, det_trace_id_raw: str | None = None,
+    turn_count: int | None = None,
 ) -> JSONResponse:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
@@ -306,6 +318,8 @@ async def _request_and_trace(
                            path=path, body=body,
                            session_id=session_id, project=project, turn=turn,
                            det_trace_id_raw=det_trace_id_raw)
+        if turn_count is not None:
+            span.set_attribute(schema.AGENT_TURN_COUNT, turn_count)
         start = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=300) as client:
@@ -332,6 +346,7 @@ async def _stream_and_trace(
     model: str, provider: str, agent_id: str, agent_model: str, path: str,
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
     det_trace_id_int: int | None = None, det_trace_id_raw: str | None = None,
+    turn_count: int | None = None,
 ) -> AsyncIterator[bytes]:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
@@ -341,6 +356,8 @@ async def _stream_and_trace(
                        path=path, body=body,
                        session_id=session_id, project=project, turn=turn,
                        det_trace_id_raw=det_trace_id_raw)
+    if turn_count is not None:
+        span.set_attribute(schema.AGENT_TURN_COUNT, turn_count)
 
     input_tokens = output_tokens = 0
     cache_read = cache_write = 0  # Anthropic prompt-caching counters

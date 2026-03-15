@@ -134,3 +134,12 @@ GEN_AI_OP_INVOKE_AGENT = "invoke_agent"
 TOKENS_CACHE_READ = "tokens.cache_read"
 TOKENS_CACHE_WRITE = "tokens.cache_write"
 CACHE_HIT_RATE = "cache.hit_rate"
+
+# ---------------------------------------------------------------------------
+# Turn counter — tracks how many LLM calls a single agent session makes
+# ---------------------------------------------------------------------------
+
+# Emitted on every LLM generation span when called inside @trace_agent.
+# Scoped per async task / thread via contextvars.ContextVar so parallel
+# agent sessions never interfere with each other.
+AGENT_TURN_COUNT = "agent.turn_count"
