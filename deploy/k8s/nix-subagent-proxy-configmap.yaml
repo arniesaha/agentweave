@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentweave-proxy-nix-subagent
+  namespace: agentweave
+data:
+  AGENTWEAVE_AGENT_ID: "nix-subagent-v1"
+  AGENTWEAVE_OTLP_ENDPOINT: "http://tempo.monitoring.svc.cluster.local:4318"
