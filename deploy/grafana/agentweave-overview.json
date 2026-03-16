@@ -10,9 +10,9 @@
   "timezone": "browser",
   "schemaVersion": 38,
   "version": 11,
-  "refresh": "5m",
+  "refresh": "1m",
   "time": {
-    "from": "now-6h",
+    "from": "now-3h",
     "to": "now"
   },
   "templating": {
@@ -64,19 +64,6 @@
           }
         ],
         "hide": 0
-      },
-      {
-        "name": "session_id",
-        "label": "Session ID",
-        "type": "textbox",
-        "query": "",
-        "current": {
-          "text": "",
-          "value": ""
-        },
-        "options": [],
-        "hide": 0,
-        "description": "Filter traces by session.id \u2014 set via @trace_agent(session_id=...) or X-AgentWeave-Session-Id header"
       }
     ]
   },
@@ -85,6 +72,12 @@
       "id": 1,
       "title": "Total LLM Calls",
       "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
       "datasource": {
         "type": "tempo",
         "uid": "cffj9et53r9j4f"
@@ -100,6 +93,18 @@
           "tableType": "traces",
           "limit": 10000,
           "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Duration"
+              ]
+            }
+          }
         }
       ],
       "options": {
@@ -124,63 +129,20 @@
           "unit": "none",
           "displayName": "LLM Calls"
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 0,
-        "y": 0
-      }
-    },
-    {
-      "id": 4,
-      "title": "Total LLM Time",
-      "type": "stat",
-      "datasource": {
-        "type": "tempo",
-        "uid": "cffj9et53r9j4f"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "tempo",
-            "uid": "cffj9et53r9j4f"
-          },
-          "queryType": "traceql",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
-          "tableType": "traces",
-          "limit": 10000,
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "sum"
-          ],
-          "fields": "/.*duration.*/",
-          "values": false
-        },
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "purple"
-          },
-          "unit": "ms",
-          "displayName": "Total LLM Time"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 4,
-        "y": 0
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceDuration"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
       }
     },
     {
@@ -318,6 +280,67 @@
           },
           "unit": "ms",
           "displayName": "Max Latency"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Total LLM Time",
+      "type": "stat",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
+          "tableType": "traces",
+          "limit": 10000,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Duration"
+              ]
+            }
+          }
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          },
+          "unit": "ms",
+          "displayName": "Total LLM Time"
         }
       }
     },
@@ -666,9 +689,10 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "refId": "A",
           "expr": "sum by (prov_project) (increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_project!=\"\"}[$__range]))",
-          "legendFormat": "{{prov_project}}"
+          "legendFormat": "{{prov_project}}",
+          "refId": "A",
+          "instant": true
         }
       ],
       "gridPos": {
@@ -713,9 +737,9 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, prov_llm_model) (rate(traces_spanmetrics_latency_bucket{service=\"agentweave-proxy\"}[$__rate_interval]))) * 1000",
-          "legendFormat": "{{prov_llm_model}}"
+          "expr": "histogram_quantile(0.95, sum by (le, prov_llm_model) (rate(traces_spanmetrics_latency_bucket{service=\"agentweave-proxy\"}[5m]))) * 1000",
+          "legendFormat": "{{prov_llm_model}} p95",
+          "refId": "A"
         }
       ],
       "gridPos": {
@@ -755,9 +779,10 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "refId": "A",
           "expr": "sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_agent_id!=\"\"}[$__range]))",
-          "legendFormat": "{{prov_agent_id}}"
+          "legendFormat": "{{prov_agent_id}}",
+          "refId": "A",
+          "instant": true
         }
       ],
       "gridPos": {
