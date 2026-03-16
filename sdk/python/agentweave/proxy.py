@@ -117,6 +117,15 @@ def _context_for_trace_id(trace_id_int: int):
 # Empty = open mode (dev/localhost only).
 _PROXY_TOKEN: str | None = os.getenv("AGENTWEAVE_PROXY_TOKEN") or None
 
+# Global session context — set at startup from env, overrideable via POST /session
+_session_context: dict[str, str] = {
+    k: v for k, v in {
+        "prov.session.id": os.getenv("AGENTWEAVE_SESSION_ID", ""),
+        "prov.parent.session.id": os.getenv("AGENTWEAVE_PARENT_SESSION_ID", ""),
+        "prov.task.label": os.getenv("AGENTWEAVE_TASK_LABEL", ""),
+    }.items() if v
+}
+
 # Gemini model name from URL, e.g. /v1beta/models/gemini-2.5-pro:generateContent
 _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 
@@ -204,6 +213,24 @@ def _is_streaming(provider: str, path: str, body: dict) -> bool:
 async def health() -> dict:
     """Liveness/readiness probe — no auth required."""
     return {"status": "ok", "version": app.version}
+
+
+@app.post("/session", include_in_schema=True)
+async def set_session_context(body: dict):
+    """Override the global session context for all subsequent spans."""
+    global _session_context
+    _session_context = {k: v for k, v in {
+        "prov.session.id": body.get("session_id", ""),
+        "prov.parent.session.id": body.get("parent_session_id", ""),
+        "prov.task.label": body.get("task_label", ""),
+    }.items() if v}
+    return {"ok": True, "context": _session_context}
+
+
+@app.get("/session", include_in_schema=True)
+async def get_session_context():
+    """Return the current global session context."""
+    return _session_context
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], response_model=None)
@@ -772,6 +799,10 @@ def _set_request_attrs(
     span.set_attribute(schema.GEN_AI_SYSTEM, provider)
     span.set_attribute(schema.GEN_AI_REQUEST_MODEL, agent_model)
     span.set_attribute(schema.GEN_AI_AGENT_NAME, agent_id)
+
+    # Apply global session context (env-var defaults overrideable via POST /session)
+    for k, v in _session_context.items():
+        span.set_attribute(k, v)
 
     # Only fall back to cfg.agent_id if no per-request agent_id was provided via header
     if not agent_id:
