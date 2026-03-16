@@ -39,7 +39,7 @@ export function tempoSearchQuery(): string {
   return (
     `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
-    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id)`
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent_id)`
   )
 }
 
@@ -56,6 +56,18 @@ export function promCallsByModelQuery(range: TimeRange): string {
 
 export function promP95LatencyByModelQuery(): string {
   return `histogram_quantile(0.95, sum by (le, prov_llm_model) (rate(traces_spanmetrics_latency_bucket{service="${TEMPO_SERVICE}"}[5m]))) * 1000`
+}
+
+export function promCallsByAgentQuery(range: TimeRange): string {
+  const seconds = getTimeRangeSeconds(range)
+  return `sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service="${TEMPO_SERVICE}"}[${seconds}s]))`
+}
+
+export function promCostByAgentQuery(range: TimeRange): string {
+  // Uses Prometheus spanmetrics for call counts as a proxy; actual cost bucketed from traces
+  // This gives relative call volume per agent — use alongside cost stat for context
+  const seconds = getTimeRangeSeconds(range)
+  return `sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service="${TEMPO_SERVICE}"}[${seconds}s]))`
 }
 
 // ─── Response transformers ─────────────────────────────────────────────────
@@ -139,6 +151,7 @@ export interface TraceRow {
   traceId: string
   time: number
   model: string
+  agentId: string
   latencyMs: number
   tokensIn: number
   tokensOut: number
@@ -191,6 +204,7 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
       costUsd: parseFloat(getSpanAttr(attrs, 'cost.usd') || '0'),
       cacheHitRate: parseFloat(getSpanAttr(attrs, 'cache.hit_rate') || '0'),
       sessionId: getSpanAttr(attrs, 'session.id') || '—',
+      agentId: getSpanAttr(attrs, 'prov.agent_id') || 'unknown',
       attributes: allAttrs,
     }
   })
@@ -216,6 +230,21 @@ export function extractLastTempoMetricValue(result: TempoMetricResult | null): n
 }
 
 // ─── Trace-derived aggregations ──────────────────────────────────────────────
+
+/** Aggregate total cost per agent from trace rows. */
+export function buildCostByAgent(
+  traces: TraceRow[]
+): Array<{ label: string; value: number }> {
+  const map = new Map<string, number>()
+  for (const t of traces) {
+    if (t.costUsd <= 0) continue
+    const key = t.agentId || 'unknown'
+    map.set(key, (map.get(key) ?? 0) + t.costUsd)
+  }
+  return Array.from(map.entries())
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value)
+}
 
 /** Bucket trace costs into a time series for the cost-over-time chart. */
 export function buildCostTimeSeries(

@@ -11,8 +11,10 @@ import {
   promLLMCallsRateQuery,
   promCallsByModelQuery,
   promP95LatencyByModelQuery,
+  promCallsByAgentQuery,
   transformTempoTraces,
   buildCostTimeSeries,
+  buildCostByAgent,
 } from './lib/queries'
 import { useTempoSearch, useTempoSearchCount } from './hooks/useTempo'
 import { usePromQueryRange, usePromQueryInstant } from './hooks/usePrometheus'
@@ -100,6 +102,13 @@ export default function App() {
   const { bars: latencyByModel, loading: latencyByModelLoading, error: latencyByModelError } =
     usePromQueryInstant(promP95LatencyByModelQuery(), timeRange, refreshKey, 'prov_llm_model')
 
+  // 9. Calls by Agent (Prometheus spanmetrics)
+  const { bars: callsByAgent, loading: callsByAgentLoading, error: callsByAgentError } =
+    usePromQueryInstant(promCallsByAgentQuery(timeRange), timeRange, refreshKey, 'prov_agent_id')
+
+  // 10. Cost by Agent — derived from trace rows (no extra fetch needed)
+  const costByAgent = buildCostByAgent(traceRows)
+
   // Tempo error flag — only true when the core trace search fails
   const tempoError = !!(llmCallError || tracesError)
 
@@ -176,7 +185,7 @@ export default function App() {
           />
         </div>
 
-        {/* Row 3: Bar Charts */}
+        {/* Row 3: Bar Charts — Model breakdown */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <BarChartPanel
             title="Calls by Model"
@@ -193,6 +202,26 @@ export default function App() {
             loading={latencyByModelLoading}
             error={latencyByModelError}
             valueFormatter={(v) => `${v.toFixed(0)} ms`}
+          />
+        </div>
+
+        {/* Row 4: Agent breakdown */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <BarChartPanel
+            title="Calls by Agent"
+            subtitle="Total LLM calls per agent in time range"
+            data={callsByAgent}
+            loading={callsByAgentLoading}
+            error={callsByAgentError}
+            valueFormatter={(v) => v.toFixed(0)}
+          />
+          <BarChartPanel
+            title="Cost by Agent (USD)"
+            subtitle="Estimated total cost per agent in time range"
+            data={costByAgent}
+            loading={tracesLoading}
+            error={null}
+            valueFormatter={(v) => `$${v.toFixed(4)}`}
           />
         </div>
 

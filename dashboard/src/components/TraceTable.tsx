@@ -108,6 +108,7 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
               <ThSortable label="Time" k="time" />
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Trace ID</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Model</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Agent</th>
               <ThSortable label="Latency" k="latencyMs" />
               <ThSortable label="Tokens In" k="tokensIn" />
               <ThSortable label="Tokens Out" k="tokensOut" />
@@ -120,13 +121,13 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
               Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} />)
             ) : error ? (
               <tr>
-                <td colSpan={9} className="px-4 py-12 text-center text-gray-600 text-sm">
+                <td colSpan={10} className="px-4 py-12 text-center text-gray-600 text-sm">
                   Unable to load traces — {error}
                 </td>
               </tr>
             ) : !sorted.length ? (
               <tr>
-                <td colSpan={9} className="px-4 py-12 text-center text-gray-600 text-sm">
+                <td colSpan={10} className="px-4 py-12 text-center text-gray-600 text-sm">
                   No traces found for this time range
                 </td>
               </tr>
@@ -166,6 +167,11 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
                           {row.model || '—'}
                         </span>
                       </td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs text-violet-400 bg-violet-950/40 px-2 py-0.5 rounded-full">
+                          {row.agentId || '—'}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 text-xs text-gray-300 tabular-nums whitespace-nowrap">
                         {row.latencyMs > 0 ? `${row.latencyMs.toFixed(0)} ms` : '—'}
                       </td>
@@ -186,7 +192,7 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
                     </tr>
                     {isOpen && (
                       <tr className="bg-[#0a0a0f]/80 border-b border-[#1e1e2e]">
-                        <td colSpan={9} className="px-6 py-4">
+                        <td colSpan={10} className="px-6 py-4">
                           <div className="space-y-2">
                             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
                               Span Attributes
