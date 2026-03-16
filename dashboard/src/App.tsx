@@ -191,7 +191,7 @@ export default function App() {
             subtitle={costChartSubtitle}
             series={costChartSeries}
             loading={costMetricLoading && tracesLoading}
-            error={costMetricError ?? tracesError}
+            error={costChartSeries.length === 0 ? (costMetricError ?? tracesError) : null}
             type="area"
             valueFormatter={(v) => `$${v.toFixed(4)}`}
           />
