@@ -29,9 +29,9 @@ export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, t
         </div>
       )}
       <header className="sticky top-0 z-50 bg-[#0a0a0f]/95 backdrop-blur border-b border-[#1e1e2e] px-4 sm:px-6 py-4">
-        <div className="max-w-screen-2xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+        <div className="max-w-screen-2xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-4">
           {/* Logo */}
-          <div className="flex items-center gap-2 sm:flex-shrink-0">
+          <div className="flex items-center gap-2 md:flex-shrink-0">
             <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
               <Zap className="w-4 h-4 text-white" />
             </div>
@@ -42,7 +42,7 @@ export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, t
           </div>
 
           {/* Right controls */}
-          <div className="flex items-center gap-2 sm:gap-3 sm:ml-auto overflow-x-auto">
+          <div className="flex items-center gap-2 md:gap-3 md:ml-auto overflow-x-auto">
             {lastUpdated && (
               <span className="text-gray-500 text-xs hidden sm:block">
                 Updated {formatDistanceToNow(lastUpdated, { addSuffix: true })}
@@ -55,7 +55,7 @@ export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, t
                 <button
                   key={r.value}
                   onClick={() => onTimeRangeChange(r.value)}
-                  className={`px-2 py-1 text-xs sm:px-3 sm:py-1.5 sm:text-sm font-medium transition-colors whitespace-nowrap ${
+                  className={`px-2 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
                     timeRange === r.value
                       ? 'bg-indigo-600 text-white'
                       : 'text-gray-400 hover:text-white hover:bg-[#1e1e2e]'
@@ -69,7 +69,7 @@ export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, t
             {/* Refresh button */}
             <button
               onClick={onRefresh}
-              className="flex items-center gap-1 px-2 py-1 sm:px-3 sm:py-1.5 bg-[#111118] border border-[#1e1e2e] rounded-lg text-xs sm:text-sm text-gray-400 hover:text-white hover:border-indigo-500/50 transition-colors flex-shrink-0"
+              className="flex items-center gap-1 px-2 py-1 bg-[#111118] border border-[#1e1e2e] rounded-lg text-xs text-gray-400 hover:text-white hover:border-indigo-500/50 transition-colors flex-shrink-0"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span className="hidden sm:block">Refresh</span>

@@ -144,7 +144,7 @@ export default function App() {
   const tempoError = !!(llmCallError || tracesError)
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f]">
+    <div className="min-h-screen bg-[#0a0a0f] overflow-x-hidden">
       <Header
         timeRange={timeRange}
         onTimeRangeChange={handleTimeRangeChange}
