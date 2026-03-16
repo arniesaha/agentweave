@@ -1,6 +1,6 @@
 """AgentWeave LLM pricing table.
 
-Prices are in USD per 1 million tokens (input, output).
+Prices are in USD per 1 million tokens (input, output, cache_read, cache_write).
 Update this table as providers change their pricing.
 
 Override at runtime by setting AGENTWEAVE_PRICING_OVERRIDE to a JSON string:
@@ -14,34 +14,55 @@ Usage::
 
     cost = compute_cost("claude-sonnet-4-6", input_tokens=1000, output_tokens=500)
     # Returns 0.003 + 0.0075 = 0.0105
+
+    cost = compute_cost(
+        "claude-sonnet-4-6",
+        input_tokens=1000,
+        output_tokens=500,
+        cache_read_tokens=10000,
+        cache_write_tokens=500,
+    )
 """
 
 from __future__ import annotations
 
 import json
 import os
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 # ---------------------------------------------------------------------------
-# Pricing table — USD per 1 million tokens (input_price, output_price)
+# Pricing table — USD per 1 million tokens
+#
+# Each entry is either a 2-tuple (input_price, output_price) or a 4-tuple
+# (input_price, output_price, cache_read_price, cache_write_price).
+# Models without prompt-caching use 2-tuples; Anthropic models use 4-tuples.
 # ---------------------------------------------------------------------------
-# Keep this sorted by provider / model family for easy maintenance.
-# Add new models here; they are automatically picked up by compute_cost().
 
-_DEFAULT_PRICING: dict[str, tuple[float, float]] = {
-    # Anthropic Claude
-    "claude-opus-4-5": (15.00, 75.00),
-    "claude-sonnet-4-6": (3.00, 15.00),
-    "claude-sonnet-4-5": (3.00, 15.00),
-    "claude-haiku-4-5": (0.80, 4.00),
-    "claude-haiku-3-5": (0.80, 4.00),
-    # Google Gemini
-    "gemini-2.5-pro": (1.25, 10.00),
-    "gemini-2.5-flash": (0.30, 2.50),
-    "gemini-2.0-flash": (0.10, 0.40),
-    # OpenAI
-    "gpt-4o": (2.50, 10.00),
-    "gpt-4o-mini": (0.15, 0.60),
+_PriceEntry = Union[Tuple[float, float], Tuple[float, float, float, float]]
+
+_DEFAULT_PRICING: dict[str, _PriceEntry] = {
+    # ── Anthropic Claude (input, output, cache_read, cache_write) ─────────────
+    # claude-opus-4 / claude-3-opus-*
+    "claude-opus-4":              (15.00, 75.00, 1.50, 18.75),
+    "claude-opus-4-5":            (15.00, 75.00, 1.50, 18.75),
+    "claude-3-opus":              (15.00, 75.00, 1.50, 18.75),
+    # claude-sonnet-4-6 / claude-3-5-sonnet-*
+    "claude-sonnet-4-6":          (3.00, 15.00, 0.30, 3.75),
+    "claude-sonnet-4-5":          (3.00, 15.00, 0.30, 3.75),
+    "claude-3-5-sonnet":          (3.00, 15.00, 0.30, 3.75),
+    # claude-haiku-4-5 / claude-3-5-haiku-*
+    "claude-haiku-4-5":           (0.80,  4.00, 0.08, 1.00),
+    "claude-haiku-3-5":           (0.80,  4.00, 0.08, 1.00),
+    "claude-3-5-haiku":           (0.80,  4.00, 0.08, 1.00),
+
+    # ── Google Gemini (input, output) ─────────────────────────────────────────
+    "gemini-2.5-pro":             (1.25, 10.00),
+    "gemini-2.5-flash":           (0.075, 0.30),
+    "gemini-2.0-flash":           (0.075, 0.30),
+
+    # ── OpenAI ───────────────────────────────────────────────────────────────
+    "gpt-4o":                     (2.50, 10.00),
+    "gpt-4o-mini":                (0.15,  0.60),
 }
 
 # Sentinel value returned when model is not in the pricing table.
@@ -49,16 +70,16 @@ _DEFAULT_PRICING: dict[str, tuple[float, float]] = {
 UNKNOWN_COST: float = -1.0
 
 
-def _load_pricing() -> dict[str, tuple[float, float]]:
+def _load_pricing() -> dict[str, _PriceEntry]:
     """Return the merged pricing table (defaults + env override)."""
-    table = dict(_DEFAULT_PRICING)
+    table: dict[str, _PriceEntry] = dict(_DEFAULT_PRICING)
     override_raw = os.getenv("AGENTWEAVE_PRICING_OVERRIDE", "").strip()
     if override_raw:
         try:
             overrides = json.loads(override_raw)
             for model, prices in overrides.items():
-                if isinstance(prices, (list, tuple)) and len(prices) == 2:
-                    table[model.lower()] = (float(prices[0]), float(prices[1]))
+                if isinstance(prices, (list, tuple)) and len(prices) in (2, 4):
+                    table[model.lower()] = tuple(float(p) for p in prices)  # type: ignore[assignment]
         except (json.JSONDecodeError, ValueError, TypeError):
             pass  # Silently ignore malformed overrides
     return table
@@ -81,8 +102,8 @@ def _normalize_model_name(model: str) -> str:
 
 def _find_model_pricing(
     model: str,
-    table: dict[str, tuple[float, float]],
-) -> Optional[tuple[float, float]]:
+    table: dict[str, _PriceEntry],
+) -> Optional[_PriceEntry]:
     """Look up model pricing with exact match first, then partial match.
 
     Returns ``None`` when no match is found.
@@ -105,13 +126,25 @@ def compute_cost(
     model: str,
     input_tokens: int,
     output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> float:
     """Compute USD cost for a single LLM call.
 
+    For Anthropic models with prompt-caching, pass the token breakdown
+    separately so each bucket is priced at the correct rate.
+
     Args:
         model: Model name (provider prefix is stripped automatically).
-        input_tokens: Number of input/prompt tokens consumed.
+        input_tokens: Total prompt tokens (including cache tokens when the
+            caller doesn't separate them).  When *cache_read_tokens* or
+            *cache_write_tokens* are provided, ``input_tokens`` is treated as
+            the **total** and the cache buckets are subtracted to get the
+            uncached portion (floored at 0).
         output_tokens: Number of output/completion tokens generated.
+        cache_read_tokens: Tokens read from the prompt cache (cheaper rate).
+        cache_write_tokens: Tokens written to the prompt cache (slightly higher
+            than regular input for Anthropic).
 
     Returns:
         Cost in USD as a float, or ``UNKNOWN_COST`` (-1.0) if the model
@@ -121,13 +154,43 @@ def compute_cost(
         compute_cost("claude-sonnet-4-6", 1_000_000, 0)     → 3.00
         compute_cost("anthropic/gpt-4o", 1_000_000, 0)      → 2.50
         compute_cost("unknown-model", 100, 50)               → -1.0
+
+        # Cache-aware call (Anthropic):
+        compute_cost(
+            "claude-sonnet-4-6",
+            input_tokens=1_100_000,
+            output_tokens=0,
+            cache_read_tokens=1_000_000,
+            cache_write_tokens=50_000,
+        )
     """
     table = _load_pricing()
     prices = _find_model_pricing(model, table)
     if prices is None:
         return UNKNOWN_COST
 
-    input_price_per_token = prices[0] / 1_000_000
-    output_price_per_token = prices[1] / 1_000_000
+    input_price = prices[0]
+    output_price = prices[1]
 
-    return (input_tokens * input_price_per_token) + (output_tokens * output_price_per_token)
+    if len(prices) == 4 and (cache_read_tokens > 0 or cache_write_tokens > 0):
+        # Cache-aware pricing path (Anthropic models)
+        cache_read_price: float = prices[2]   # type: ignore[index]
+        cache_write_price: float = prices[3]  # type: ignore[index]
+
+        # Uncached input = total prompt tokens minus the cached buckets (≥ 0)
+        uncached_input = max(0, input_tokens - cache_read_tokens - cache_write_tokens)
+
+        cost = (
+            (cache_read_tokens  * cache_read_price  / 1_000_000)
+            + (cache_write_tokens * cache_write_price / 1_000_000)
+            + (uncached_input     * input_price       / 1_000_000)
+            + (output_tokens      * output_price      / 1_000_000)
+        )
+    else:
+        # Simple (non-cache) pricing path
+        cost = (
+            (input_tokens  * input_price  / 1_000_000)
+            + (output_tokens * output_price / 1_000_000)
+        )
+
+    return cost

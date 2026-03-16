@@ -67,9 +67,57 @@ class TestComputeCost:
 
     def test_gemini_2_5_flash_pricing(self):
         from agentweave.pricing import compute_cost
-        # gemini-2.5-flash: $0.30 input / $2.50 output per 1M
+        # gemini-2.5-flash: $0.075 input / $0.30 output per 1M
         cost = compute_cost("gemini-2.5-flash", input_tokens=1_000_000, output_tokens=0)
+        assert abs(cost - 0.075) < 1e-9
+
+    def test_gemini_2_0_flash_pricing(self):
+        from agentweave.pricing import compute_cost
+        # gemini-2.0-flash: $0.075 input / $0.30 output per 1M
+        cost = compute_cost("gemini-2.0-flash", input_tokens=1_000_000, output_tokens=0)
+        assert abs(cost - 0.075) < 1e-9
+
+    def test_compute_cost_cache_aware_sonnet(self):
+        from agentweave.pricing import compute_cost
+        # claude-sonnet-4-6: $0.30/1M cache_read, $3.75/1M cache_write, $3.00/1M uncached input, $15/1M output
+        # 1M cache_read + 0 write + 0 uncached + 0 output = $0.30
+        cost = compute_cost(
+            "claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            cache_read_tokens=1_000_000,
+        )
         assert abs(cost - 0.30) < 1e-9
+
+    def test_compute_cost_cache_write_sonnet(self):
+        from agentweave.pricing import compute_cost
+        # 1M cache_write + 0 read + 0 uncached = $3.75
+        cost = compute_cost(
+            "claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            cache_write_tokens=1_000_000,
+        )
+        assert abs(cost - 3.75) < 1e-9
+
+    def test_compute_cost_full_cache_breakdown(self):
+        from agentweave.pricing import compute_cost
+        # 100k cache_read + 10k cache_write + 40k uncached input + 20k output
+        # total prompt = 150k → uncached = 150k - 100k - 10k = 40k
+        cost = compute_cost(
+            "claude-sonnet-4-6",
+            input_tokens=150_000,
+            output_tokens=20_000,
+            cache_read_tokens=100_000,
+            cache_write_tokens=10_000,
+        )
+        expected = (
+            100_000 * 0.30  / 1_000_000   # cache_read
+            + 10_000 * 3.75  / 1_000_000  # cache_write
+            + 40_000 * 3.00  / 1_000_000  # uncached input
+            + 20_000 * 15.00 / 1_000_000  # output
+        )
+        assert abs(cost - expected) < 1e-9
 
     def test_partial_match_versioned_model(self):
         """A versioned model name like 'claude-sonnet-4-6-20250101' should partially match."""
@@ -187,7 +235,8 @@ class TestProxyCostAttrs:
         }
         _set_google_response_attrs(span, data, elapsed_ms=20, model="gemini-2.5-flash")
         assert "cost.usd" in span.attrs
-        assert abs(span.attrs["cost.usd"] - 0.30) < 1e-9
+        # gemini-2.5-flash corrected price: $0.075/1M input
+        assert abs(span.attrs["cost.usd"] - 0.075) < 1e-9
 
     def test_unknown_model_cost_is_sentinel(self):
         from agentweave.proxy import _set_anthropic_response_attrs
