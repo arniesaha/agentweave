@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react'
-import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
+import React, { useState, useMemo, useEffect } from 'react'
+import { ChevronDown, ChevronRight, ExternalLink, ChevronLeft } from 'lucide-react'
 import { format } from 'date-fns'
 import { TraceRow } from '../lib/queries'
 
@@ -45,9 +45,14 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 }
 
 export function TraceTable({ traces, loading, error }: TraceTableProps) {
+  const PAGE_SIZE = 25
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [sortKey, setSortKey] = useState<SortKey>('time')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [page, setPage] = useState(0)
+
+  // Reset to first page when traces or sort changes
+  useEffect(() => { setPage(0) }, [traces, sortKey, sortDir])
 
   const sorted = useMemo(() => {
     return [...traces].sort((a, b) => {
@@ -57,6 +62,9 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
       return sortDir === 'asc' ? cmp : -cmp
     })
   }, [traces, sortKey, sortDir])
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE))
+  const pageRows = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
   function handleSort(key: SortKey) {
     if (sortKey === key) {
@@ -132,7 +140,7 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
                 </td>
               </tr>
             ) : (
-              sorted.map((row) => {
+              pageRows.map((row) => {
                 const isOpen = expanded.has(row.traceId)
                 return (
                   <React.Fragment key={row.traceId}>
@@ -209,6 +217,34 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {!loading && !error && sorted.length > PAGE_SIZE && (
+        <div className="px-5 py-3 border-t border-[#1e1e2e] flex items-center justify-between">
+          <span className="text-xs text-gray-500">
+            {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, sorted.length)} of {sorted.length} traces
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-[#1e1e2e] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-xs text-gray-400 px-2">
+              {page + 1} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={page === totalPages - 1}
+              className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-[#1e1e2e] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronDown className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
