@@ -123,11 +123,25 @@ export function traceTool(nameOrOpts?: string | { name?: string; capturesInput?:
 // traceAgent
 // ---------------------------------------------------------------------------
 
+export interface TraceAgentOptions {
+  name?: string;
+  sessionId?: string;
+  parentSessionId?: string;
+  agentType?: 'main' | 'subagent' | 'delegated';
+  turnDepth?: number;
+}
+
 export function traceAgent(name?: string): (fn: (...args: any[]) => any) => (...args: any[]) => any;
-export function traceAgent(opts: { name?: string }): (fn: (...args: any[]) => any) => (...args: any[]) => any;
-export function traceAgent(nameOrOpts?: string | { name?: string }) {
+export function traceAgent(opts: TraceAgentOptions): (fn: (...args: any[]) => any) => (...args: any[]) => any;
+export function traceAgent(nameOrOpts?: string | TraceAgentOptions) {
   const opts = typeof nameOrOpts === 'string' ? { name: nameOrOpts } : (nameOrOpts ?? {});
-  const { name } = opts;
+  const { name, sessionId, agentType, turnDepth } = opts;
+
+  // Resolve parent session: explicit param > env var
+  const parentSessionId = opts.parentSessionId || process.env.AGENTWEAVE_PARENT_SESSION_ID || undefined;
+  // Auto-infer defaults when parent session is set
+  const resolvedAgentType = agentType ?? (parentSessionId ? schema.AGENT_TYPE_SUBAGENT : undefined);
+  const resolvedTurnDepth = turnDepth ?? (parentSessionId ? 2 : undefined);
 
   return (fn: (...args: any[]) => any) => {
     const spanName = `${schema.SPAN_PREFIX_AGENT}.${name ?? fn.name}`;
@@ -136,6 +150,19 @@ export function traceAgent(nameOrOpts?: string | { name?: string }) {
         span.setAttribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN);
         for (const [k, v] of Object.entries(getConfigAttrs())) {
           span.setAttribute(k, v);
+        }
+        if (sessionId) {
+          span.setAttribute(schema.SESSION_ID, sessionId);
+          span.setAttribute(schema.PROV_SESSION_ID, sessionId);
+        }
+        if (parentSessionId) {
+          span.setAttribute(schema.PROV_PARENT_SESSION_ID, parentSessionId);
+        }
+        if (resolvedAgentType) {
+          span.setAttribute(schema.PROV_AGENT_TYPE, resolvedAgentType);
+        }
+        if (resolvedTurnDepth != null) {
+          span.setAttribute(schema.PROV_SESSION_TURN, resolvedTurnDepth);
         }
 
         const result = fn(...args);

@@ -46,6 +46,15 @@ PROV_SESSION_ID = "prov.session.id"
 PROV_PROJECT = "prov.project"
 PROV_SESSION_TURN = "prov.session.turn"
 
+# Sub-agent attribution — parent-child trace linking (issue #15)
+PROV_PARENT_SESSION_ID = "prov.parent.session.id"  # ID of parent session that spawned this sub-agent
+PROV_AGENT_TYPE = "prov.agent.type"                 # "main" | "subagent" | "delegated"
+
+# Agent type constants
+AGENT_TYPE_MAIN = "main"
+AGENT_TYPE_SUBAGENT = "subagent"
+AGENT_TYPE_DELEGATED = "delegated"
+
 # session.id — canonical session attribute (dual-emitted alongside prov.session.id)
 # Set via @trace_agent(session_id=...) or X-AgentWeave-Session-Id proxy header.
 SESSION_ID = "session.id"

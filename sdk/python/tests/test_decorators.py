@@ -491,6 +491,104 @@ class TestTraceLlm:
         llm_attrs = dict(llm_span.attributes)
         assert llm_attrs["prov.llm.total_tokens"] == 250
 
+class TestTraceAgentSubAgentAttribution:
+    """Tests for @trace_agent sub-agent attribution (issue #15)."""
+
+    def test_parent_session_id_sets_attribute(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="sub_agent", parent_session_id="sess-parent-123")
+        def handle(msg: str) -> str:
+            return "response"
+
+        handle("hello")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert attrs[schema.PROV_PARENT_SESSION_ID] == "sess-parent-123"
+        # Should auto-default to "subagent" type and turn_depth=2
+        assert attrs[schema.PROV_AGENT_TYPE] == "subagent"
+        assert attrs[schema.PROV_SESSION_TURN] == 2
+
+    def test_explicit_agent_type_and_turn_depth(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="delegated_agent", parent_session_id="sess-parent-456",
+                     agent_type="delegated", turn_depth=3)
+        def handle(msg: str) -> str:
+            return "response"
+
+        handle("hello")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert attrs[schema.PROV_PARENT_SESSION_ID] == "sess-parent-456"
+        assert attrs[schema.PROV_AGENT_TYPE] == "delegated"
+        assert attrs[schema.PROV_SESSION_TURN] == 3
+
+    def test_main_agent_type_without_parent(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="main_agent", agent_type="main", turn_depth=1)
+        def handle(msg: str) -> str:
+            return "response"
+
+        handle("hello")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert schema.PROV_PARENT_SESSION_ID not in attrs
+        assert attrs[schema.PROV_AGENT_TYPE] == "main"
+        assert attrs[schema.PROV_SESSION_TURN] == 1
+
+    def test_env_var_auto_populates_parent_session(self, _setup_test_tracer, monkeypatch):
+        exporter, _ = _setup_test_tracer
+        monkeypatch.setenv("AGENTWEAVE_PARENT_SESSION_ID", "sess-env-parent")
+
+        @trace_agent(name="env_sub_agent")
+        def handle(msg: str) -> str:
+            return "response"
+
+        handle("hello")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert attrs[schema.PROV_PARENT_SESSION_ID] == "sess-env-parent"
+        assert attrs[schema.PROV_AGENT_TYPE] == "subagent"
+        assert attrs[schema.PROV_SESSION_TURN] == 2
+
+    def test_no_subagent_attrs_when_not_provided(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="plain_agent")
+        def handle(msg: str) -> str:
+            return "response"
+
+        handle("hello")
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert schema.PROV_PARENT_SESSION_ID not in attrs
+        assert schema.PROV_AGENT_TYPE not in attrs
+
+    def test_async_agent_with_parent_session(self, _setup_test_tracer):
+        exporter, _ = _setup_test_tracer
+
+        @trace_agent(name="async_sub", parent_session_id="sess-async-parent",
+                     agent_type="subagent", turn_depth=2)
+        async def handle(msg: str) -> str:
+            return "async response"
+
+        import asyncio
+        asyncio.run(handle("hi"))
+
+        spans = exporter.get_finished_spans()
+        attrs = dict(spans[0].attributes)
+        assert attrs[schema.PROV_PARENT_SESSION_ID] == "sess-async-parent"
+        assert attrs[schema.PROV_AGENT_TYPE] == "subagent"
+        assert attrs[schema.PROV_SESSION_TURN] == 2
+
+
 class TestTraceAgentDeterministicTraceId:
     """Tests for @trace_agent traceId parameter (deterministic trace IDs)."""
 
