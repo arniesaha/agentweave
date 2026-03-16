@@ -140,6 +140,31 @@ export ANTHROPIC_BASE_URL=http://localhost:4000
 
 The proxy never stores API keys — it forwards `x-api-key` from the calling agent to Anthropic unchanged. The `Authorization: Bearer` header is the proxy access token only and is stripped before forwarding.
 
+## Sub-agent Proxy (Nix)
+
+Nix (the NAS Claude Code agent) uses two proxy instances to separate main session traces from sub-agent traces:
+
+| Proxy | NodePort | AGENTWEAVE_AGENT_ID | Purpose |
+|---|---|---|---|
+| agentweave-proxy-nodeport | 30400 | nix-v1 | Main session |
+| agentweave-proxy-nix-subagent-nodeport | 30402 | nix-subagent-v1 | Sub-agents (worktree agents) |
+
+When spawning Claude Code sub-agents, set:
+
+```bash
+export ANTHROPIC_BASE_URL=http://192.168.1.70:30402/v1
+```
+
+This ensures sub-agent traces are tagged with `nix-subagent-v1` and can be filtered separately in the dashboard.
+
+### Deploy sub-agent proxy
+
+```bash
+kubectl apply -f deploy/k8s/nix-subagent-proxy-configmap.yaml
+kubectl apply -f deploy/k8s/nix-subagent-proxy-deployment.yaml
+kubectl apply -f deploy/k8s/nix-subagent-proxy-service.yaml
+```
+
 ## Update configmap
 
 ```bash
