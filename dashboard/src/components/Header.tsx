@@ -29,22 +29,20 @@ export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, t
         </div>
       )}
       <header className="sticky top-0 z-50 bg-[#0a0a0f]/95 backdrop-blur border-b border-[#1e1e2e] px-6 py-4">
-        <div className="max-w-screen-2xl mx-auto flex items-center justify-between gap-4">
+        <div className="max-w-screen-2xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
           {/* Logo */}
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
-                <Zap className="w-4 h-4 text-white" />
-              </div>
-              <div>
-                <div className="text-white font-bold text-lg leading-none">AgentWeave</div>
-                <div className="text-gray-500 text-xs leading-none mt-0.5">Agent Activity Dashboard</div>
-              </div>
+          <div className="flex items-center gap-2 sm:flex-shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+              <Zap className="w-4 h-4 text-white" />
+            </div>
+            <div>
+              <div className="text-white font-bold text-lg leading-none">AgentWeave</div>
+              <div className="text-gray-500 text-xs leading-none mt-0.5">Agent Activity Dashboard</div>
             </div>
           </div>
 
           {/* Right controls */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:ml-auto">
             {lastUpdated && (
               <span className="text-gray-500 text-xs hidden sm:block">
                 Updated {formatDistanceToNow(lastUpdated, { addSuffix: true })}
@@ -52,7 +50,7 @@ export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, t
             )}
 
             {/* Time range selector */}
-            <div className="flex items-center bg-[#111118] border border-[#1e1e2e] rounded-lg overflow-hidden">
+            <div className="flex items-center bg-[#111118] border border-[#1e1e2e] rounded-lg overflow-hidden text-nowrap">
               {TIME_RANGES.map((r) => (
                 <button
                   key={r.value}
