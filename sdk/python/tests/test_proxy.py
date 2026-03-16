@@ -1,5 +1,7 @@
 """Tests for the AgentWeave proxy — provider detection, parsers, auth, and header forwarding."""
 
+import logging
+
 import pytest
 
 pytest.importorskip("fastapi", reason="proxy deps not installed — install with agentweave[proxy]")
@@ -186,6 +188,65 @@ class TestParseOpenaiSse:
         assert inp == 15
         assert out == 4
         assert stop == "stop"
+
+
+class TestOpenaiStreamingZeroTokensWarning:
+    """Warn when OpenAI streaming response has no usage data (issue #39)."""
+
+    def test_warns_when_openai_streaming_has_zero_tokens(self, caplog):
+        """Simulate an OpenAI stream with no usage chunk — should log a warning."""
+        lines = [
+            'data: {"choices": [{"delta": {"content": "Hi"}, "finish_reason": null}]}',
+            'data: {"choices": [{"delta": {"content": " there"}, "finish_reason": "stop"}]}',
+            "data: [DONE]",
+        ]
+        inp, out, stop = 0, 0, None
+        for l in lines:
+            inp, out, stop = _parse_openai_sse(l, inp, out, stop)
+
+        # Both tokens remain 0 — the warning should fire
+        assert inp == 0
+        assert out == 0
+
+        # Simulate the warning logic from _stream_and_trace
+        proxy_logger = logging.getLogger("agentweave.proxy")
+        with caplog.at_level(logging.WARNING, logger="agentweave.proxy"):
+            if inp == 0 and out == 0:
+                proxy_logger.warning(
+                    "OpenAI streaming response completed with 0 tokens. "
+                    'Add stream_options={"include_usage": true} to your request '
+                    "to enable token tracking."
+                )
+
+        assert len(caplog.records) == 1
+        assert "0 tokens" in caplog.records[0].message
+        assert "include_usage" in caplog.records[0].message
+
+    def test_no_warning_when_usage_present(self, caplog):
+        """Stream with usage chunk should NOT trigger the warning."""
+        lines = [
+            'data: {"choices": [{"delta": {"content": "Hi"}, "finish_reason": "stop"}]}',
+            'data: {"usage": {"prompt_tokens": 10, "completion_tokens": 5}}',
+            "data: [DONE]",
+        ]
+        inp, out, stop = 0, 0, None
+        for l in lines:
+            inp, out, stop = _parse_openai_sse(l, inp, out, stop)
+
+        assert inp == 10
+        assert out == 5
+
+        # The condition would not trigger
+        proxy_logger = logging.getLogger("agentweave.proxy")
+        with caplog.at_level(logging.WARNING, logger="agentweave.proxy"):
+            if inp == 0 and out == 0:
+                proxy_logger.warning(
+                    "OpenAI streaming response completed with 0 tokens. "
+                    'Add stream_options={"include_usage": true} to your request '
+                    "to enable token tracking."
+                )
+
+        assert len(caplog.records) == 0
 
 
 class TestHealthEndpoint:

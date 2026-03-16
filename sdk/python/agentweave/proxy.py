@@ -421,6 +421,14 @@ async def _stream_and_trace(
         if input_tokens > 0 or output_tokens > 0:
             span.set_attribute(schema.COST_USD, compute_cost(model, input_tokens, output_tokens))
 
+        # Warn when OpenAI streaming completes with no token usage data
+        if provider == "openai" and input_tokens == 0 and output_tokens == 0:
+            logger.warning(
+                "OpenAI streaming response completed with 0 tokens. "
+                'Add stream_options={"include_usage": true} to your request '
+                "to enable token tracking."
+            )
+
         # OTel gen_ai.* dual-emit for streaming responses
         span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
         span.set_attribute(schema.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
