@@ -82,6 +82,108 @@
   },
   "panels": [
     {
+      "id": 1,
+      "title": "Total LLM Calls",
+      "type": "stat",
+      "datasource": {
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
+          "tableType": "traces",
+          "limit": 10000,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "unit": "none",
+          "displayName": "LLM Calls"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 4,
+      "title": "Total LLM Time",
+      "type": "stat",
+      "datasource": {
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" }",
+          "tableType": "traces",
+          "limit": 10000,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/.*duration.*/",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          },
+          "unit": "ms",
+          "displayName": "Total LLM Time"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      }
+    },
+    {
       "id": 2,
       "title": "Avg Latency",
       "type": "stat",
