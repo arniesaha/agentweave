@@ -21,7 +21,7 @@ export function useTempoSearch(query: string, timeRange: TimeRange, refreshKey: 
       const { start, end } = getTimeRangeBounds(timeRange)
       const params = new URLSearchParams({
         q: query,
-        limit: '50',
+        limit: '1000',
         start: String(start),
         end: String(end),
       })

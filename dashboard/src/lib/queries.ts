@@ -35,25 +35,18 @@ export function getStepForRange(range: TimeRange): number {
 export const TEMPO_SERVICE = 'agentweave-proxy'
 
 export function tempoSearchQuery(): string {
-  return `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }`
-}
-
-export function tempoCostMetricQuery(): string {
-  return `{ resource.service.name = "${TEMPO_SERVICE}" } | sum_over_time(span.cost.usd)`
-}
-
-export function tempoCacheHitQuery(): string {
-  return `{ resource.service.name = "${TEMPO_SERVICE}" } | avg_over_time(span.cache.hit_rate)`
-}
-
-export function tempoTurnCountQuery(): string {
-  return `{ resource.service.name = "${TEMPO_SERVICE}" } | avg_over_time(span.agent.turn_count)`
+  // select() fetches span attributes; used for both trace table and stat card aggregation
+  return (
+    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
+    ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id)`
+  )
 }
 
 // ─── Prometheus Queries ───────────────────────────────────────────────────────
 
 export function promLLMCallsRateQuery(): string {
-  return `rate(traces_spanmetrics_calls_total{service="${TEMPO_SERVICE}"}[5m]) * 300`
+  return `sum by (prov_llm_model) (rate(traces_spanmetrics_calls_total{service="${TEMPO_SERVICE}"}[5m])) * 300`
 }
 
 export function promCallsByModelQuery(range: TimeRange): string {
@@ -150,6 +143,7 @@ export interface TraceRow {
   tokensIn: number
   tokensOut: number
   costUsd: number
+  cacheHitRate: number
   sessionId: string
   attributes: Record<string, string>
 }
@@ -182,15 +176,21 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
         v.stringValue ?? (v.intValue !== undefined ? String(v.intValue) : String(v.doubleValue ?? ''))
     })
 
+    // Fall back to parsing model from root trace name (e.g. "llm.claude-sonnet-4-6")
+    const modelFromName = t.rootTraceName?.startsWith('llm.')
+      ? t.rootTraceName.slice(4)
+      : ''
+
     return {
       traceId: t.traceID,
       time: parseInt(t.startTimeUnixNano) / 1e6,
-      model: getSpanAttr(attrs, 'llm.model') || getSpanAttr(attrs, 'prov.llm.model') || 'unknown',
+      model: getSpanAttr(attrs, 'prov.llm.model') || modelFromName || 'unknown',
       latencyMs: span ? span.durationNanos / 1e6 : t.durationMs,
-      tokensIn: parseInt(getSpanAttr(attrs, 'llm.usage.prompt_tokens') || '0'),
-      tokensOut: parseInt(getSpanAttr(attrs, 'llm.usage.completion_tokens') || '0'),
-      costUsd: parseFloat(getSpanAttr(attrs, 'span.cost.usd') || '0'),
-      sessionId: getSpanAttr(attrs, 'session.id') || getSpanAttr(attrs, 'agent.session_id') || '—',
+      tokensIn: parseInt(getSpanAttr(attrs, 'prov.llm.prompt_tokens') || '0'),
+      tokensOut: parseInt(getSpanAttr(attrs, 'prov.llm.completion_tokens') || '0'),
+      costUsd: parseFloat(getSpanAttr(attrs, 'cost.usd') || '0'),
+      cacheHitRate: parseFloat(getSpanAttr(attrs, 'cache.hit_rate') || '0'),
+      sessionId: getSpanAttr(attrs, 'session.id') || '—',
       attributes: allAttrs,
     }
   })
@@ -213,4 +213,25 @@ export function extractLastTempoMetricValue(result: TempoMetricResult | null): n
     }
   }
   return total
+}
+
+// ─── Trace-derived aggregations ──────────────────────────────────────────────
+
+/** Bucket trace costs into a time series for the cost-over-time chart. */
+export function buildCostTimeSeries(
+  traces: TraceRow[],
+  timeRange: TimeRange
+): Array<{ label: string; points: Array<{ time: number; value: number }> }> {
+  if (!traces.length) return []
+  const stepMs = getStepForRange(timeRange) * 1000
+  const buckets = new Map<number, number>()
+  for (const t of traces) {
+    if (t.costUsd <= 0) continue
+    const bucket = Math.floor(t.time / stepMs) * stepMs
+    buckets.set(bucket, (buckets.get(bucket) ?? 0) + t.costUsd)
+  }
+  const points = Array.from(buckets.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([time, value]) => ({ time, value }))
+  return points.length ? [{ label: 'Cost USD', points }] : []
 }

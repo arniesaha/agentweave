@@ -8,16 +8,13 @@ import { TraceTable } from './components/TraceTable'
 import {
   TimeRange,
   tempoSearchQuery,
-  tempoCostMetricQuery,
-  tempoCacheHitQuery,
-  tempoTurnCountQuery,
   promLLMCallsRateQuery,
   promCallsByModelQuery,
   promP95LatencyByModelQuery,
   transformTempoTraces,
-  extractLastTempoMetricValue,
+  buildCostTimeSeries,
 } from './lib/queries'
-import { useTempoSearch, useTempoSearchCount, useTempoMetrics } from './hooks/useTempo'
+import { useTempoSearch, useTempoSearchCount } from './hooks/useTempo'
 import { usePromQueryRange, usePromQueryInstant } from './hooks/usePrometheus'
 
 const REFRESH_INTERVAL_MS = 60_000 // 60s
@@ -52,33 +49,46 @@ export default function App() {
     setLastUpdated(new Date())
   }, [])
 
+  // ─── Trace data (drives table + stat card aggregations) ──────────────────
+
+  // Fetch up to 1000 traces with span attributes (used for table AND stat aggregation)
+  const { traces: rawTraces, loading: tracesLoading, error: tracesError } =
+    useTempoSearch(tempoSearchQuery(), timeRange, refreshKey)
+
+  const traceRows = transformTempoTraces(rawTraces)
+
   // ─── Stat Card Data ───────────────────────────────────────────────────────
 
-  // 1. Total LLM Calls
+  // 1. Total LLM Calls (separate high-limit query for accurate count)
   const { count: llmCallCount, loading: llmCallLoading, error: llmCallError } =
     useTempoSearchCount(tempoSearchQuery(), timeRange, refreshKey)
 
-  // 2. Total Cost
-  const { result: costResult, loading: costLoading, error: costError } =
-    useTempoMetrics(tempoCostMetricQuery(), timeRange, refreshKey)
+  // 2. Total Cost — summed from trace attributes
+  const costValue = tracesLoading ? null : traceRows.reduce((s, t) => s + t.costUsd, 0)
 
-  // 3. Cache Hit Rate
-  const { result: cacheResult, loading: cacheLoading, error: cacheError } =
-    useTempoMetrics(tempoCacheHitQuery(), timeRange, refreshKey)
+  // 3. Avg Cache Hit Rate — averaged across traces that have the attribute
+  const tracesWithCache = traceRows.filter((t) => t.cacheHitRate > 0)
+  const cacheValue = tracesLoading
+    ? null
+    : tracesWithCache.length > 0
+      ? tracesWithCache.reduce((s, t) => s + t.cacheHitRate, 0) / tracesWithCache.length
+      : null
 
-  // 4. Avg Turns/Task
-  const { result: turnResult, loading: turnLoading, error: turnError } =
-    useTempoMetrics(tempoTurnCountQuery(), timeRange, refreshKey)
+  // 4. Avg Latency — computed from trace durations
+  const avgLatencyValue = tracesLoading
+    ? null
+    : traceRows.length > 0
+      ? traceRows.reduce((s, t) => s + t.latencyMs, 0) / traceRows.length
+      : null
 
   // ─── Time Series Data ─────────────────────────────────────────────────────
 
-  // 5. LLM Calls over Time
+  // 5. LLM Calls over Time (Prometheus spanmetrics, grouped by model)
   const { series: callsSeries, loading: callsSeriesLoading, error: callsSeriesError } =
-    usePromQueryRange(promLLMCallsRateQuery(), timeRange, refreshKey)
+    usePromQueryRange(promLLMCallsRateQuery(), timeRange, refreshKey, 'prov_llm_model')
 
-  // 6. Cost over Time (Tempo metrics)
-  const { result: costSeries, loading: costSeriesLoading, error: costSeriesError } =
-    useTempoMetrics(tempoCostMetricQuery(), timeRange, refreshKey)
+  // 6. Cost over Time — bucketed directly from trace data
+  const costChartSeries = buildCostTimeSeries(traceRows, timeRange)
 
   // ─── Bar Chart Data ───────────────────────────────────────────────────────
 
@@ -90,40 +100,8 @@ export default function App() {
   const { bars: latencyByModel, loading: latencyByModelLoading, error: latencyByModelError } =
     usePromQueryInstant(promP95LatencyByModelQuery(), timeRange, refreshKey, 'prov_llm_model')
 
-  // ─── Trace Table ──────────────────────────────────────────────────────────
-
-  // 9. Recent traces
-  const { traces: rawTraces, loading: tracesLoading, error: tracesError } =
-    useTempoSearch(tempoSearchQuery(), timeRange, refreshKey)
-
-  const traceRows = transformTempoTraces(rawTraces)
-
-  // ─── Derived values ───────────────────────────────────────────────────────
-
-  const costValue = extractLastTempoMetricValue(costResult)
-  const cacheValue = extractLastTempoMetricValue(cacheResult)
-  const turnValue = extractLastTempoMetricValue(turnResult)
-
-  // Convert cost Tempo series to recharts format
-  const costChartSeries: Array<{ label: string; points: Array<{ time: number; value: number }> }> = []
-  if (costSeries?.series?.length) {
-    const allPoints: Array<{ time: number; value: number }> = []
-    costSeries.series.forEach((s) => {
-      s.samples.forEach((sample) => {
-        allPoints.push({
-          time: sample.timestamp_ms,
-          value: parseFloat(sample.value) || 0,
-        })
-      })
-    })
-    allPoints.sort((a, b) => a.time - b.time)
-    if (allPoints.length > 0) {
-      costChartSeries.push({ label: 'Cost USD', points: allPoints })
-    }
-  }
-
-  // Any Tempo error
-  const tempoError = !!(llmCallError || costError || cacheError || turnError || tracesError)
+  // Tempo error flag — only true when the core trace search fails
+  const tempoError = !!(llmCallError || tracesError)
 
   return (
     <div className="min-h-screen bg-[#0a0a0f]">
@@ -153,26 +131,26 @@ export default function App() {
             iconBg="bg-emerald-500/10"
             label="Total Cost (USD)"
             value={costValue !== null ? `$${costValue.toFixed(4)}` : null}
-            loading={costLoading}
-            error={costError}
+            loading={tracesLoading}
+            error={tracesError}
           />
           <StatCard
             icon={Zap}
             iconColor="text-amber-400"
             iconBg="bg-amber-500/10"
-            label="Cache Hit Rate"
+            label="Avg Cache Hit Rate"
             value={cacheValue !== null ? `${(cacheValue * 100).toFixed(1)}%` : null}
-            loading={cacheLoading}
-            error={cacheError}
+            loading={tracesLoading}
+            error={tracesError}
           />
           <StatCard
             icon={RefreshCw}
             iconColor="text-cyan-400"
             iconBg="bg-cyan-500/10"
-            label="Avg Turns / Task"
-            value={turnValue !== null ? turnValue.toFixed(1) : null}
-            loading={turnLoading}
-            error={turnError}
+            label="Avg Latency"
+            value={avgLatencyValue !== null ? `${(avgLatencyValue / 1000).toFixed(1)}s` : null}
+            loading={tracesLoading}
+            error={tracesError}
           />
         </div>
 
@@ -189,10 +167,10 @@ export default function App() {
           />
           <TimeSeriesChart
             title="Cost over Time (USD)"
-            subtitle="Cumulative cost per bucket"
+            subtitle="Cost per time bucket"
             series={costChartSeries}
-            loading={costSeriesLoading}
-            error={costSeriesError}
+            loading={tracesLoading}
+            error={tracesError}
             type="area"
             valueFormatter={(v) => `$${v.toFixed(4)}`}
           />
