@@ -39,7 +39,7 @@ export function tempoSearchQuery(): string {
   return (
     `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
-    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent_id)`
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id)`
   )
 }
 
@@ -204,7 +204,7 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
       costUsd: parseFloat(getSpanAttr(attrs, 'cost.usd') || '0'),
       cacheHitRate: parseFloat(getSpanAttr(attrs, 'cache.hit_rate') || '0'),
       sessionId: getSpanAttr(attrs, 'session.id') || '—',
-      agentId: getSpanAttr(attrs, 'prov.agent_id') || 'unknown',
+      agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
       attributes: allAttrs,
     }
   })
@@ -236,7 +236,7 @@ export function tempoSessionQuery(sessionId: string): string {
   return (
     `{ resource.service.name = "${TEMPO_SERVICE}" && span.session.id = "${sessionId}" }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
-    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent_id)`
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id)`
   )
 }
 
