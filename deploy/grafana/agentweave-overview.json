@@ -92,18 +92,18 @@
         "h": 4
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "cffj9et53r9j4f"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
       "targets": [
         {
           "datasource": {
-            "type": "tempo",
-            "uid": "cffj9et53r9j4f"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
-          "queryType": "traceqlmetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" } | count_over_time() by (resource.service.name)",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum(increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\"}[$__range]))",
+          "legendFormat": "LLM Calls"
         }
       ],
       "transformations": [],
@@ -281,18 +281,18 @@
         "h": 4
       },
       "datasource": {
-        "type": "tempo",
-        "uid": "cffj9et53r9j4f"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
       "targets": [
         {
           "datasource": {
-            "type": "tempo",
-            "uid": "cffj9et53r9j4f"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
-          "queryType": "traceqlmetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" } | count_over_time() by (resource.service.name)",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum(increase(traces_spanmetrics_latency_sum{service=\"agentweave-proxy\"}[$__range])) * 1000",
+          "legendFormat": "Total LLM Time"
         }
       ],
       "transformations": [],
