@@ -5,16 +5,21 @@ import { StatCard } from './components/StatCard'
 import { TimeSeriesChart } from './components/TimeSeriesChart'
 import { BarChartPanel } from './components/BarChart'
 import { TraceTable } from './components/TraceTable'
+import { AgentAttribution } from './components/AgentAttribution'
 import {
   TimeRange,
   tempoSearchQuery,
   tempoCostTimeSeriesQuery,
+  tempoAgentAttributionQuery,
+  tempoSubagentSearchQuery,
   promLLMCallsRateQuery,
   promCallsByModelQuery,
   promP95LatencyByModelQuery,
   promCallsByAgentQuery,
   transformTempoTraces,
   transformTempoCostSeries,
+  transformAgentAttributionTraces,
+  transformSubagentTraces,
   buildCostTimeSeries,
   buildCostByAgent,
 } from './lib/queries'
@@ -120,6 +125,20 @@ export default function App() {
 
   // 10. Cost by Agent — derived from trace rows (no extra fetch needed)
   const costByAgent = buildCostByAgent(traceRows)
+
+  // ─── Agent Attribution Data ─────────────────────────────────────────────────
+
+  // 11. Agent attribution traces (prov.agent.type, prov.parent.session.id, etc.)
+  const { traces: rawAttribution, loading: attrLoading, error: attrError } =
+    useTempoSearch(tempoAgentAttributionQuery(), timeRange, refreshKey)
+
+  const attributionRows = transformAgentAttributionTraces(rawAttribution)
+
+  // 12. Sub-agent only traces
+  const { traces: rawSubagent, loading: subagentLoading, error: subagentError } =
+    useTempoSearch(tempoSubagentSearchQuery(), timeRange, refreshKey)
+
+  const subagentRows = transformSubagentTraces(rawSubagent)
 
   // Tempo error flag — only true when the core trace search fails
   const tempoError = !!(llmCallError || tracesError)
@@ -237,7 +256,17 @@ export default function App() {
           />
         </div>
 
-        {/* Row 4: Trace Table */}
+        {/* Agent Attribution Section */}
+        <AgentAttribution
+          attributionRows={attributionRows}
+          attributionLoading={attrLoading}
+          attributionError={attrError}
+          subagentRows={subagentRows}
+          subagentLoading={subagentLoading}
+          subagentError={subagentError}
+        />
+
+        {/* Row 5: Trace Table */}
         <TraceTable
           traces={traceRows}
           loading={tracesLoading}

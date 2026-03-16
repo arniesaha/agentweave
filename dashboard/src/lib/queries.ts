@@ -276,6 +276,149 @@ export function transformTempoCostSeries(
   return [{ label: 'Cost USD', points }]
 }
 
+// ─── Agent Attribution queries ────────────────────────────────────────────────
+
+/** TraceQL search selecting sub-agent attribution attributes. */
+export function tempoAgentAttributionQuery(): string {
+  return (
+    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
+    ` | select(span.prov.agent.type, span.prov.parent.session.id, span.prov.session.turn,` +
+    ` span.session.id, span.cost.usd, span.prov.agent.id)`
+  )
+}
+
+/** TraceQL search for sub-agent spans only. */
+export function tempoSubagentSearchQuery(): string {
+  return (
+    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.agent.type = "subagent" }` +
+    ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
+    ` span.prov.llm.completion_tokens, span.prov.parent.session.id, span.session.id,` +
+    ` span.prov.agent.id, span.prov.agent.type)`
+  )
+}
+
+// ─── Agent Attribution types & transformers ──────────────────────────────────
+
+export interface AgentAttributionRow {
+  traceId: string
+  time: number
+  agentType: string
+  parentSessionId: string
+  sessionTurn: number
+  sessionId: string
+  costUsd: number
+  agentId: string
+}
+
+export function transformAgentAttributionTraces(traces: TempoSpan[]): AgentAttributionRow[] {
+  return traces.map((t) => {
+    const spans = t.spanSets?.[0]?.spans ?? t.spanSet?.spans ?? []
+    const span = spans[0]
+    const attrs = span?.attributes ?? []
+    return {
+      traceId: t.traceID,
+      time: parseInt(t.startTimeUnixNano) / 1e6,
+      agentType: getSpanAttr(attrs, 'prov.agent.type') || 'unknown',
+      parentSessionId: getSpanAttr(attrs, 'prov.parent.session.id'),
+      sessionTurn: parseInt(getSpanAttr(attrs, 'prov.session.turn') || '0'),
+      sessionId: getSpanAttr(attrs, 'session.id') || '',
+      costUsd: parseFloat(getSpanAttr(attrs, 'cost.usd') || '0'),
+      agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
+    }
+  })
+}
+
+/** Group agent attribution rows by prov.agent.type and return counts. */
+export function buildCallsByAgentType(
+  rows: AgentAttributionRow[]
+): Array<{ label: string; value: number }> {
+  const map = new Map<string, number>()
+  for (const r of rows) {
+    if (!r.agentType || r.agentType === 'unknown') continue
+    map.set(r.agentType, (map.get(r.agentType) ?? 0) + 1)
+  }
+  return Array.from(map.entries())
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value)
+}
+
+export interface SessionOverviewRow {
+  sessionId: string
+  agentType: string
+  callCount: number
+  totalCost: number
+  hasSubAgents: boolean
+  lastActive: number
+}
+
+/** Group agent attribution rows by session.id for the session overview table. */
+export function buildSessionOverview(rows: AgentAttributionRow[]): SessionOverviewRow[] {
+  const map = new Map<string, {
+    agentType: string
+    callCount: number
+    totalCost: number
+    hasSubAgents: boolean
+    lastActive: number
+  }>()
+
+  for (const r of rows) {
+    if (!r.sessionId) continue
+    const existing = map.get(r.sessionId)
+    if (existing) {
+      existing.callCount++
+      existing.totalCost += r.costUsd
+      if (r.parentSessionId) existing.hasSubAgents = true
+      if (r.time > existing.lastActive) existing.lastActive = r.time
+    } else {
+      map.set(r.sessionId, {
+        agentType: r.agentType,
+        callCount: 1,
+        totalCost: r.costUsd,
+        hasSubAgents: !!r.parentSessionId,
+        lastActive: r.time,
+      })
+    }
+  }
+
+  return Array.from(map.entries())
+    .map(([sessionId, data]) => ({ sessionId, ...data }))
+    .sort((a, b) => b.lastActive - a.lastActive)
+}
+
+export interface SubagentTraceRow {
+  traceId: string
+  time: number
+  model: string
+  agentId: string
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  sessionId: string
+  parentSessionId: string
+}
+
+export function transformSubagentTraces(traces: TempoSpan[]): SubagentTraceRow[] {
+  return traces.map((t) => {
+    const spans = t.spanSets?.[0]?.spans ?? t.spanSet?.spans ?? []
+    const span = spans[0]
+    const attrs = span?.attributes ?? []
+    const modelFromName = t.rootTraceName?.startsWith('llm.')
+      ? t.rootTraceName.slice(4)
+      : ''
+    return {
+      traceId: t.traceID,
+      time: parseInt(t.startTimeUnixNano) / 1e6,
+      model: getSpanAttr(attrs, 'prov.llm.model') || modelFromName || 'unknown',
+      agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
+      tokensIn: parseInt(getSpanAttr(attrs, 'prov.llm.prompt_tokens') || '0'),
+      tokensOut: parseInt(getSpanAttr(attrs, 'prov.llm.completion_tokens') || '0'),
+      costUsd: parseFloat(getSpanAttr(attrs, 'cost.usd') || '0'),
+      sessionId: getSpanAttr(attrs, 'session.id') || '—',
+      parentSessionId: getSpanAttr(attrs, 'prov.parent.session.id') || '—',
+    }
+  })
+}
+
 // ─── Trace-derived aggregations ──────────────────────────────────────────────
 
 /** Aggregate total cost per agent from trace rows. */
