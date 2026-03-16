@@ -251,17 +251,40 @@ def _make_agent_wrapper(
     fn: Callable, name: str, captures_input: bool, captures_output: bool,
     trace_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    parent_session_id: Optional[str] = None,
+    agent_type: Optional[str] = None,
+    turn_depth: Optional[int] = None,
 ) -> Callable:
     span_name = f"{schema.SPAN_PREFIX_AGENT}.{name}"
 
     # Pre-compute the deterministic context once at decoration time (if provided)
     _det_trace_id_int = _normalize_trace_id(trace_id) if trace_id else None
 
+    # Resolve sub-agent attribution: explicit params take precedence, then env var
+    import os as _os
+    _parent_session_id = parent_session_id or _os.environ.get("AGENTWEAVE_PARENT_SESSION_ID") or None
+    _agent_type = agent_type
+    _turn_depth = turn_depth
+    # Auto-infer agent_type and turn_depth when parent session is set via env var
+    if _parent_session_id and _agent_type is None:
+        _agent_type = schema.AGENT_TYPE_SUBAGENT
+    if _parent_session_id and _turn_depth is None:
+        _turn_depth = 2  # default: first-level sub-agent
+
     def _start_ctx() -> Any:
         """Return an OTel context to use when starting the root agent span."""
         if _det_trace_id_int is not None:
             return _context_for_trace_id(_det_trace_id_int)
         return None  # let OTel use the ambient context
+
+    def _set_subagent_attrs(span: Any) -> None:
+        """Set sub-agent attribution attributes on the span."""
+        if _parent_session_id is not None:
+            span.set_attribute(schema.PROV_PARENT_SESSION_ID, _parent_session_id)
+        if _agent_type is not None:
+            span.set_attribute(schema.PROV_AGENT_TYPE, _agent_type)
+        if _turn_depth is not None:
+            span.set_attribute(schema.PROV_SESSION_TURN, _turn_depth)
 
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
@@ -284,6 +307,7 @@ def _make_agent_wrapper(
                     if session_id is not None:
                         span.set_attribute(schema.SESSION_ID, session_id)
                         span.set_attribute(schema.PROV_SESSION_ID, session_id)
+                    _set_subagent_attrs(span)
                     if captures_input:
                         span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
                     result = await fn(*args, **kwargs)
@@ -315,6 +339,7 @@ def _make_agent_wrapper(
                     if session_id is not None:
                         span.set_attribute(schema.SESSION_ID, session_id)
                         span.set_attribute(schema.PROV_SESSION_ID, session_id)
+                    _set_subagent_attrs(span)
                     if captures_input:
                         span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
                     result = fn(*args, **kwargs)
@@ -329,7 +354,10 @@ def _make_agent_wrapper(
 
 def trace_agent(fn: Optional[Callable] = None, *, name: Optional[str] = None, context=None,
                 captures_input: bool = False, captures_output: bool = False,
-                traceId: Optional[str] = None, session_id: Optional[str] = None):
+                traceId: Optional[str] = None, session_id: Optional[str] = None,
+                parent_session_id: Optional[str] = None,
+                agent_type: Optional[str] = None,
+                turn_depth: Optional[int] = None):
     """Trace an agent turn. Supports bare @trace_agent or @trace_agent(name=...).
 
     Pass ``traceId`` to pin the root span to a deterministic trace ID so that
@@ -340,8 +368,17 @@ def trace_agent(fn: Optional[Callable] = None, *, name: Optional[str] = None, co
     (and ``prov.session.id`` for backward compatibility) so it can be used as
     a filterable dimension in Grafana / Tempo.
 
-    - If *traceId* is already a valid 32-char hex string it is used directly.
-    - Otherwise it is SHA-256 hashed to produce a valid OTel trace ID.
+    **Sub-agent attribution** (issue #15):
+
+    Pass ``parent_session_id`` to link this sub-agent to its parent session.
+    Pass ``agent_type`` to tag the agent role (``"main"``, ``"subagent"``, or
+    ``"delegated"``).  Pass ``turn_depth`` to indicate the nesting level
+    (1 = main session, 2 = first-level sub-agent, etc.).
+
+    If the ``AGENTWEAVE_PARENT_SESSION_ID`` environment variable is set, it is
+    used as the default ``parent_session_id``.  When a parent session is
+    detected (explicit or env var), ``agent_type`` defaults to ``"subagent"``
+    and ``turn_depth`` defaults to ``2``.
 
     Usage::
         @trace_agent
@@ -350,15 +387,13 @@ def trace_agent(fn: Optional[Callable] = None, *, name: Optional[str] = None, co
         @trace_agent(name="nix")
         def handle(msg): ...
 
-        # Deterministic trace ID — safe to retry without creating duplicate traces
-        @trace_agent(traceId="order-abc123-attempt-1")
+        # Sub-agent linked to parent session
+        @trace_agent(name="max", parent_session_id="sess-parent-123",
+                     agent_type="subagent", turn_depth=2)
         def handle(msg): ...
 
-        @trace_agent(traceId="a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")  # 32-char hex
-        def handle(msg): ...
-
-        # Session grouping — all spans from this call share session.id
-        @trace_agent(session_id="conv-abc123")
+        # Auto-detect via env var: AGENTWEAVE_PARENT_SESSION_ID=sess-parent-123
+        @trace_agent(name="max")
         def handle(msg): ...
     """
     if callable(fn):
@@ -370,6 +405,9 @@ def trace_agent(fn: Optional[Callable] = None, *, name: Optional[str] = None, co
             captures_input, captures_output,
             trace_id=traceId,
             session_id=session_id,
+            parent_session_id=parent_session_id,
+            agent_type=agent_type,
+            turn_depth=turn_depth,
         )
 
     return decorator

@@ -90,6 +90,92 @@ describe('traceAgent', () => {
   });
 });
 
+describe('traceAgent — sub-agent attribution', () => {
+  it('sets parent session ID, agent type, and turn depth', async () => {
+    const tracedFn = traceAgent({
+      name: 'subAgent',
+      parentSessionId: 'sess-parent-123',
+      agentType: 'subagent',
+      turnDepth: 2,
+    })(async (arg: string) => arg);
+
+    const result = await tracedFn('hello');
+    expect(result).toBe('hello');
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans.length).toBe(1);
+    expect(spans[0].name).toBe('agent.subAgent');
+    expect(spans[0].attributes[schema.PROV_PARENT_SESSION_ID]).toBe('sess-parent-123');
+    expect(spans[0].attributes[schema.PROV_AGENT_TYPE]).toBe('subagent');
+    expect(spans[0].attributes[schema.PROV_SESSION_TURN]).toBe(2);
+  });
+
+  it('auto-defaults to subagent type when parentSessionId is set', async () => {
+    const tracedFn = traceAgent({
+      name: 'autoSubAgent',
+      parentSessionId: 'sess-parent-auto',
+    })(async () => 'ok');
+
+    await tracedFn();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[schema.PROV_PARENT_SESSION_ID]).toBe('sess-parent-auto');
+    expect(spans[0].attributes[schema.PROV_AGENT_TYPE]).toBe('subagent');
+    expect(spans[0].attributes[schema.PROV_SESSION_TURN]).toBe(2);
+  });
+
+  it('sets session ID on agent span', async () => {
+    const tracedFn = traceAgent({
+      name: 'sessionAgent',
+      sessionId: 'conv-abc123',
+    })(async () => 'ok');
+
+    await tracedFn();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[schema.SESSION_ID]).toBe('conv-abc123');
+    expect(spans[0].attributes[schema.PROV_SESSION_ID]).toBe('conv-abc123');
+  });
+
+  it('does not set sub-agent attrs when not provided', async () => {
+    const tracedFn = traceAgent('plainAgent')(async () => 'ok');
+    await tracedFn();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[schema.PROV_PARENT_SESSION_ID]).toBeUndefined();
+    expect(spans[0].attributes[schema.PROV_AGENT_TYPE]).toBeUndefined();
+  });
+
+  it('sets delegated agent type with custom turn depth', async () => {
+    const tracedFn = traceAgent({
+      name: 'delegatedAgent',
+      parentSessionId: 'sess-parent-del',
+      agentType: 'delegated',
+      turnDepth: 3,
+    })(async () => 'ok');
+
+    await tracedFn();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[schema.PROV_AGENT_TYPE]).toBe('delegated');
+    expect(spans[0].attributes[schema.PROV_SESSION_TURN]).toBe(3);
+  });
+
+  it('reads AGENTWEAVE_PARENT_SESSION_ID from env var', async () => {
+    process.env.AGENTWEAVE_PARENT_SESSION_ID = 'sess-env-parent';
+    try {
+      const tracedFn = traceAgent({ name: 'envAgent' })(async () => 'ok');
+      await tracedFn();
+
+      const spans = exporter.getFinishedSpans();
+      expect(spans[0].attributes[schema.PROV_PARENT_SESSION_ID]).toBe('sess-env-parent');
+      expect(spans[0].attributes[schema.PROV_AGENT_TYPE]).toBe('subagent');
+    } finally {
+      delete process.env.AGENTWEAVE_PARENT_SESSION_ID;
+    }
+  });
+});
+
 describe('traceLlm', () => {
   it('creates a span with provider/model and extracts token counts', async () => {
     const tracedFn = traceLlm({

@@ -73,6 +73,9 @@ _SKIP_HEADERS_ALWAYS = {
     "x-agentweave-turn",
     "x-agentweave-trace-id",
     "x-agentweave-turn-count",
+    "x-agentweave-parent-session-id",
+    "x-agentweave-agent-type",
+    "x-agentweave-turn-depth",
 }
 
 # ---------------------------------------------------------------------------
@@ -260,6 +263,17 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         except (ValueError, TypeError):
             logger.warning("x-agentweave-turn-count is not a valid integer: %r", turn_count_raw)
 
+    # Sub-agent attribution headers (issue #15)
+    parent_session_id: str | None = request.headers.get("x-agentweave-parent-session-id")
+    agent_type: str | None = request.headers.get("x-agentweave-agent-type")
+    turn_depth: int | None = None
+    turn_depth_raw = request.headers.get("x-agentweave-turn-depth")
+    if turn_depth_raw is not None:
+        try:
+            turn_depth = int(turn_depth_raw)
+        except (ValueError, TypeError):
+            logger.warning("x-agentweave-turn-depth is not a valid integer: %r", turn_depth_raw)
+
     forward_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in _SKIP_HEADERS_ALWAYS
@@ -291,6 +305,9 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         det_trace_id_int=det_trace_id_int,
         det_trace_id_raw=det_trace_id_raw,
         turn_count=turn_count,
+        parent_session_id=parent_session_id,
+        agent_type=agent_type,
+        turn_depth=turn_depth,
     )
 
     if is_stream:
@@ -309,6 +326,8 @@ async def _request_and_trace(
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
     det_trace_id_int: int | None = None, det_trace_id_raw: str | None = None,
     turn_count: int | None = None,
+    parent_session_id: str | None = None, agent_type: str | None = None,
+    turn_depth: int | None = None,
 ) -> JSONResponse:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
@@ -317,7 +336,9 @@ async def _request_and_trace(
                            agent_id=agent_id, agent_model=agent_model,
                            path=path, body=body,
                            session_id=session_id, project=project, turn=turn,
-                           det_trace_id_raw=det_trace_id_raw)
+                           det_trace_id_raw=det_trace_id_raw,
+                           parent_session_id=parent_session_id,
+                           agent_type=agent_type, turn_depth=turn_depth)
         if turn_count is not None:
             span.set_attribute(schema.AGENT_TURN_COUNT, turn_count)
         start = time.perf_counter()
@@ -347,6 +368,8 @@ async def _stream_and_trace(
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
     det_trace_id_int: int | None = None, det_trace_id_raw: str | None = None,
     turn_count: int | None = None,
+    parent_session_id: str | None = None, agent_type: str | None = None,
+    turn_depth: int | None = None,
 ) -> AsyncIterator[bytes]:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
@@ -355,7 +378,9 @@ async def _stream_and_trace(
                        agent_id=agent_id, agent_model=agent_model,
                        path=path, body=body,
                        session_id=session_id, project=project, turn=turn,
-                       det_trace_id_raw=det_trace_id_raw)
+                       det_trace_id_raw=det_trace_id_raw,
+                       parent_session_id=parent_session_id,
+                       agent_type=agent_type, turn_depth=turn_depth)
     if turn_count is not None:
         span.set_attribute(schema.AGENT_TURN_COUNT, turn_count)
 
@@ -713,6 +738,8 @@ def _set_request_attrs(
     path: str, body: dict,
     session_id: str | None = None, project: str | None = None, turn: int | None = None,
     det_trace_id_raw: str | None = None,
+    parent_session_id: str | None = None, agent_type: str | None = None,
+    turn_depth: int | None = None,
 ) -> None:
     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
     span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
@@ -731,6 +758,14 @@ def _set_request_attrs(
         span.set_attribute(schema.PROV_SESSION_TURN, turn)
     if det_trace_id_raw is not None:
         span.set_attribute(schema.AGENTWEAVE_TRACE_ID, det_trace_id_raw)
+
+    # Sub-agent attribution (issue #15)
+    if parent_session_id is not None:
+        span.set_attribute(schema.PROV_PARENT_SESSION_ID, parent_session_id)
+    if agent_type is not None:
+        span.set_attribute(schema.PROV_AGENT_TYPE, agent_type)
+    if turn_depth is not None:
+        span.set_attribute(schema.PROV_SESSION_TURN, turn_depth)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)

@@ -25,6 +25,21 @@ export const PROV_AGENT_ID = 'prov.agent.id';
 export const PROV_AGENT_MODEL = 'prov.agent.model';
 export const PROV_AGENT_VERSION = 'prov.agent.version';
 
+// prov:Session -- session and project context
+export const PROV_SESSION_ID = 'prov.session.id';
+export const PROV_PROJECT = 'prov.project';
+export const PROV_SESSION_TURN = 'prov.session.turn';
+export const SESSION_ID = 'session.id';
+
+// Sub-agent attribution -- parent-child trace linking (issue #15)
+export const PROV_PARENT_SESSION_ID = 'prov.parent.session.id';
+export const PROV_AGENT_TYPE = 'prov.agent.type';
+
+// Agent type constants
+export const AGENT_TYPE_MAIN = 'main';
+export const AGENT_TYPE_SUBAGENT = 'subagent';
+export const AGENT_TYPE_DELEGATED = 'delegated';
+
 // prov:wasGeneratedBy -- output linked to producing activity
 export const PROV_WAS_GENERATED_BY = 'prov.wasGeneratedBy';
 

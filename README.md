@@ -183,6 +183,66 @@ def call_claude(messages: list) -> anthropic.Message: ...
 - `prov.llm.stop_reason`
 - `prov.llm.response_preview` (first 512 chars, when `captures_output=True`)
 
+## Sub-agent Attribution
+
+When agents delegate to sub-agents, use the sub-agent attribution parameters to link child sessions to their parent and distinguish agent roles in traces.
+
+### Python SDK
+
+```python
+# Main agent — tags itself as the root session
+@trace_agent(name="nix", session_id="sess-main-123", agent_type="main", turn_depth=1)
+def main_agent(msg: str) -> str:
+    return delegate_to_sub(msg)
+
+# Sub-agent — linked to parent session
+@trace_agent(name="max", parent_session_id="sess-main-123",
+             agent_type="subagent", turn_depth=2)
+def sub_agent(task: str) -> str:
+    return call_llm(task)
+```
+
+### Environment variable auto-detection
+
+Set `AGENTWEAVE_PARENT_SESSION_ID` and the SDK auto-populates `prov.parent.session.id`, defaults `agent_type` to `"subagent"`, and `turn_depth` to `2`:
+
+```bash
+export AGENTWEAVE_PARENT_SESSION_ID=sess-main-123
+```
+
+### Proxy headers
+
+When using the proxy, pass sub-agent context via HTTP headers:
+
+| Header | Span attribute | Example |
+|--------|---------------|---------|
+| `X-AgentWeave-Parent-Session-Id` | `prov.parent.session.id` | `sess-main-123` |
+| `X-AgentWeave-Agent-Type` | `prov.agent.type` | `subagent` |
+| `X-AgentWeave-Turn-Depth` | `prov.session.turn` | `2` |
+
+### TypeScript SDK
+
+```typescript
+import { traceAgent } from 'agentweave-sdk';
+
+const subAgent = traceAgent({
+  name: 'max',
+  parentSessionId: 'sess-main-123',
+  agentType: 'subagent',
+  turnDepth: 2,
+})(async (task: string) => {
+  return callLlm(task);
+});
+```
+
+### New span attributes
+
+| Attribute | Description |
+|---|---|
+| `prov.parent.session.id` | ID of the parent session that spawned this sub-agent |
+| `prov.agent.type` | `"main"`, `"subagent"`, or `"delegated"` |
+| `prov.session.turn` | Turn depth: 1 = main session, 2 = first-level sub-agent |
+
 ## PROV-O Attributes
 
 | Attribute | Description |

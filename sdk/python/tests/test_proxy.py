@@ -675,6 +675,54 @@ class TestSessionContext:
 # ---------------------------------------------------------------------------
 
 
+class TestSubAgentAttributionHeaders:
+    """Verify sub-agent attribution headers are read, set on spans, and stripped from forwarding (issue #15)."""
+
+    def _call(self, monkeypatch, parent_session_id=None, agent_type=None, turn_depth=None):
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="sub-agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+            parent_session_id=parent_session_id,
+            agent_type=agent_type,
+            turn_depth=turn_depth,
+        )
+        return span
+
+    def test_all_subagent_attrs_set(self, monkeypatch):
+        span = self._call(monkeypatch, parent_session_id="sess-parent-123",
+                          agent_type="subagent", turn_depth=2)
+        assert span.attrs["prov.parent.session.id"] == "sess-parent-123"
+        assert span.attrs["prov.agent.type"] == "subagent"
+        assert span.attrs["prov.session.turn"] == 2
+
+    def test_delegated_agent_type(self, monkeypatch):
+        span = self._call(monkeypatch, parent_session_id="sess-parent-456",
+                          agent_type="delegated", turn_depth=3)
+        assert span.attrs["prov.parent.session.id"] == "sess-parent-456"
+        assert span.attrs["prov.agent.type"] == "delegated"
+        assert span.attrs["prov.session.turn"] == 3
+
+    def test_no_subagent_attrs_when_not_provided(self, monkeypatch):
+        span = self._call(monkeypatch)
+        assert "prov.parent.session.id" not in span.attrs
+        assert "prov.agent.type" not in span.attrs
+
+    def test_partial_subagent_attrs(self, monkeypatch):
+        span = self._call(monkeypatch, parent_session_id="sess-parent-789")
+        assert span.attrs["prov.parent.session.id"] == "sess-parent-789"
+        assert "prov.agent.type" not in span.attrs
+
+    def test_subagent_headers_stripped_from_forwarding(self):
+        """Sub-agent headers must be in _SKIP_HEADERS_ALWAYS."""
+        assert "x-agentweave-parent-session-id" in _SKIP_HEADERS_ALWAYS
+        assert "x-agentweave-agent-type" in _SKIP_HEADERS_ALWAYS
+        assert "x-agentweave-turn-depth" in _SKIP_HEADERS_ALWAYS
+
+
 class TestNormalizeTraceId:
     """Unit tests for the _normalize_trace_id helper."""
 
