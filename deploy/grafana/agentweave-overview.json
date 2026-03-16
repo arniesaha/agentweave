@@ -10,9 +10,9 @@
   "timezone": "browser",
   "schemaVersion": 38,
   "version": 11,
-  "refresh": "1m",
+  "refresh": "5m",
   "time": {
-    "from": "now-3h",
+    "from": "now-6h",
     "to": "now"
   },
   "templating": {
@@ -654,19 +654,18 @@
       "title": "Calls by Project (selected window)",
       "type": "barchart",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
           },
-          "expr": "sum by (prov_project) (increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_project!=\"\"}[$__range]))",
-          "legendFormat": "{{prov_project}}",
-          "refId": "A",
-          "instant": true
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" } | count_over_time() by (span.prov.project)",
+          "refId": "A"
         }
       ],
       "gridPos": {
@@ -702,17 +701,17 @@
       "title": "P95 Latency by Model (ms)",
       "type": "timeseries",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, prov_llm_model) (rate(traces_spanmetrics_latency_bucket{service=\"agentweave-proxy\"}[5m]))) * 1000",
-          "legendFormat": "{{prov_llm_model}} p95",
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" } | quantile_over_time(duration, 0.95) by (span.prov.llm.model)",
           "refId": "A"
         }
       ],
@@ -744,19 +743,18 @@
       "title": "Calls by Agent (selected window)",
       "type": "piechart",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
           },
-          "expr": "sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_agent_id!=\"\"}[$__range]))",
-          "legendFormat": "{{prov_agent_id}}",
-          "refId": "A",
-          "instant": true
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" } | count_over_time() by (span.prov.agent_id)",
+          "refId": "A"
         }
       ],
       "gridPos": {
