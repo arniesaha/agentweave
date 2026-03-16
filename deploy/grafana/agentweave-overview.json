@@ -654,18 +654,18 @@
       "title": "Calls by Project (selected window)",
       "type": "barchart",
       "datasource": {
-        "type": "tempo",
-        "uid": "cffj9et53r9j4f"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
       "targets": [
         {
           "datasource": {
-            "type": "tempo",
-            "uid": "cffj9et53r9j4f"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
-          "queryType": "traceqlmetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" } | count_over_time() by (span.prov.project)",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum by (prov_project) (increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_project!=\"\"}[$__range]))",
+          "legendFormat": "{{prov_project}}"
         }
       ],
       "gridPos": {
@@ -701,18 +701,18 @@
       "title": "P95 Latency by Model (ms)",
       "type": "timeseries",
       "datasource": {
-        "type": "tempo",
-        "uid": "cffj9et53r9j4f"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
       "targets": [
         {
           "datasource": {
-            "type": "tempo",
-            "uid": "cffj9et53r9j4f"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
-          "queryType": "traceqlmetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && name != \"llm.unknown\" } | quantile_over_time(duration, 0.95) by (span.prov.llm.model)",
-          "refId": "A"
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, prov_llm_model) (rate(traces_spanmetrics_latency_bucket{service=\"agentweave-proxy\"}[$__rate_interval]))) * 1000",
+          "legendFormat": "{{prov_llm_model}}"
         }
       ],
       "gridPos": {
@@ -743,18 +743,18 @@
       "title": "Calls by Agent (selected window)",
       "type": "piechart",
       "datasource": {
-        "type": "tempo",
-        "uid": "cffj9et53r9j4f"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
       "targets": [
         {
           "datasource": {
-            "type": "tempo",
-            "uid": "cffj9et53r9j4f"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
-          "queryType": "traceqlmetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" } | count_over_time() by (span.prov.agent_id)",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\", prov_agent_id!=\"\"}[$__range]))",
+          "legendFormat": "{{prov_agent_id}}"
         }
       ],
       "gridPos": {
@@ -825,7 +825,8 @@
           "displayName": "Total Cost"
         },
         "overrides": []
-      }
+      },
+      "timeFrom": "1h"
     },
     {
       "id": 16,
@@ -894,7 +895,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "timeFrom": "1h"
     },
     {
       "id": 17,
@@ -939,7 +941,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "timeFrom": "1h"
     },
     {
       "id": 18,
@@ -1007,7 +1010,8 @@
           "description": "cache_read / (cache_read + cache_write + input_tokens) \u2014 Anthropic prompt caching"
         },
         "overrides": []
-      }
+      },
+      "timeFrom": "1h"
     },
     {
       "id": 19,
@@ -1060,7 +1064,8 @@
           "description": "cache_read_tokens \u00d7 $2.70/MTok savings (claude-3-5-sonnet: $3.00 regular \u2212 $0.30 cache_read)"
         },
         "overrides": []
-      }
+      },
+      "timeFrom": "1h"
     },
     {
       "id": 20,
@@ -1129,7 +1134,8 @@
           "description": "Average number of LLM turns consumed per agent session. Higher values indicate more multi-step reasoning loops."
         },
         "overrides": []
-      }
+      },
+      "timeFrom": "1h"
     },
     {
       "id": 21,
@@ -1193,7 +1199,8 @@
           "description": "Distribution of LLM turn counts across agent sessions. Spikes at high values may indicate runaway ReAct loops."
         },
         "overrides": []
-      }
+      },
+      "timeFrom": "1h"
     }
   ]
 }
