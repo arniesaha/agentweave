@@ -799,7 +799,7 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceqlmetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.cost.usd > 0 } | sum_over_time(span.cost.usd) by (resource.service.name)",
+          "query": "{ resource.service.name = \"agentweave-proxy\" } | sum_over_time(span.cost.usd)",
           "refId": "A"
         }
       ],
@@ -840,19 +840,19 @@
         "h": 8
       },
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
           },
-          "expr": "sum by (prov_llm_model) (increase(traces_spanmetrics_cost_usd_total{service=\"agentweave-proxy\", prov_llm_model!=\"\"}[$__range]))",
-          "legendFormat": "{{prov_llm_model}}",
           "refId": "A",
-          "instant": true
+          "instant": true,
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" } | sum_over_time(span.cost.usd) by (span.prov.llm.model)"
         }
       ],
       "transformations": [
@@ -909,18 +909,18 @@
         "h": 8
       },
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
           },
-          "expr": "sum by (prov_llm_model) (rate(traces_spanmetrics_cost_usd_total{service=\"agentweave-proxy\"}[5m]))",
-          "legendFormat": "{{prov_llm_model}}",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" } | sum_over_time(span.cost.usd) by (span.prov.llm.model)"
         }
       ],
       "transformations": [],
@@ -964,7 +964,7 @@
             "uid": "cffj9et53r9j4f"
           },
           "queryType": "traceqlmetrics",
-          "query": "{ resource.service.name = \"agentweave-proxy\" && span.prov.llm.provider = \"anthropic\" } | avg(span.cache.hit_rate) by (resource.service.name)",
+          "query": "{ resource.service.name = \"agentweave-proxy\" } | avg_over_time(span.cache.hit_rate)",
           "refId": "A"
         }
       ],
@@ -1006,7 +1006,7 @@
           },
           "unit": "percentunit",
           "displayName": "Cache Hit Rate",
-          "description": "cache_read / (cache_read + cache_write + input_tokens) — Anthropic prompt caching"
+          "description": "cache_read / (cache_read + cache_write + input_tokens) \u2014 Anthropic prompt caching"
         },
         "overrides": []
       }
@@ -1022,19 +1022,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
           },
-          "expr": "sum(increase(traces_spanmetrics_tokens_cache_read_total{service=\"agentweave-proxy\"}[$__range])) * 0.0000027",
-          "legendFormat": "Savings USD",
           "refId": "A",
-          "instant": true
+          "instant": true,
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" } | sum_over_time(span.tokens.cache_read)"
         }
       ],
       "transformations": [],
@@ -1059,7 +1059,7 @@
           },
           "unit": "currencyUSD",
           "displayName": "Cache Saves",
-          "description": "cache_read_tokens × $2.70/MTok savings (claude-3-5-sonnet: $3.00 regular − $0.30 cache_read)"
+          "description": "cache_read_tokens \u00d7 $2.70/MTok savings (claude-3-5-sonnet: $3.00 regular \u2212 $0.30 cache_read)"
         },
         "overrides": []
       }
@@ -1075,19 +1075,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
           },
-          "expr": "avg(traces_spanmetrics_agent_turn_count{service=\"agentweave-proxy\"})",
-          "legendFormat": "Avg Turns",
           "refId": "A",
-          "instant": true
+          "instant": true,
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" } | avg_over_time(span.agent.turn_count)"
         }
       ],
       "transformations": [],
@@ -1112,9 +1112,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 5 },
-              { "color": "red", "value": 10 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
             ]
           },
           "unit": "short",
@@ -1135,18 +1144,18 @@
         "h": 8
       },
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "tempo",
+        "uid": "cffj9et53r9j4f"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "tempo",
+            "uid": "cffj9et53r9j4f"
           },
-          "expr": "traces_spanmetrics_agent_turn_count{service=\"agentweave-proxy\"}",
-          "legendFormat": "Turn Count",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "traceqlmetrics",
+          "query": "{ resource.service.name = \"agentweave-proxy\" } | sum_over_time(span.agent.turn_count) by (span.prov.agent_id)"
         }
       ],
       "transformations": [],
