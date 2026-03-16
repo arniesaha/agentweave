@@ -105,7 +105,7 @@ ts "--- Check 4/4: Grafana LLM call count ---"
 # Grafana is on NodePort 30300, Prometheus ClusterIP 10.43.3.20:9090
 # Grafana datasource uid can be found via /api/datasources
 PROM_QUERY="traces_spanmetrics_calls_total"
-GRAFANA_CREDS="${GRAFANA_USER:-admin}:${GRAFANA_PASSWORD:-observability123}"
+GRAFANA_CREDS="${GRAFANA_USER:-admin}:${GRAFANA_PASSWORD:-qqf18NMshMyNG8hEQx4c}"
 
 # Try Grafana datasource proxy (finds Prometheus datasource by name)
 GRAFANA_RESP=$(curl -sf --max-time 10 -u "${GRAFANA_CREDS}" \
