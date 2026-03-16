@@ -723,6 +723,98 @@ class TestSubAgentAttributionHeaders:
         assert "x-agentweave-turn-depth" in _SKIP_HEADERS_ALWAYS
 
 
+class TestSessionEndpoint:
+    """POST /session stores context, GET /session returns it, env-var fallback works."""
+
+    def test_post_session_stores_context(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        client = TestClient(app)
+        resp = client.post("/session", json={
+            "session_id": "sess-001",
+            "parent_session_id": "sess-parent-001",
+            "task_label": "build dashboard",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["context"]["prov.session.id"] == "sess-001"
+        assert data["context"]["prov.parent.session.id"] == "sess-parent-001"
+        assert data["context"]["prov.task.label"] == "build dashboard"
+
+    def test_get_session_returns_current_context(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        client = TestClient(app)
+        # Set context first
+        client.post("/session", json={"session_id": "sess-get-test"})
+        resp = client.get("/session")
+        assert resp.status_code == 200
+        assert resp.json()["prov.session.id"] == "sess-get-test"
+
+    def test_empty_values_excluded(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        client = TestClient(app)
+        resp = client.post("/session", json={
+            "session_id": "sess-only",
+            "parent_session_id": "",
+            "task_label": "",
+        })
+        data = resp.json()
+        assert "prov.session.id" in data["context"]
+        assert "prov.parent.session.id" not in data["context"]
+        assert "prov.task.label" not in data["context"]
+
+    def test_env_var_fallback_at_startup(self, monkeypatch):
+        """AGENTWEAVE_SESSION_ID env var populates _session_context at module reload."""
+        import importlib
+        monkeypatch.setenv("AGENTWEAVE_SESSION_ID", "env-sess-42")
+        monkeypatch.setenv("AGENTWEAVE_PARENT_SESSION_ID", "")
+        monkeypatch.setenv("AGENTWEAVE_TASK_LABEL", "")
+        importlib.reload(proxy_module)
+        assert proxy_module._session_context.get("prov.session.id") == "env-sess-42"
+        assert "prov.parent.session.id" not in proxy_module._session_context
+        assert "prov.task.label" not in proxy_module._session_context
+        # Clean up: reload without env var to restore original state
+        monkeypatch.delenv("AGENTWEAVE_SESSION_ID")
+        importlib.reload(proxy_module)
+
+    def test_session_context_applied_to_spans(self, monkeypatch):
+        """After POST /session, _set_request_attrs applies context attrs to spans."""
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        # Set the global context
+        monkeypatch.setattr(proxy_module, "_session_context", {
+            "prov.session.id": "ctx-sess-99",
+            "prov.task.label": "run tests",
+        })
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+        )
+        assert span.attrs["prov.session.id"] == "ctx-sess-99"
+        assert span.attrs["prov.task.label"] == "run tests"
+        assert "prov.parent.session.id" not in span.attrs
+        # Restore
+        monkeypatch.setattr(proxy_module, "_session_context", {})
+
+    def test_empty_context_no_blank_attrs(self, monkeypatch):
+        """When _session_context is empty, no blank attributes end up on spans."""
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        monkeypatch.setattr(proxy_module, "_session_context", {})
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+        )
+        assert "prov.task.label" not in span.attrs
+
+
 class TestNormalizeTraceId:
     """Unit tests for the _normalize_trace_id helper."""
 

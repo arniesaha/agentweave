@@ -49,6 +49,7 @@ PROV_SESSION_TURN = "prov.session.turn"
 # Sub-agent attribution — parent-child trace linking (issue #15)
 PROV_PARENT_SESSION_ID = "prov.parent.session.id"  # ID of parent session that spawned this sub-agent
 PROV_AGENT_TYPE = "prov.agent.type"                 # "main" | "subagent" | "delegated"
+PROV_TASK_LABEL = "prov.task.label"                 # human-readable task label for session
 
 # Agent type constants
 AGENT_TYPE_MAIN = "main"
