@@ -24,6 +24,10 @@ spec:
         - name: dashboard
           image: localhost:5000/agentweave-dashboard:latest
           imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: agentweave-dashboard
+                optional: true
           ports:
             - containerPort: 80
           resources:

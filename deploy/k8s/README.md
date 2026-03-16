@@ -50,7 +50,34 @@ kubectl apply -f deploy/k8s/configmap.yaml
 kubectl apply -f deploy/k8s/secret.yaml      # or use kubectl create secret above
 kubectl apply -f deploy/k8s/deployment.yaml
 kubectl apply -f deploy/k8s/service.yaml
+kubectl apply -f deploy/k8s/dashboard-deployment.yaml
 ```
+
+### Dashboard nginx credentials
+
+The dashboard nginx proxy uses `envsubst` at container startup to inject
+credentials from environment variables. **Never hardcode credentials in
+`nginx.conf` or `nginx.conf.template`.**
+
+To set dashboard proxy auth (e.g. for Grafana/Tempo basic-auth):
+
+```bash
+kubectl create secret generic agentweave-dashboard \
+  --from-literal=GRAFANA_AUTH_HEADER="Basic <base64-user:pass>" \
+  -n agentweave --dry-run=client -o yaml | kubectl apply -f -
+kubectl rollout restart deployment agentweave-dashboard -n agentweave
+```
+
+To run without auth (default — uses k8s DNS direct):
+
+```bash
+kubectl create secret generic agentweave-dashboard \
+  --from-literal=GRAFANA_AUTH_HEADER="" \
+  -n agentweave --dry-run=client -o yaml | kubectl apply -f -
+```
+
+See `deploy/k8s/dashboard-secret.yaml` for the template (placeholder only, do
+not apply directly).
 
 ### 4. Verify
 
