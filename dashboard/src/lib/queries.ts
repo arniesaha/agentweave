@@ -229,6 +229,53 @@ export function extractLastTempoMetricValue(result: TempoMetricResult | null): n
   return total
 }
 
+// ─── Tempo Metrics queries ────────────────────────────────────────────────────
+
+/** TraceQL search query returning all spans for a specific session. */
+export function tempoSessionQuery(sessionId: string): string {
+  return (
+    `{ resource.service.name = "${TEMPO_SERVICE}" && span.session.id = "${sessionId}" }` +
+    ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent_id)`
+  )
+}
+
+/** TraceQL metrics query that returns cost.usd summed per time bucket. */
+export function tempoCostTimeSeriesQuery(): string {
+  return (
+    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
+    ` | sum(span.cost.usd)`
+  )
+}
+
+/**
+ * Transform a TempoMetricResult into the series format expected by TimeSeriesChart.
+ * Aggregates all series into a single "Cost USD" series (sum across labels).
+ */
+export function transformTempoCostSeries(
+  result: TempoMetricResult | null,
+): Array<{ label: string; points: Array<{ time: number; value: number }> }> {
+  if (!result?.series?.length) return []
+
+  // Merge all series into a single time-bucketed map (sum across any label dimensions)
+  const buckets = new Map<number, number>()
+  for (const s of result.series) {
+    for (const sample of s.samples) {
+      const v = parseFloat(sample.value) || 0
+      if (v <= 0) continue
+      buckets.set(sample.timestamp_ms, (buckets.get(sample.timestamp_ms) ?? 0) + v)
+    }
+  }
+
+  if (!buckets.size) return []
+
+  const points = Array.from(buckets.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([time, value]) => ({ time, value }))
+
+  return [{ label: 'Cost USD', points }]
+}
+
 // ─── Trace-derived aggregations ──────────────────────────────────────────────
 
 /** Aggregate total cost per agent from trace rows. */

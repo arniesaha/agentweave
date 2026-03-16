@@ -8,15 +8,17 @@ import { TraceTable } from './components/TraceTable'
 import {
   TimeRange,
   tempoSearchQuery,
+  tempoCostTimeSeriesQuery,
   promLLMCallsRateQuery,
   promCallsByModelQuery,
   promP95LatencyByModelQuery,
   promCallsByAgentQuery,
   transformTempoTraces,
+  transformTempoCostSeries,
   buildCostTimeSeries,
   buildCostByAgent,
 } from './lib/queries'
-import { useTempoSearch, useTempoSearchCount } from './hooks/useTempo'
+import { useTempoSearch, useTempoSearchCount, useTempoMetrics } from './hooks/useTempo'
 import { usePromQueryRange, usePromQueryInstant } from './hooks/usePrometheus'
 
 const REFRESH_INTERVAL_MS = 60_000 // 60s
@@ -89,8 +91,18 @@ export default function App() {
   const { series: callsSeries, loading: callsSeriesLoading, error: callsSeriesError } =
     usePromQueryRange(promLLMCallsRateQuery(), timeRange, refreshKey, 'prov_llm_model')
 
-  // 6. Cost over Time — bucketed directly from trace data
-  const costChartSeries = buildCostTimeSeries(traceRows, timeRange)
+  // 6. Cost over Time — traceqlmetrics time series (accurate across all spans)
+  const { result: costMetricResult, loading: costMetricLoading, error: costMetricError } =
+    useTempoMetrics(tempoCostTimeSeriesQuery(), timeRange, refreshKey)
+
+  const costMetricSeries = transformTempoCostSeries(costMetricResult)
+  // Fall back to trace-derived series when traceqlmetrics returns empty (known issue with long windows)
+  const costChartSeries = costMetricSeries.length > 0
+    ? costMetricSeries
+    : buildCostTimeSeries(traceRows, timeRange)
+  const costChartSubtitle = costMetricSeries.length > 0
+    ? 'Cost per time bucket (all spans)'
+    : 'Cost per time bucket (based on loaded traces only)'
 
   // ─── Bar Chart Data ───────────────────────────────────────────────────────
 
@@ -176,10 +188,10 @@ export default function App() {
           />
           <TimeSeriesChart
             title="Cost over Time (USD)"
-            subtitle="Cost per time bucket"
+            subtitle={costChartSubtitle}
             series={costChartSeries}
-            loading={tracesLoading}
-            error={tracesError}
+            loading={costMetricLoading && tracesLoading}
+            error={costMetricError ?? tracesError}
             type="area"
             valueFormatter={(v) => `$${v.toFixed(4)}`}
           />

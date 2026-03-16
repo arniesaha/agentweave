@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react'
 import { ChevronDown, ChevronRight, ExternalLink, ChevronLeft } from 'lucide-react'
 import { format } from 'date-fns'
 import { TraceRow } from '../lib/queries'
+import { SessionDrilldown } from './SessionDrilldown'
 
 interface TraceTableProps {
   traces: TraceRow[]
@@ -47,6 +48,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 export function TraceTable({ traces, loading, error }: TraceTableProps) {
   const PAGE_SIZE = 25
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [sessionDrilldown, setSessionDrilldown] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('time')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [page, setPage] = useState(0)
@@ -194,10 +196,37 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
                           {row.costUsd > 0 ? `$${row.costUsd.toFixed(4)}` : '—'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-500 font-mono max-w-24 truncate">
-                        {row.sessionId}
+                      <td className="px-4 py-3">
+                        {row.sessionId && row.sessionId !== '—' ? (
+                          <button
+                            className="text-xs text-violet-400 hover:text-violet-200 font-mono max-w-24 truncate block transition-colors underline decoration-dotted"
+                            title="Click to expand session drilldown"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setSessionDrilldown(
+                                sessionDrilldown === row.sessionId ? null : row.sessionId
+                              )
+                            }}
+                          >
+                            {row.sessionId}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-600">—</span>
+                        )}
                       </td>
                     </tr>
+                    {sessionDrilldown === row.sessionId && (
+                      <tr className="bg-[#0a0a0f]/90 border-b border-[#1e1e2e]">
+                        <td colSpan={10} className="px-6 py-4">
+                          <div className="space-y-2">
+                            <p className="text-xs font-semibold text-violet-400 uppercase tracking-wider mb-3">
+                              Session Drilldown
+                            </p>
+                            <SessionDrilldown sessionId={row.sessionId} />
+                          </div>
+                        </td>
+                      </tr>
+                    )}
                     {isOpen && (
                       <tr className="bg-[#0a0a0f]/80 border-b border-[#1e1e2e]">
                         <td colSpan={10} className="px-6 py-4">
