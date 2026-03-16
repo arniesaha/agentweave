@@ -5,11 +5,15 @@ server {
   location /tempo/ {
     proxy_pass http://tempo.monitoring.svc.cluster.local:3200/;
     proxy_read_timeout 30s;
+    # When GRAFANA_AUTH_HEADER is set (via k8s Secret + envsubst), uncomment:
+    # proxy_set_header Authorization "${GRAFANA_AUTH_HEADER}";
   }
 
   location /prometheus/ {
     proxy_pass http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/;
     proxy_read_timeout 30s;
+    # When GRAFANA_AUTH_HEADER is set (via k8s Secret + envsubst), uncomment:
+    # proxy_set_header Authorization "${GRAFANA_AUTH_HEADER}";
   }
 
   location / {
