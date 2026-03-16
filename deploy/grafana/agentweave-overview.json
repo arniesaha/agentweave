@@ -82,57 +82,6 @@
   },
   "panels": [
     {
-      "id": 1,
-      "title": "Total LLM Calls",
-      "type": "stat",
-      "gridPos": {
-        "x": 0,
-        "y": 0,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum(increase(traces_spanmetrics_calls_total{service=\"agentweave-proxy\"}[$__range]))",
-          "legendFormat": "LLM Calls"
-        }
-      ],
-      "transformations": [],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "sum"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "blue"
-          },
-          "unit": "none",
-          "displayName": "LLM Calls"
-        },
-        "overrides": []
-      }
-    },
-    {
       "id": 2,
       "title": "Avg Latency",
       "type": "stat",
@@ -267,54 +216,6 @@
           },
           "unit": "ms",
           "displayName": "Max Latency"
-        }
-      }
-    },
-    {
-      "id": 4,
-      "title": "Total LLM Time",
-      "type": "stat",
-      "gridPos": {
-        "x": 18,
-        "y": 0,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum(increase(traces_spanmetrics_latency_sum{service=\"agentweave-proxy\"}[$__range])) * 1000",
-          "legendFormat": "Total LLM Time"
-        }
-      ],
-      "transformations": [],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "sum"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "purple"
-          },
-          "unit": "ms",
-          "displayName": "Total LLM Time"
         }
       }
     },
