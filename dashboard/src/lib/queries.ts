@@ -291,7 +291,7 @@ export function tempoAgentAttributionQuery(): string {
 export function tempoSessionGraphQuery(): string {
   return (
     `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
-    ` | select(span.prov.session.id, span.prov.parent.session.id, span.prov.task.label,` +
+    ` | select(span.prov.session.id, span.session.id, span.prov.parent.session.id, span.prov.task.label,` +
     ` span.prov.agent.id, span.prov.agent.type, span.cost.usd, span.prov.llm.model,` +
     ` span.prov.llm.prompt_tokens, span.prov.llm.completion_tokens)`
   )
@@ -525,7 +525,9 @@ function spanRowFromTempoSpan(t: TempoSpan): SessionSpanRow {
   return {
     traceId: t.traceID,
     time: parseInt(t.startTimeUnixNano) / 1e6,
-    sessionId: getSpanAttr(attrs, 'prov.session.id') || '',
+    // Fall back to session.id when prov.session.id is absent (main/parent sessions
+    // may only set session.id, while sub-agents set prov.session.id explicitly).
+    sessionId: getSpanAttr(attrs, 'prov.session.id') || getSpanAttr(attrs, 'session.id') || '',
     parentSessionId: getSpanAttr(attrs, 'prov.parent.session.id') || '',
     taskLabel: getSpanAttr(attrs, 'prov.task.label') || '',
     agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
