@@ -287,6 +287,16 @@ export function tempoAgentAttributionQuery(): string {
   )
 }
 
+/** TraceQL search for session graph: fetches all spans with session identity attributes. */
+export function tempoSessionGraphQuery(): string {
+  return (
+    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
+    ` | select(span.prov.session.id, span.prov.parent.session.id, span.prov.task.label,` +
+    ` span.prov.agent.id, span.prov.agent.type, span.cost.usd, span.prov.llm.model,` +
+    ` span.prov.llm.prompt_tokens, span.prov.llm.completion_tokens)`
+  )
+}
+
 /** TraceQL search for sub-agent spans only. */
 export function tempoSubagentSearchQuery(): string {
   return (
@@ -453,4 +463,188 @@ export function buildCostTimeSeries(
     .sort((a, b) => a[0] - b[0])
     .map(([time, value]) => ({ time, value }))
   return points.length ? [{ label: 'Cost USD', points }] : []
+}
+
+// ─── Session Graph types & transformers ──────────────────────────────────────
+
+/** A single aggregated session node (grouped from many spans). */
+export interface SessionNode {
+  sessionId: string
+  agentId: string
+  agentType: string          // 'main' | 'subagent' | 'unknown'
+  taskLabel: string
+  parentSessionId: string    // '' for root sessions
+  callCount: number
+  totalCost: number
+  tokensIn: number
+  tokensOut: number
+  firstSeen: number          // unix ms
+  lastSeen: number           // unix ms
+  durationMs: number
+  hasError: boolean
+}
+
+/** An edge between two session nodes (parent → child). */
+export interface SessionEdge {
+  from: string  // parent sessionId
+  to: string    // child sessionId
+}
+
+/** A single LLM call within a session (for the detail timeline). */
+export interface SessionCallRow {
+  traceId: string
+  time: number
+  model: string
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs?: number
+}
+
+/** Raw span row used when building session graph; carries all session attributes. */
+interface SessionSpanRow {
+  traceId: string
+  time: number
+  sessionId: string
+  parentSessionId: string
+  taskLabel: string
+  agentId: string
+  agentType: string
+  costUsd: number
+  tokensIn: number
+  tokensOut: number
+  model: string
+  durationNanos: number
+}
+
+function spanRowFromTempoSpan(t: TempoSpan): SessionSpanRow {
+  const spans = t.spanSets?.[0]?.spans ?? t.spanSet?.spans ?? []
+  const span = spans[0]
+  const attrs = span?.attributes ?? []
+  const modelFromName = t.rootTraceName?.startsWith('llm.') ? t.rootTraceName.slice(4) : ''
+  return {
+    traceId: t.traceID,
+    time: parseInt(t.startTimeUnixNano) / 1e6,
+    sessionId: getSpanAttr(attrs, 'prov.session.id') || '',
+    parentSessionId: getSpanAttr(attrs, 'prov.parent.session.id') || '',
+    taskLabel: getSpanAttr(attrs, 'prov.task.label') || '',
+    agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
+    agentType: getSpanAttr(attrs, 'prov.agent.type') || 'unknown',
+    costUsd: parseFloat(getSpanAttr(attrs, 'cost.usd') || '0'),
+    tokensIn: parseInt(getSpanAttr(attrs, 'prov.llm.prompt_tokens') || '0'),
+    tokensOut: parseInt(getSpanAttr(attrs, 'prov.llm.completion_tokens') || '0'),
+    model: getSpanAttr(attrs, 'prov.llm.model') || modelFromName || 'unknown',
+    durationNanos: span?.durationNanos ?? 0,
+  }
+}
+
+/** Build SessionNode map + SessionEdge list from raw Tempo spans. */
+export function buildSessionGraph(
+  traces: TempoSpan[]
+): { nodes: SessionNode[]; edges: SessionEdge[] } {
+  const nodeMap = new Map<string, SessionNode>()
+  const edgeSet = new Set<string>()
+
+  for (const t of traces) {
+    const row = spanRowFromTempoSpan(t)
+    if (!row.sessionId) continue
+
+    const existing = nodeMap.get(row.sessionId)
+    if (existing) {
+      existing.callCount++
+      existing.totalCost += row.costUsd
+      existing.tokensIn += row.tokensIn
+      existing.tokensOut += row.tokensOut
+      if (row.time < existing.firstSeen) existing.firstSeen = row.time
+      if (row.time > existing.lastSeen) existing.lastSeen = row.time
+      if (row.taskLabel && !existing.taskLabel) existing.taskLabel = row.taskLabel
+      if (row.parentSessionId && !existing.parentSessionId) existing.parentSessionId = row.parentSessionId
+      if (row.agentType && row.agentType !== 'unknown' && existing.agentType === 'unknown') {
+        existing.agentType = row.agentType
+      }
+      existing.durationMs = existing.lastSeen - existing.firstSeen
+    } else {
+      nodeMap.set(row.sessionId, {
+        sessionId: row.sessionId,
+        agentId: row.agentId,
+        agentType: row.agentType,
+        taskLabel: row.taskLabel,
+        parentSessionId: row.parentSessionId,
+        callCount: 1,
+        totalCost: row.costUsd,
+        tokensIn: row.tokensIn,
+        tokensOut: row.tokensOut,
+        firstSeen: row.time,
+        lastSeen: row.time,
+        durationMs: 0,
+        hasError: false,
+      })
+    }
+
+    if (row.parentSessionId) {
+      const edgeKey = `${row.parentSessionId}->${row.sessionId}`
+      if (!edgeSet.has(edgeKey)) {
+        edgeSet.add(edgeKey)
+      }
+    }
+  }
+
+  // Build edge list — only include edges where both nodes are known
+  const edges: SessionEdge[] = []
+  for (const edgeKey of edgeSet) {
+    const [from, to] = edgeKey.split('->')
+    if (nodeMap.has(from) && nodeMap.has(to)) {
+      edges.push({ from, to })
+    }
+  }
+
+  // Sort nodes: roots first, then by firstSeen desc
+  const nodes = Array.from(nodeMap.values()).sort((a, b) => {
+    if (!a.parentSessionId && b.parentSessionId) return -1
+    if (a.parentSessionId && !b.parentSessionId) return 1
+    return b.firstSeen - a.firstSeen
+  })
+
+  return { nodes, edges }
+}
+
+/** Build session call rows (LLM call timeline) for the session detail view. */
+export function buildSessionCalls(
+  traces: TempoSpan[],
+  sessionId: string
+): SessionCallRow[] {
+  const rows: SessionCallRow[] = []
+  for (const t of traces) {
+    const row = spanRowFromTempoSpan(t)
+    if (row.sessionId !== sessionId) continue
+    rows.push({
+      traceId: t.traceID,
+      time: row.time,
+      model: row.model,
+      tokensIn: row.tokensIn,
+      tokensOut: row.tokensOut,
+      costUsd: row.costUsd,
+      latencyMs: row.durationNanos / 1e6,
+    })
+  }
+  return rows.sort((a, b) => a.time - b.time)
+}
+
+/** Daily summary stats derived from session nodes. */
+export interface DailySummary {
+  topLevelSessions: number
+  subAgentSessions: number
+  totalCost: number
+  totalCalls: number
+}
+
+export function buildDailySummary(nodes: SessionNode[]): DailySummary {
+  const topLevel = nodes.filter((n) => !n.parentSessionId)
+  const subAgents = nodes.filter((n) => !!n.parentSessionId)
+  return {
+    topLevelSessions: topLevel.length,
+    subAgentSessions: subAgents.length,
+    totalCost: nodes.reduce((s, n) => s + n.totalCost, 0),
+    totalCalls: nodes.reduce((s, n) => s + n.callCount, 0),
+  }
 }
