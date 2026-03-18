@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Activity, DollarSign, Zap, RefreshCw } from 'lucide-react'
+import { Activity, DollarSign, Zap, RefreshCw, GitBranch, BarChart2 } from 'lucide-react'
 import { Header } from './components/Header'
 import { StatCard } from './components/StatCard'
 import { TimeSeriesChart } from './components/TimeSeriesChart'
 import { BarChartPanel } from './components/BarChart'
 import { TraceTable } from './components/TraceTable'
 import { AgentAttribution } from './components/AgentAttribution'
+import { SessionExplorer } from './components/SessionExplorer'
 import {
   TimeRange,
   tempoSearchQuery,
@@ -23,8 +24,10 @@ import {
   buildCostTimeSeries,
   buildCostByAgent,
 } from './lib/queries'
-import { useTempoSearch, useTempoSearchCount, useTempoMetrics } from './hooks/useTempo'
+import { useTempoSearch, useTempoSearchCount, useTempoMetrics, useSessionGraph } from './hooks/useTempo'
 import { usePromQueryRange, usePromQueryInstant } from './hooks/usePrometheus'
+
+type ActiveTab = 'overview' | 'sessions'
 
 const REFRESH_INTERVAL_MS = 60_000 // 60s
 
@@ -32,6 +35,7 @@ export default function App() {
   const [timeRange, setTimeRange] = useState<TimeRange>('6h')
   const [refreshKey, setRefreshKey] = useState(0)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [activeTab, setActiveTab] = useState<ActiveTab>('overview')
 
   // Auto-refresh every 60s
   useEffect(() => {
@@ -140,6 +144,10 @@ export default function App() {
 
   const subagentRows = transformSubagentTraces(rawSubagent)
 
+  // 13. Session graph data (Session Explorer tab)
+  const { nodes: sessionNodes, edges: sessionEdges, rawTraces: sessionRawTraces, loading: sessionLoading, error: sessionError } =
+    useSessionGraph(timeRange, refreshKey)
+
   // Tempo error flag — only true when the core trace search fails
   const tempoError = !!(llmCallError || tracesError)
 
@@ -153,7 +161,53 @@ export default function App() {
         tempoError={tempoError}
       />
 
+      {/* Tab navigation */}
+      <div className="border-b border-slate-800 bg-[#0d0d14]">
+        <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 flex gap-1">
+          <button
+            onClick={() => setActiveTab('overview')}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'overview'
+                ? 'border-indigo-500 text-indigo-300'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <BarChart2 className="w-4 h-4" />
+            Overview
+          </button>
+          <button
+            onClick={() => setActiveTab('sessions')}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'sessions'
+                ? 'border-indigo-500 text-indigo-300'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <GitBranch className="w-4 h-4" />
+            Session Explorer
+            {sessionNodes.length > 0 && (
+              <span className="ml-1 text-xs bg-indigo-500/20 text-indigo-400 rounded-full px-1.5 py-0.5">
+                {sessionNodes.length}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+        {/* Session Explorer tab */}
+        {activeTab === 'sessions' && (
+          <SessionExplorer
+            nodes={sessionNodes}
+            edges={sessionEdges}
+            rawTraces={sessionRawTraces}
+            loading={sessionLoading}
+            error={sessionError}
+          />
+        )}
+
+        {/* Overview tab — all existing content */}
+        {activeTab === 'overview' && (<>
         {/* Row 1: Stat Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
@@ -272,6 +326,7 @@ export default function App() {
           loading={tracesLoading}
           error={tracesError}
         />
+        </>)}
       </main>
     </div>
   )
