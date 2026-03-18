@@ -1,0 +1,16 @@
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1677858242,
+  "model": "gpt-4o",
+  "choices": [{
+    "message": {"role": "assistant", "content": "Hello! How can I help?"},
+    "finish_reason": "stop",
+    "index": 0
+  }],
+  "usage": {
+    "prompt_tokens": 12,
+    "completion_tokens": 8,
+    "total_tokens": 20
+  }
+}
