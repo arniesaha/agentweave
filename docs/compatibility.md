@@ -6,10 +6,10 @@ This table shows which proxy versions are compatible with which SDK versions.
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| Proxy | `0.2.0` | Supports `/session` endpoint, sub-agent attribution headers |
-| Python SDK | `0.2.0` | `@trace_tool`, `@trace_agent`, `@trace_llm`, `W3C` propagation |
-| TypeScript SDK | `0.2.5` | Same decorator API as Python SDK |
-| Go SDK | `0.1.x` | `TraceTool`, `TraceAgent`, `TraceLlm` |
+| Proxy | `0.3.0` | Supports `/session` endpoint, sub-agent attribution headers |
+| Python SDK | `0.3.0` | `@trace_tool`, `@trace_agent`, `@trace_llm`, `W3C` propagation |
+| TypeScript SDK | `0.3.0` | Same decorator API as Python SDK |
+| Go SDK | `0.1.0` | `TraceTool`, `TraceAgent`, `TraceLlm` |
 
 ---
 
@@ -22,7 +22,8 @@ The proxy and SDKs communicate via:
 
 | Proxy Version | Python SDK | TypeScript SDK | Go SDK | Notes |
 |---------------|-----------|----------------|--------|-------|
-| `0.2.x` | `0.2.x` | `0.2.x` | `0.1.x` | Current. `/session` endpoint available |
+| `0.3.x` | `0.3.x` | `0.3.x` | `0.1.x` | Current. `/session` endpoint available |
+| `0.2.x` | `0.2.x` | `0.2.x` | `0.1.x` | `/session` endpoint available |
 | `0.1.x` | `0.1.x` | `0.1.x` | `0.1.x` | No `/session` endpoint, no sub-agent attribution |
 
 ### Minimum Compatible Versions
@@ -59,7 +60,7 @@ Until `1.0.0`, any version bump may introduce breaking changes. Pin to an exact 
 
 ```yaml
 # deploy/k8s/deployment.yaml
-image: localhost:5000/agentweave-proxy:0.2.0  # pin exact version
+image: localhost:5000/agentweave-proxy:0.3.0  # pin exact version
 ```
 
 After `1.0.0`, minor versions will be backward-compatible within a major version.
