@@ -35,7 +35,8 @@ export default function App() {
   const [timeRange, setTimeRange] = useState<TimeRange>('6h')
   const [refreshKey, setRefreshKey] = useState(0)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
-  const [activeTab, setActiveTab] = useState<ActiveTab>('overview')
+  const initialTab = (new URLSearchParams(window.location.search).get('tab') as ActiveTab) ?? 'overview'
+  const [activeTab, setActiveTab] = useState<ActiveTab>(initialTab)
 
   // Auto-refresh every 60s
   useEffect(() => {
