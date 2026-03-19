@@ -1,8 +1,9 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { SessionNode, SessionEdge } from '../lib/queries'
 import { TempoSpan } from '../lib/queries'
 import { SessionGraph } from './SessionGraph'
 import { SessionDetail, DailySummaryBanner } from './SessionDetail'
+import { Maximize2, X } from 'lucide-react'
 
 interface Props {
   nodes: SessionNode[]
@@ -14,6 +15,15 @@ interface Props {
 
 export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [fullscreenPanel, setFullscreenPanel] = useState<null | 0 | 1>(null)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullscreenPanel(null)
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [])
 
   const selectedNode = selectedId ? (nodes.find((n) => n.sessionId === selectedId) ?? null) : null
 
@@ -43,9 +53,34 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
       {/* Daily summary */}
       <DailySummaryBanner nodes={nodes} loading={loading} />
 
+      {/* Fullscreen overlay */}
+      {fullscreenPanel !== null && (
+        <div className="fixed inset-0 z-50 bg-[#0a0a0f] p-4 flex flex-col">
+          <button
+            onClick={() => setFullscreenPanel(null)}
+            className="absolute top-4 right-4 z-10 p-1.5 rounded-lg bg-slate-800/80 text-slate-400 hover:text-slate-100 hover:bg-slate-700 transition-colors"
+            aria-label="Close fullscreen"
+          >
+            <X size={18} />
+          </button>
+          <div className="flex-1 min-h-0">
+            <SessionGraph
+              nodes={nodes}
+              edges={edges}
+              selectedId={selectedId}
+              onSelect={handleSelect}
+              loading={loading}
+              error={error}
+              fixedMode={fullscreenPanel === 0 ? 'agent' : 'session'}
+              title={fullscreenPanel === 0 ? 'Agents' : 'Sessions'}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Graph panels — Agents + Sessions side by side on desktop, stacked on mobile */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-[#111118] border border-slate-800 rounded-xl p-4">
+        <div className="relative bg-[#111118] border border-slate-800 rounded-xl p-4">
           <SessionGraph
             nodes={nodes}
             edges={edges}
@@ -56,8 +91,15 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
             fixedMode="agent"
             title="Agents"
           />
+          <button
+            onClick={() => setFullscreenPanel(0)}
+            className="absolute bottom-3 right-3 p-1.5 rounded-md bg-slate-800/60 text-slate-400 opacity-60 hover:opacity-100 transition-opacity hover:bg-slate-700"
+            aria-label="Expand Agents panel"
+          >
+            <Maximize2 size={14} />
+          </button>
         </div>
-        <div className="bg-[#111118] border border-slate-800 rounded-xl p-4">
+        <div className="relative bg-[#111118] border border-slate-800 rounded-xl p-4">
           <SessionGraph
             nodes={nodes}
             edges={edges}
@@ -68,6 +110,13 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
             fixedMode="session"
             title="Sessions"
           />
+          <button
+            onClick={() => setFullscreenPanel(1)}
+            className="absolute bottom-3 right-3 p-1.5 rounded-md bg-slate-800/60 text-slate-400 opacity-60 hover:opacity-100 transition-opacity hover:bg-slate-700"
+            aria-label="Expand Sessions panel"
+          >
+            <Maximize2 size={14} />
+          </button>
         </div>
       </div>
 
