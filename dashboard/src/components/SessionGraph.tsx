@@ -306,52 +306,41 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         className="block"
         onClick={(e) => e.stopPropagation()}
       >
-        <defs>
-          {/* Arrowhead for forward edges */}
-          <marker id="arrow-fwd" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#334155" />
-          </marker>
-          {/* Arrowhead for back-edges (amber) */}
-          <marker id="arrow-back" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#f59e0b" />
-          </marker>
-        </defs>
-
-        {/* Forward edges */}
+        {/* Forward edges — dashed gray with inline arrowhead at bottom */}
         {displayEdges.map((edge) => {
           const from = nodeMap.get(edge.from)
           const to = nodeMap.get(edge.to)
           if (!from || !to) return null
-          // Back-edges (going up or sideways to an ancestor) drawn separately below
-          if (to.depth <= from.depth) return null
+          if (to.depth <= from.depth) return null  // back-edge, drawn separately
           const midY = (from.y + to.y) / 2
-          const path = `M ${from.x} ${from.y + nodeRadius} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y - nodeRadius}`
+          const ex = to.x
+          const ey = to.y - nodeRadius
+          const path = `M ${from.x} ${from.y + nodeRadius} C ${from.x} ${midY}, ${ex} ${midY}, ${ex} ${ey}`
           return (
-            <path
-              key={`fwd-${edge.from}->${edge.to}`}
-              d={path}
-              fill="none"
-              stroke="#334155"
-              strokeWidth="2"
-              strokeDasharray="4 3"
-              markerEnd="url(#arrow-fwd)"
-            />
+            <g key={`fwd-${edge.from}->${edge.to}`}>
+              <path d={path} fill="none" stroke="#334155" strokeWidth="2" strokeDasharray="4 3" />
+              {/* Downward arrowhead at endpoint */}
+              <polygon
+                points={`${ex - 5},${ey - 7} ${ex + 5},${ey - 7} ${ex},${ey}`}
+                fill="#334155"
+              />
+            </g>
           )
         })}
 
-        {/* Back-edges — curved amber arrows looping to the right */}
+        {/* Back-edges — amber curved arrows looping to the right with leftward arrowhead */}
         {displayEdges.map((edge) => {
           const from = nodeMap.get(edge.from)
           const to = nodeMap.get(edge.to)
           if (!from || !to) return null
           if (to.depth > from.depth) return null  // forward edge, drawn above
-          // Curve out to the right of the rightmost node
-          const rightEdge = svgWidth - 20
-          const cy = (from.y + to.y) / 2
-          const path = [
-            `M ${from.x + nodeRadius} ${from.y}`,
-            `C ${rightEdge} ${from.y}, ${rightEdge} ${to.y}, ${to.x + nodeRadius} ${to.y}`,
-          ].join(' ')
+          const rightEdge = svgWidth - 24
+          // Cubic bezier: exit right from `from`, loop around, arrive from right at `to`
+          const fx = from.x + nodeRadius
+          const fy = from.y
+          const tx = to.x + nodeRadius
+          const ty = to.y
+          const path = `M ${fx} ${fy} C ${rightEdge} ${fy}, ${rightEdge} ${ty}, ${tx} ${ty}`
           return (
             <g key={`back-${edge.from}->${edge.to}`}>
               <path
@@ -360,8 +349,13 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
                 stroke="#f59e0b"
                 strokeWidth="1.5"
                 strokeDasharray="5 3"
-                opacity="0.7"
-                markerEnd="url(#arrow-back)"
+                opacity="0.8"
+              />
+              {/* Leftward arrowhead at endpoint (arriving from the right) */}
+              <polygon
+                points={`${tx + 8},${ty - 5} ${tx + 8},${ty + 5} ${tx},${ty}`}
+                fill="#f59e0b"
+                opacity="0.9"
               />
             </g>
           )
