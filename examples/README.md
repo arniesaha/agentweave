@@ -23,12 +23,18 @@ AgentWeave makes it visible. Each runs against the live proxy at
 ```bash
 # Point at the AgentWeave proxy (handles Anthropic auth internally)
 export ANTHROPIC_BASE_URL=http://192.168.1.70:30400/v1
-export ANTHROPIC_API_KEY=dummy
+export ANTHROPIC_API_KEY=dummy   # proxy injects the real key — see note below
 
 # Python deps (from repo root)
 pip install anthropic
 pip install -e sdk/python/
 ```
+
+> **Proxy-side key injection:** Setting `ANTHROPIC_API_KEY=dummy` works when
+> the proxy operator has configured `AGENTWEAVE_ANTHROPIC_API_KEY` on the
+> proxy host. The proxy replaces the dummy value with the real credential
+> before forwarding to Anthropic. If you're running your own proxy without
+> this env var set, supply your real API key instead.
 
 ### Scenario overview
 

@@ -36,6 +36,25 @@ spec:
                 secretKeyRef:
                   name: agentweave-proxy
                   key: proxy-token
+            # Proxy-side API key injection (optional — allows callers to use ANTHROPIC_API_KEY=dummy)
+            - name: AGENTWEAVE_ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentweave-proxy
+                  key: anthropic-api-key
+                  optional: true
+            - name: AGENTWEAVE_GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentweave-proxy
+                  key: google-api-key
+                  optional: true
+            - name: AGENTWEAVE_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentweave-proxy
+                  key: openai-api-key
+                  optional: true
           resources:
             requests:
               cpu: 50m

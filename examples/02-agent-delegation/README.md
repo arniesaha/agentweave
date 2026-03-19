@@ -30,7 +30,7 @@ Each agent is tagged with:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://192.168.1.70:30400/v1
-export ANTHROPIC_API_KEY=dummy
+export ANTHROPIC_API_KEY=dummy   # proxy injects the real key (AGENTWEAVE_ANTHROPIC_API_KEY)
 
 cd /path/to/agentweave
 python examples/02-agent-delegation/main.py

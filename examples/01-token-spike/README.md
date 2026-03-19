@@ -27,7 +27,7 @@ in Grafana Tempo.
 ```bash
 # Point at the AgentWeave proxy (handles Anthropic auth internally)
 export ANTHROPIC_BASE_URL=http://192.168.1.70:30400/v1
-export ANTHROPIC_API_KEY=dummy
+export ANTHROPIC_API_KEY=dummy   # proxy injects the real key (AGENTWEAVE_ANTHROPIC_API_KEY)
 
 cd /path/to/agentweave
 python examples/01-token-spike/main.py

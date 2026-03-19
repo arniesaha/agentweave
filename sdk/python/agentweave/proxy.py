@@ -33,6 +33,11 @@ Usage::
 
     # Tag calls by agent
     # X-AgentWeave-Agent-Id: max-v1
+
+    # Proxy-side key injection (callers can use ANTHROPIC_API_KEY=dummy):
+    export AGENTWEAVE_ANTHROPIC_API_KEY=sk-ant-...   # on the proxy host
+    export AGENTWEAVE_GOOGLE_API_KEY=AIza...          # on the proxy host
+    export AGENTWEAVE_OPENAI_API_KEY=sk-...           # on the proxy host
 """
 
 from __future__ import annotations
@@ -116,6 +121,12 @@ def _context_for_trace_id(trace_id_int: int):
 # Runtime auth token. Set AGENTWEAVE_PROXY_TOKEN or --auth-token.
 # Empty = open mode (dev/localhost only).
 _PROXY_TOKEN: str | None = os.getenv("AGENTWEAVE_PROXY_TOKEN") or None
+
+# Proxy-side API key injection — allows callers to set ANTHROPIC_API_KEY=dummy
+# when the proxy host holds the real credentials.
+_ANTHROPIC_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_ANTHROPIC_API_KEY") or None
+_GOOGLE_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_GOOGLE_API_KEY") or None
+_OPENAI_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_OPENAI_API_KEY") or None
 
 # Global session context — set at startup from env, overrideable via POST /session
 _session_context: dict[str, str] = {
@@ -313,6 +324,21 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     # API key via Bearer token (e.g. OpenClaw) keep working.
     if _PROXY_TOKEN:
         forward_headers.pop("authorization", None)
+
+    # Inject proxy-configured API keys, overriding whatever the caller sent
+    # (including placeholder values like ANTHROPIC_API_KEY=dummy).
+    if provider == "anthropic" and _ANTHROPIC_INJECT_KEY:
+        forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
+    elif provider == "openai" and _OPENAI_INJECT_KEY:
+        forward_headers["authorization"] = f"Bearer {_OPENAI_INJECT_KEY}"
+    elif provider == "google" and _GOOGLE_INJECT_KEY:
+        forward_headers["x-goog-api-key"] = _GOOGLE_INJECT_KEY
+        # Also strip key from query string (Google also accepts ?key=...)
+        import urllib.parse
+        qs_params = urllib.parse.parse_qs(query_string, keep_blank_values=True)
+        qs_params.pop("key", None)
+        query_string = urllib.parse.urlencode({k: v[0] for k, v in qs_params.items()})
+
     upstream = _upstream_url(provider, path, query_string)
     logger.debug("→ %s %s provider=%s model=%s stream=%s",
                  request.method, upstream, provider, model, is_stream)

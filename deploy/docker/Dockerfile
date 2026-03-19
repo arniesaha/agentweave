@@ -20,13 +20,16 @@ USER agentweave
 EXPOSE 4000
 
 # Configuration via environment variables:
-#   AGENTWEAVE_OTLP_ENDPOINT   — OTLP HTTP endpoint (required)
-#   AGENTWEAVE_PROXY_TOKEN     — Bearer token for incoming auth (recommended)
-#   AGENTWEAVE_LISTEN_PORT     — Port to listen on (default: 4000)
-#                                NOTE: use AGENTWEAVE_LISTEN_PORT, not AGENTWEAVE_PROXY_PORT
-#                                (k8s injects AGENTWEAVE_PROXY_PORT as a service discovery var)
-#   AGENTWEAVE_AGENT_ID        — Default agent ID tag (optional)
-#   AGENTWEAVE_CAPTURE_PROMPTS — Set to "1" to capture prompt previews (optional)
+#   AGENTWEAVE_OTLP_ENDPOINT        — OTLP HTTP endpoint (required)
+#   AGENTWEAVE_PROXY_TOKEN          — Bearer token for incoming auth (recommended)
+#   AGENTWEAVE_LISTEN_PORT          — Port to listen on (default: 4000)
+#                                     NOTE: use AGENTWEAVE_LISTEN_PORT, not AGENTWEAVE_PROXY_PORT
+#                                     (k8s injects AGENTWEAVE_PROXY_PORT as a service discovery var)
+#   AGENTWEAVE_AGENT_ID             — Default agent ID tag (optional)
+#   AGENTWEAVE_CAPTURE_PROMPTS      — Set to "1" to capture prompt previews (optional)
+#   AGENTWEAVE_ANTHROPIC_API_KEY    — Inject Anthropic API key (callers can use ANTHROPIC_API_KEY=dummy)
+#   AGENTWEAVE_GOOGLE_API_KEY       — Inject Google/Gemini API key (callers can use a placeholder)
+#   AGENTWEAVE_OPENAI_API_KEY       — Inject OpenAI API key (callers can use a placeholder)
 
 ENTRYPOINT ["sh", "-c", "\
   agentweave proxy start \

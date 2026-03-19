@@ -12,3 +12,14 @@ data:
 
   # Set to "1" to capture prompt/response previews in spans (opt-in)
   # AGENTWEAVE_CAPTURE_PROMPTS: "1"
+
+  # Proxy-side API key injection — enables callers to set ANTHROPIC_API_KEY=dummy.
+  # These are secrets; inject via secretKeyRef in the Deployment, not here.
+  # Example Deployment env entry:
+  #   - name: AGENTWEAVE_ANTHROPIC_API_KEY
+  #     valueFrom:
+  #       secretKeyRef:
+  #         name: agentweave-secrets
+  #         key: AGENTWEAVE_ANTHROPIC_API_KEY
+  #         optional: true
+  # (same pattern for AGENTWEAVE_GOOGLE_API_KEY and AGENTWEAVE_OPENAI_API_KEY)
