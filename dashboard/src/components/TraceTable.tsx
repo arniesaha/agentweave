@@ -162,7 +162,7 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
                       </td>
                       <td className="px-4 py-3">
                         <a
-                          href={`http://192.168.1.70:31989/trace/${row.traceId}`}
+                          href={`http://192.168.1.70:30300/explore?orgId=1&left=${encodeURIComponent(JSON.stringify({datasource:"tempo",queries:[{refId:"A",query:row.traceId,queryType:"traceql"}],range:{from:"now-1h",to:"now"}}))}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex items-center gap-1 text-indigo-400 hover:text-indigo-300 text-xs font-mono"
