@@ -306,59 +306,70 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         className="block"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Forward edges — dashed gray with inline arrowhead at bottom */}
+        {/* Forward edges — dashed gray */}
         {displayEdges.map((edge) => {
           const from = nodeMap.get(edge.from)
           const to = nodeMap.get(edge.to)
           if (!from || !to) return null
-          if (to.depth <= from.depth) return null  // back-edge, drawn separately
+          if (to.depth <= from.depth) return null
+          const fromR = nodeRadius + Math.min(from.callCount * 1.5, 12)
+          const toR   = nodeRadius + Math.min(to.callCount   * 1.5, 12)
           const midY = (from.y + to.y) / 2
           const ex = to.x
-          const ey = to.y - nodeRadius
-          const path = `M ${from.x} ${from.y + nodeRadius} C ${from.x} ${midY}, ${ex} ${midY}, ${ex} ${ey}`
+          const ey = to.y - toR - 2
+          const path = `M ${from.x} ${from.y + fromR} C ${from.x} ${midY}, ${ex} ${midY}, ${ex} ${ey}`
           return (
-            <g key={`fwd-${edge.from}->${edge.to}`}>
-              <path d={path} fill="none" stroke="#334155" strokeWidth="2" strokeDasharray="4 3" />
-              {/* Downward arrowhead at endpoint */}
-              <polygon
-                points={`${ex - 5},${ey - 7} ${ex + 5},${ey - 7} ${ex},${ey}`}
-                fill="#334155"
-              />
-            </g>
+            <path key={`fwd-${edge.from}->${edge.to}`}
+              d={path} fill="none" stroke="#334155" strokeWidth="2" strokeDasharray="4 3" />
           )
         })}
 
-        {/* Back-edges — amber curved arrows looping to the right with leftward arrowhead */}
+        {/* Back-edges — amber curved arrows looping to the right */}
         {displayEdges.map((edge) => {
           const from = nodeMap.get(edge.from)
           const to = nodeMap.get(edge.to)
           if (!from || !to) return null
-          if (to.depth > from.depth) return null  // forward edge, drawn above
-          const rightEdge = svgWidth - 24
-          // Cubic bezier: exit right from `from`, loop around, arrive from right at `to`
-          const fx = from.x + nodeRadius
+          if (to.depth > from.depth) return null
+          const fromR = nodeRadius + Math.min(from.callCount * 1.5, 12)
+          const toR   = nodeRadius + Math.min(to.callCount   * 1.5, 12)
+          const rightEdge = svgWidth - 28
+          const fx = from.x + fromR
           const fy = from.y
-          const tx = to.x + nodeRadius
+          const tx = to.x + toR + 10   // land 10px outside the target circle
           const ty = to.y
           const path = `M ${fx} ${fy} C ${rightEdge} ${fy}, ${rightEdge} ${ty}, ${tx} ${ty}`
           return (
-            <g key={`back-${edge.from}->${edge.to}`}>
-              <path
-                d={path}
-                fill="none"
-                stroke="#f59e0b"
-                strokeWidth="1.5"
-                strokeDasharray="5 3"
-                opacity="0.8"
-              />
-              {/* Leftward arrowhead at endpoint (arriving from the right) */}
-              <polygon
-                points={`${tx + 8},${ty - 5} ${tx + 8},${ty + 5} ${tx},${ty}`}
-                fill="#f59e0b"
-                opacity="0.9"
-              />
-            </g>
+            <path key={`back-${edge.from}->${edge.to}`}
+              d={path} fill="none" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.8" />
           )
+        })}
+
+        {/* Arrowheads drawn LAST so they appear on top of nodes */}
+        {displayEdges.map((edge) => {
+          const from = nodeMap.get(edge.from)
+          const to = nodeMap.get(edge.to)
+          if (!from || !to) return null
+          const toR = nodeRadius + Math.min(to.callCount * 1.5, 12)
+
+          if (to.depth > from.depth) {
+            // Forward edge: downward arrowhead just above target
+            const ex = to.x
+            const ey = to.y - toR - 2
+            return (
+              <polygon key={`ah-fwd-${edge.from}->${edge.to}`}
+                points={`${ex - 5},${ey - 8} ${ex + 5},${ey - 8} ${ex},${ey}`}
+                fill="#475569" />
+            )
+          } else {
+            // Back-edge: leftward arrowhead landing on target's right side
+            const tx = to.x + toR + 10
+            const ty = to.y
+            return (
+              <polygon key={`ah-back-${edge.from}->${edge.to}`}
+                points={`${tx + 10},${ty - 5} ${tx + 10},${ty + 5} ${tx},${ty}`}
+                fill="#f59e0b" />
+            )
+          }
         })}
 
         {/* Nodes */}
