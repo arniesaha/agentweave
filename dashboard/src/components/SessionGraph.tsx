@@ -275,16 +275,28 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
 
   return (
     <div className="relative overflow-auto">
-      {/* Mode toggle */}
-      <div className="flex gap-1 mb-2 justify-end">
-        <button
-          onClick={() => setMode('agent')}
-          className={`px-2 py-1 text-xs rounded ${mode === 'agent' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-        >Agents</button>
-        <button
-          onClick={() => setMode('session')}
-          className={`px-2 py-1 text-xs rounded ${mode === 'session' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-        >Sessions</button>
+      {/* Mode toggle + legend */}
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <div className="flex items-center gap-3 text-xs text-slate-500">
+          <span className="flex items-center gap-1">
+            <svg width="24" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#334155" strokeWidth="2" strokeDasharray="4 3"/><polygon points="20,2 20,8 24,5" fill="#334155"/></svg>
+            delegates to
+          </span>
+          <span className="flex items-center gap-1">
+            <svg width="24" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.7"/><polygon points="20,2 20,8 24,5" fill="#f59e0b" opacity="0.7"/></svg>
+            delegates back
+          </span>
+        </div>
+        <div className="flex gap-1">
+          <button
+            onClick={() => setMode('agent')}
+            className={`px-2 py-1 text-xs rounded ${mode === 'agent' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+          >Agents</button>
+          <button
+            onClick={() => setMode('session')}
+            className={`px-2 py-1 text-xs rounded ${mode === 'session' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+          >Sessions</button>
+        </div>
       </div>
 
       <svg
@@ -294,22 +306,64 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         className="block"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Edges */}
+        <defs>
+          {/* Arrowhead for forward edges */}
+          <marker id="arrow-fwd" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#334155" />
+          </marker>
+          {/* Arrowhead for back-edges (amber) */}
+          <marker id="arrow-back" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#f59e0b" />
+          </marker>
+        </defs>
+
+        {/* Forward edges */}
         {displayEdges.map((edge) => {
           const from = nodeMap.get(edge.from)
           const to = nodeMap.get(edge.to)
           if (!from || !to) return null
+          // Back-edges (going up or sideways to an ancestor) drawn separately below
+          if (to.depth <= from.depth) return null
           const midY = (from.y + to.y) / 2
           const path = `M ${from.x} ${from.y + nodeRadius} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y - nodeRadius}`
           return (
             <path
-              key={`${edge.from}->${edge.to}`}
+              key={`fwd-${edge.from}->${edge.to}`}
               d={path}
               fill="none"
               stroke="#334155"
               strokeWidth="2"
               strokeDasharray="4 3"
+              markerEnd="url(#arrow-fwd)"
             />
+          )
+        })}
+
+        {/* Back-edges — curved amber arrows looping to the right */}
+        {displayEdges.map((edge) => {
+          const from = nodeMap.get(edge.from)
+          const to = nodeMap.get(edge.to)
+          if (!from || !to) return null
+          if (to.depth > from.depth) return null  // forward edge, drawn above
+          // Curve out to the right of the rightmost node
+          const rightEdge = svgWidth - 20
+          const cy = (from.y + to.y) / 2
+          const path = [
+            `M ${from.x + nodeRadius} ${from.y}`,
+            `C ${rightEdge} ${from.y}, ${rightEdge} ${to.y}, ${to.x + nodeRadius} ${to.y}`,
+          ].join(' ')
+          return (
+            <g key={`back-${edge.from}->${edge.to}`}>
+              <path
+                d={path}
+                fill="none"
+                stroke="#f59e0b"
+                strokeWidth="1.5"
+                strokeDasharray="5 3"
+                opacity="0.7"
+                markerEnd="url(#arrow-back)"
+              />
+            </g>
           )
         })}
 
