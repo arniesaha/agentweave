@@ -143,11 +143,13 @@ interface Props {
   onSelect: (sessionId: string) => void
   loading: boolean
   error: string | null
+  fixedMode?: GraphMode  // if set, locks mode and hides the toggle
+  title?: string         // optional label shown above graph
 }
 
-export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, error }: Props) {
+export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, error, fixedMode, title }: Props) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
-  const [mode, setMode] = useState<GraphMode>('agent')
+  const [mode, setMode] = useState<GraphMode>(fixedMode ?? 'agent')
   const svgRef = useRef<SVGSVGElement>(null)
 
   // Agent mode: aggregate session nodes by agentId
@@ -275,9 +277,11 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
 
   return (
     <div className="relative overflow-auto">
-      {/* Mode toggle + legend */}
+      {/* Header: title (fixed mode) or toggle */}
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        {/* Legend */}
         <div className="flex items-center gap-3 text-xs text-slate-500">
+          {title && <span className="text-slate-300 font-medium text-sm mr-1">{title}</span>}
           <span className="flex items-center gap-1">
             <svg width="24" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#334155" strokeWidth="2" strokeDasharray="4 3"/><polygon points="20,2 20,8 24,5" fill="#334155"/></svg>
             delegates to
@@ -287,16 +291,19 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
             delegates back
           </span>
         </div>
-        <div className="flex gap-1">
-          <button
-            onClick={() => setMode('agent')}
-            className={`px-2 py-1 text-xs rounded ${mode === 'agent' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-          >Agents</button>
-          <button
-            onClick={() => setMode('session')}
-            className={`px-2 py-1 text-xs rounded ${mode === 'session' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-          >Sessions</button>
-        </div>
+        {/* Toggle only shown when not in fixed mode */}
+        {!fixedMode && (
+          <div className="flex gap-1">
+            <button
+              onClick={() => setMode('agent')}
+              className={`px-2 py-1 text-xs rounded ${mode === 'agent' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            >Agents</button>
+            <button
+              onClick={() => setMode('session')}
+              className={`px-2 py-1 text-xs rounded ${mode === 'session' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            >Sessions</button>
+          </div>
+        )}
       </div>
 
       <svg

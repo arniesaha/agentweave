@@ -43,16 +43,32 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
       {/* Daily summary */}
       <DailySummaryBanner nodes={nodes} loading={loading} />
 
-      {/* Graph panel */}
-      <div className="bg-[#111118] border border-slate-800 rounded-xl p-4">
-        <SessionGraph
-          nodes={nodes}
-          edges={edges}
-          selectedId={selectedId}
-          onSelect={handleSelect}
-          loading={loading}
-          error={error}
-        />
+      {/* Graph panels — Agents + Sessions side by side on desktop, stacked on mobile */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-[#111118] border border-slate-800 rounded-xl p-4">
+          <SessionGraph
+            nodes={nodes}
+            edges={edges}
+            selectedId={selectedId}
+            onSelect={handleSelect}
+            loading={loading}
+            error={error}
+            fixedMode="agent"
+            title="Agents"
+          />
+        </div>
+        <div className="bg-[#111118] border border-slate-800 rounded-xl p-4">
+          <SessionGraph
+            nodes={nodes}
+            edges={edges}
+            selectedId={selectedId}
+            onSelect={handleSelect}
+            loading={loading}
+            error={error}
+            fixedMode="session"
+            title="Sessions"
+          />
+        </div>
       </div>
 
       {/* Session list (sorted by cost desc — gives Obsidian "file list" feel) */}
