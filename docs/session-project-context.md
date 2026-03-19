@@ -12,6 +12,7 @@ The proxy reads three optional request headers and stamps them as span attribute
 | `X-AgentWeave-Session-Id` | `prov.session.id` | string | Unique conversation thread ID |
 | `X-AgentWeave-Project` | `prov.project` | string | High-level topic (launchpad, agentweave, nix, …) |
 | `X-AgentWeave-Turn` | `prov.session.turn` | int | Turn number within the session |
+| `X-AgentWeave-Agent-Type` | `prov.agent.type` | string | Agent role: `main`, `subagent`, or `delegated` |
 
 All three are optional — spans without them still work normally.
 
@@ -84,6 +85,7 @@ As of 2026-03-12, Nix's OpenClaw is wired with the following static headers on t
 | `X-AgentWeave-Session-Id` | `nix-main` |
 | `X-AgentWeave-Project` | `nix` |
 | `X-AgentWeave-Agent-Id` | `nix-v1` |
+| `X-AgentWeave-Agent-Type` | `main` |
 
 Every Claude call Nix makes is tagged and visible in Grafana → Session Explorer under project `nix`.
 

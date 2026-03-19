@@ -1,7 +1,7 @@
 # Claude Code + AgentWeave Proxy
 
 Route local Claude Code sessions through the AgentWeave proxy to get
-LLM call tracing in Grafana alongside Max and Nix agent spans.
+LLM call tracing in the AgentWeave dashboard alongside Max and Nix agent spans.
 
 ## Prerequisites
 
@@ -67,10 +67,11 @@ ANTHROPIC_BASE_URL="" claude
 | Spans show `agent.id = max-v1` not `claude-code-mac` | Header not forwarded | Check proxy version strips/reads `X-AgentWeave-Agent-Id` |
 | Connection refused on `:30401` | proxy-max not deployed | Deploy `proxy-max.yaml` on NAS k8s first |
 
-## Agent IDs in Grafana
+## Agent IDs in AgentWeave Dashboard
 
 | Agent ID | Source |
 |----------|--------|
 | `nix-v1` | Nix agent (NAS, NodePort 30400) |
 | `max-v1` | Max agent (Mac Mini) |
 | `claude-code-mac` | Claude Code sessions (Mac Mini) |
+| `nix-subagent-v1` | Claude Code sub-agents (NAS, NodePort 30402) |

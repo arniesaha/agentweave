@@ -57,6 +57,7 @@ const agentWeaveStreamFn: typeof streamSimple = (m, ctx, opts) =>
     headers: {
       ...opts?.headers,
       "X-AgentWeave-Agent-Id": "max-v1",
+      "X-AgentWeave-Agent-Type": "main",
       "X-AgentWeave-Session-Id": "max-main",
       "X-AgentWeave-Project": "max",
       // Only for Anthropic — Google uses query param auth
@@ -105,14 +106,13 @@ In addition to the proxy headers, Max also has native AgentWeave TS SDK integrat
 - W3C trace context (`traceparent`) is injected into Nix A2A calls via
   `@opentelemetry/api` propagation for cross-agent trace linking
 
-### Managed via launchd
-
-Max runs as a launchd service (`com.arnab.agent-max`). Restart with:
+### Restart
 
 ```bash
 cd ~/max/projects/agent-max
 npm run build
-launchctl stop com.arnab.agent-max && sleep 5 && launchctl start com.arnab.agent-max
+pkill -f 'agent-max/dist/index.js' && sleep 1
+nohup node dist/index.js > /tmp/agent-max.log 2>&1 &
 ```
 
 ### Verify traces appear in Grafana

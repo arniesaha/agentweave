@@ -68,6 +68,10 @@ Add to `~/.openclaw/openclaw.json`:
     "providers": {
       "anthropic": {
         "baseUrl": "http://localhost:4000",
+        "headers": {
+          "X-AgentWeave-Agent-Id": "nix-v1",
+          "X-AgentWeave-Agent-Type": "main"
+        },
         "models": []
       }
     }
@@ -127,6 +131,7 @@ llm.claude-sonnet-4-6
   prov.llm.total_tokens   = 5133
   prov.llm.stop_reason    = end_turn
   prov.agent.id           = nix-v1
+  prov.agent.type         = main
   agentweave.latency_ms   = 4348
   http.route              = /v1/messages
 ```

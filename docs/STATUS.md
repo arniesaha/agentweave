@@ -1,79 +1,63 @@
 # AgentWeave — Project Status
-*Last updated: March 10, 2026*
+*Last updated: March 18, 2026*
 
 ---
 
-## What's Done (v0.1.0 ✅)
+## Current State (v0.2.x)
 
-### Python SDK
+### Proxy
+- Multi-provider transparent proxy: Anthropic, OpenAI, Google Gemini
+- Deployed on k3s NAS: NodePort 30400 (nix-v1), 30401 (max-v1), 30402 (nix-subagent-v1)
+- Reads `AGENTWEAVE_AGENT_TYPE` from env — auto-tags spans with `prov.agent.type`
+- Session context via `POST /session` or env vars: `AGENTWEAVE_SESSION_ID`, `AGENTWEAVE_PARENT_SESSION_ID`, `AGENTWEAVE_TASK_LABEL`, `AGENTWEAVE_AGENT_TYPE`
+- Sub-agent attribution: `prov.parent.session.id`, `prov.agent.type`, `prov.task.label`
+- Benchmarks: ~6ms p50 overhead on LLM calls (<2%)
+
+### Dashboard
+- Live AgentWeave dashboard (React SPA) at NodePort 30896
+- Overview tab: LLM calls, cost, latency by model over time
+- Session Explorer tab: interactive multi-level sub-agent graph with parent→child edges
+- Nodes coloured by agent type (main = purple, subagent = teal)
+- Time range filter: 1h / 3h / 6h / 24h / 7d
+
+### Python SDK (`agentweave-sdk==0.1.1` on PyPI)
 - `@trace_tool`, `@trace_agent`, `@trace_llm` decorators
-- W3C PROV-O compatible OTel spans
-- OTLP exporter — works with Grafana Tempo, Langfuse, Jaeger
-- Published to PyPI as `agentweave-sdk` (name `agentweave` was taken)
+- `auto_instrument()` — zero-decorator patching for Anthropic + OpenAI SDKs
+- W3C PROV-O OTel spans, W3C TraceContext propagation
+- Sub-agent attribution parameters: `parent_session_id`, `agent_type`, `turn_depth`
+- 237 tests passing
 
-### Proxy Layer
-- Multi-provider transparent proxy (Anthropic + Google Gemini)
-- Auto-detects provider from request path
-- Emits OTel spans for every LLM call — token counts, latency, model
-- Dockerfile ready
-- k8s manifests drafted (not end-to-end validated yet)
+### TypeScript SDK (`agentweave-sdk` on npm)
+- Same decorator API as Python: `traceAgent`, `traceTool`, `traceLlm`
+- W3C trace context propagation
+- 10 tests passing
 
-### CI/CD
-- GitHub Actions: test workflow on PR
-- PyPI publish pipeline on version tags (issue #2 — needs validation)
+### Go SDK (`go get github.com/arniesaha/agentweave-go`)
+- `TraceTool`, `TraceAgent`, `TraceLlm`
+- 4 tests passing
 
-### Docs & Screenshots
-- README with architecture diagram (Mermaid)
-- Grafana Tempo trace screenshots
-- Proxy setup guide
-
-### GitHub Issues Open
-| # | Title | Status |
-|---|-------|--------|
-| 1 | feat: sub-agent span linking — propagate trace context across spawned agents | Open |
-| 2 | ci: publish to PyPI on version tags via GitHub Actions | Open |
-| 3 | feat: JavaScript / TypeScript SDK | ✅ Done |
-| 4 | test: validate Dockerfile + k8s manifests end-to-end | Open |
+### Dogfooding (Live)
+- Nix (NAS OpenClaw): all LLM calls traced via NodePort 30400, tagged `nix-v1 / main`
+- Max (Mac Mini pi-mono): all LLM calls traced via NodePort 30401, tagged `max-v1 / main`
+- Sub-agents (Claude Code spawns): traced via NodePort 30402, tagged `nix-subagent-v1 / subagent`
+- Grafana + Tempo: `http://192.168.1.70:30300` (admin/observability123)
 
 ---
 
-## Phase 1 Complete ✅ (Mar 10, 2026)
-- #2 PyPI CI validated — `agentweave-sdk==0.1.1` live
-- #4 k8s deploy validated — proxy running at 192.168.1.70:30400, Tempo connected
-- Bug fixed: k8s env var collision (`AGENTWEAVE_PROXY_PORT` → `AGENTWEAVE_LISTEN_PORT`)
-- Notification pipeline: `nix-notify.sh` uses hardcoded Node v24 path
+## Recently Closed Issues
+| # | Title | Closed |
+|---|-------|--------|
+| #96 | Dashboard: sub-agent edges not rendered (parent-child graph missing) | Mar 18, 2026 |
+| #97 | README: update screenshots + framework example backlinks | Mar 18, 2026 |
 
-### Lessons from Phase 1
-- NAS SIGTERMs exec sessions after ~2-3 min — use `sessions_spawn` for sub-agents, not `exec + background`
-- Inline exec results: Nix must message Arnab proactively on completion, not wait to be asked
-- `nix-notify.sh` works but only if the sub-agent process isn't killed first
-
-## SDKs Shipped ✅
-
-| SDK | Package | Status |
-|-----|---------|--------|
-| Python | `agentweave-sdk==0.1.1` on PyPI | ✅ Shipped |
-| TypeScript | `agentweave-sdk` on npm | ✅ Shipped |
-| Go | `go get github.com/arniesaha/agentweave-go` | ✅ Shipped |
-
-## Roadmap
-
-### Infrastructure
-- [ ] **Proxy layer deployment** — validate as standalone deployment option
-- [ ] **Kubernetes manifests** — fix and validate end-to-end (issue #4)
-
-### Agentic Dev Lifecycle (Big Idea)
-- [ ] Structure GitHub issues with proper labels and milestones by sub-feature
-- [ ] Thinker/coder sub-agent picks up issues → implements → opens PR
-- [ ] Max (Mac Mini) acts as reviewer agent
-- [ ] All agent interactions traced through AgentWeave → lands in Grafana
-- [ ] **Dogfooding**: agents building AgentWeave *using* AgentWeave
-
-### Dogfooding Environment
-- Nix (NAS) + Max (Mac Mini) as reference multi-agent setup
-- All A2A calls instrumented via AgentWeave proxy
-- Traces → Grafana Tempo at 192.168.1.70
-- Use real Launchpad/Cortex pipelines as test workloads
+## Open Issues
+| # | Title |
+|---|-------|
+| #1 | feat: sub-agent span linking — propagate trace context across spawned agents |
+| #2 | ci: publish to PyPI on version tags via GitHub Actions |
+| #4 | test: validate Dockerfile + k8s manifests end-to-end |
+| #91 | ci: npm publish workflow for TypeScript SDK |
+| #98 | docs: update stale docs |
 
 ---
 
