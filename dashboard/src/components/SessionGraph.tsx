@@ -16,10 +16,10 @@ interface TooltipState {
 type GraphMode = 'agent' | 'session'
 
 const NODE_RADIUS_BASE = 28
-const NODE_RADIUS_SESSION = 32
+const NODE_RADIUS_SESSION = 30
 const H_GAP_BASE = 100
-const H_GAP_SESSION = 120
-const V_GAP = 110
+const H_GAP_SESSION = 90   // tighter horizontal — keeps deep trees narrower
+const V_GAP = 100
 const PADDING = 60
 
 function shortId(id: string, mode: GraphMode): string {
@@ -193,8 +193,25 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
     })
   }, [nodes, edges, mode])
 
-  const displayNodes = mode === 'agent' ? agentNodes : nodes
-  const displayEdges = mode === 'agent' ? agentEdges : edges
+  const rawDisplayNodes = mode === 'agent' ? agentNodes : nodes
+  const rawDisplayEdges = mode === 'agent' ? agentEdges : edges
+
+  // In session mode: drop orphaned leaf nodes (old demo sessions whose parent isn't
+  // in the current dataset and who have no children). Keeps the graph clean.
+  const { displayNodes, displayEdges } = useMemo(() => {
+    if (mode !== 'session') return { displayNodes: rawDisplayNodes, displayEdges: rawDisplayEdges }
+    const sessionSet = new Set(rawDisplayNodes.map((n) => n.sessionId))
+    const hasChildren = new Set(rawDisplayEdges.map((e) => e.from))
+    const filtered = rawDisplayNodes.filter((n) => {
+      if (!n.parentSessionId) return true                 // true root (nix-main, max-main)
+      if (sessionSet.has(n.parentSessionId)) return true  // parent is in dataset → connected
+      if (hasChildren.has(n.sessionId)) return true       // has children → keep as sub-root
+      return false                                         // orphaned leaf → drop
+    })
+    const keptIds = new Set(filtered.map((n) => n.sessionId))
+    const filteredEdges = rawDisplayEdges.filter((e) => keptIds.has(e.from) && keptIds.has(e.to))
+    return { displayNodes: filtered, displayEdges: filteredEdges }
+  }, [rawDisplayNodes, rawDisplayEdges, mode])
 
   const nodeRadius = mode === 'session' ? NODE_RADIUS_SESSION : NODE_RADIUS_BASE
   const hGap = mode === 'session' ? H_GAP_SESSION : H_GAP_BASE
