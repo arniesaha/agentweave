@@ -5,4 +5,5 @@ metadata:
   namespace: agentweave
 data:
   AGENTWEAVE_AGENT_ID: "nix-subagent-v1"
+  AGENTWEAVE_AGENT_TYPE: "subagent"
   AGENTWEAVE_OTLP_ENDPOINT: "http://tempo.monitoring.svc.cluster.local:4318"

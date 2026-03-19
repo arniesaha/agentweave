@@ -123,6 +123,7 @@ _session_context: dict[str, str] = {
         "prov.session.id": os.getenv("AGENTWEAVE_SESSION_ID", ""),
         "prov.parent.session.id": os.getenv("AGENTWEAVE_PARENT_SESSION_ID", ""),
         "prov.task.label": os.getenv("AGENTWEAVE_TASK_LABEL", ""),
+        "prov.agent.type": os.getenv("AGENTWEAVE_AGENT_TYPE", ""),
     }.items() if v
 }
 
@@ -223,6 +224,7 @@ async def set_session_context(body: dict):
         "prov.session.id": body.get("session_id", ""),
         "prov.parent.session.id": body.get("parent_session_id", ""),
         "prov.task.label": body.get("task_label", ""),
+        "prov.agent.type": body.get("agent_type", ""),
     }.items() if v}
     return {"ok": True, "context": _session_context}
 
