@@ -37,3 +37,4 @@ npm-debug.log*
 *.tsbuildinfo
 dist/
 .turbo/
+linkedin-draft-v1.md
