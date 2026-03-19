@@ -62,13 +62,13 @@ graph LR
 3. **Proxy** — point any agent's base URL at AgentWeave. It auto-detects the provider, forwards upstream, extracts token counts, and emits OTel spans. No code changes.
 
 <p align="center">
-  <img src="screenshots/aw_overview_full.png" alt="AgentWeave dashboard overview — LLM calls, cost, latency, agent attribution, and session table" width="100%">
+  <img src="screenshots/aw_overview_v2.png" alt="AgentWeave dashboard overview — LLM calls, cost, latency, agent attribution, and session table" width="100%">
   <br>
   <em>Overview — KPIs, calls and cost over time, model/agent breakdown, attribution, and full session + trace tables</em>
 </p>
 
 <p align="center">
-  <img src="screenshots/aw_sessions_full.png" alt="AgentWeave session explorer — Agents topology and Sessions tree side by side" width="100%">
+  <img src="screenshots/aw_sessions_v2.png" alt="AgentWeave session explorer — Agents topology and Sessions tree side by side" width="100%">
   <br>
   <em>Session Explorer — Agents topology (with back-edge delegation) and Sessions tree side by side</em>
 </p>
