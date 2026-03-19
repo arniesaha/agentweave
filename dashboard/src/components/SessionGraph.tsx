@@ -13,12 +13,19 @@ interface TooltipState {
   y: number
 }
 
-const NODE_RADIUS = 28
-const H_GAP = 100
+type GraphMode = 'agent' | 'session'
+
+const NODE_RADIUS_BASE = 28
+const NODE_RADIUS_SESSION = 32
+const H_GAP_BASE = 100
+const H_GAP_SESSION = 120
 const V_GAP = 110
 const PADDING = 60
 
-function shortId(id: string): string {
+function shortId(id: string, mode: GraphMode): string {
+  if (mode === 'session') {
+    return id.length > 14 ? id.slice(0, 13) + '…' : id
+  }
   return id.length > 8 ? id.slice(0, 8) + '…' : id
 }
 
@@ -44,7 +51,9 @@ function nodeColor(node: SessionNode): { fill: string; stroke: string; text: str
 /** Compute a simple top-down tree layout. Returns nodes with x/y coordinates. */
 function layoutTree(
   nodes: SessionNode[],
-  edges: SessionEdge[]
+  edges: SessionEdge[],
+  nodeRadius: number,
+  hGap: number
 ): { layoutNodes: LayoutNode[]; width: number; height: number } {
   if (nodes.length === 0) return { layoutNodes: [], width: 0, height: 0 }
 
@@ -109,14 +118,14 @@ function layoutTree(
   const maxX = Math.max(...layoutNodes.map((n) => n.x), 0)
   const maxY = Math.max(...layoutNodes.map((n) => n.y), 0)
 
-  const width = (maxX + 1) * (NODE_RADIUS * 2 + H_GAP) + PADDING * 2
-  const height = (maxY + 1) * (NODE_RADIUS * 2 + V_GAP) + PADDING * 2
+  const width = (maxX + 1) * (nodeRadius * 2 + hGap) + PADDING * 2
+  const height = (maxY + 1) * (nodeRadius * 2 + V_GAP) + PADDING * 2
 
   // Convert grid positions to pixel positions
   const pixelNodes = layoutNodes.map((n) => ({
     ...n,
-    x: PADDING + n.x * (NODE_RADIUS * 2 + H_GAP) + NODE_RADIUS,
-    y: PADDING + n.y * (NODE_RADIUS * 2 + V_GAP) + NODE_RADIUS,
+    x: PADDING + n.x * (nodeRadius * 2 + hGap) + nodeRadius,
+    y: PADDING + n.y * (nodeRadius * 2 + V_GAP) + nodeRadius,
   }))
 
   return { layoutNodes: pixelNodes, width, height }
@@ -133,11 +142,66 @@ interface Props {
 
 export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, error }: Props) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
+  const [mode, setMode] = useState<GraphMode>('agent')
   const svgRef = useRef<SVGSVGElement>(null)
 
+  // Agent mode: aggregate session nodes by agentId
+  const agentNodes = useMemo(() => {
+    if (mode !== 'agent') return []
+    const map = new Map<string, SessionNode>()
+    for (const n of nodes) {
+      const aid = n.agentId || 'unknown'
+      const existing = map.get(aid)
+      if (existing) {
+        existing.callCount += n.callCount
+        existing.totalCost += n.totalCost
+      } else {
+        map.set(aid, {
+          sessionId: aid,
+          agentId: aid,
+          agentType: n.agentType,
+          taskLabel: '',
+          parentSessionId: '',
+          callCount: n.callCount,
+          totalCost: n.totalCost,
+          tokensIn: n.tokensIn,
+          tokensOut: n.tokensOut,
+          firstSeen: n.firstSeen,
+          lastSeen: n.lastSeen,
+          durationMs: n.durationMs,
+          hasError: n.hasError,
+        })
+      }
+    }
+    return Array.from(map.values())
+  }, [nodes, mode])
+
+  const agentEdges = useMemo(() => {
+    if (mode !== 'agent') return []
+    const sessionToAgent = new Map(nodes.map((n) => [n.sessionId, n.agentId]))
+    const edgeSet = new Set<string>()
+    for (const e of edges) {
+      const fromAgent = sessionToAgent.get(e.from)
+      const toAgent = sessionToAgent.get(e.to)
+      if (fromAgent && toAgent && fromAgent !== toAgent) {
+        edgeSet.add(`${fromAgent}||${toAgent}`)
+      }
+    }
+    return Array.from(edgeSet).map((k) => {
+      const [from, to] = k.split('||')
+      return { from, to } as SessionEdge
+    })
+  }, [nodes, edges, mode])
+
+  const displayNodes = mode === 'agent' ? agentNodes : nodes
+  const displayEdges = mode === 'agent' ? agentEdges : edges
+
+  const nodeRadius = mode === 'session' ? NODE_RADIUS_SESSION : NODE_RADIUS_BASE
+  const hGap = mode === 'session' ? H_GAP_SESSION : H_GAP_BASE
+
   const { layoutNodes, width, height } = useMemo(
-    () => layoutTree(nodes, edges),
-    [nodes, edges]
+    () => layoutTree(displayNodes, displayEdges, nodeRadius, hGap),
+    [displayNodes, displayEdges, nodeRadius, hGap]
   )
 
   const nodeMap = useMemo(
@@ -189,6 +253,18 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
 
   return (
     <div className="relative overflow-auto">
+      {/* Mode toggle */}
+      <div className="flex gap-1 mb-2 justify-end">
+        <button
+          onClick={() => setMode('agent')}
+          className={`px-2 py-1 text-xs rounded ${mode === 'agent' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+        >Agents</button>
+        <button
+          onClick={() => setMode('session')}
+          className={`px-2 py-1 text-xs rounded ${mode === 'session' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+        >Sessions</button>
+      </div>
+
       <svg
         ref={svgRef}
         width={svgWidth}
@@ -197,12 +273,12 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         onClick={(e) => e.stopPropagation()}
       >
         {/* Edges */}
-        {edges.map((edge) => {
+        {displayEdges.map((edge) => {
           const from = nodeMap.get(edge.from)
           const to = nodeMap.get(edge.to)
           if (!from || !to) return null
           const midY = (from.y + to.y) / 2
-          const path = `M ${from.x} ${from.y + NODE_RADIUS} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y - NODE_RADIUS}`
+          const path = `M ${from.x} ${from.y + nodeRadius} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y - nodeRadius}`
           return (
             <path
               key={`${edge.from}->${edge.to}`}
@@ -219,7 +295,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         {layoutNodes.map((node) => {
           const colors = nodeColor(node)
           const isSelected = node.sessionId === selectedId
-          const radius = NODE_RADIUS + Math.min(node.callCount * 1.5, 12)
+          const radius = nodeRadius + Math.min(node.callCount * 1.5, 12)
 
           return (
             <g
@@ -270,7 +346,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
               >
                 {node.callCount}
               </text>
-              {/* Agent ID label below */}
+              {/* Label below node — agent ID in agent mode, session ID in session mode */}
               <text
                 y={radius + 14}
                 textAnchor="middle"
@@ -278,9 +354,11 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
                 fill="#94a3b8"
                 fontFamily="monospace"
               >
-                {shortId(node.agentId)}
+                {mode === 'agent'
+                  ? shortId(node.agentId, mode)
+                  : shortId(node.sessionId, mode)}
               </text>
-              {/* Cost label below agent ID */}
+              {/* Cost label below ID */}
               {node.totalCost > 0 && (
                 <text
                   y={radius + 25}
@@ -304,21 +382,23 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         >
           <div className="bg-[#0f0f1a] border border-slate-700 rounded-lg p-3 shadow-xl text-xs min-w-[200px] max-w-[280px]">
             <div className="font-semibold text-slate-200 mb-1 truncate font-mono">
-              {tooltip.node.sessionId}
+              {mode === 'session' ? tooltip.node.sessionId : tooltip.node.agentId}
             </div>
-            {tooltip.node.taskLabel && (
+            {mode === 'session' && tooltip.node.taskLabel && (
               <div className="text-indigo-300 mb-1 truncate">📋 {tooltip.node.taskLabel}</div>
             )}
             <div className="space-y-0.5 text-slate-400">
-              <div>Agent: <span className="text-slate-300">{tooltip.node.agentId}</span></div>
+              {mode === 'session' && (
+                <div>Agent: <span className="text-slate-300">{tooltip.node.agentId}</span></div>
+              )}
               <div>Type: <span className="text-slate-300">{tooltip.node.agentType}</span></div>
               <div>Calls: <span className="text-slate-300">{tooltip.node.callCount}</span></div>
               <div>Cost: <span className="text-emerald-400">{formatCost(tooltip.node.totalCost)}</span></div>
               {tooltip.node.durationMs > 0 && (
                 <div>Duration: <span className="text-slate-300">{formatDuration(tooltip.node.durationMs)}</span></div>
               )}
-              {tooltip.node.parentSessionId && (
-                <div className="truncate">Parent: <span className="text-sky-400 font-mono">{shortId(tooltip.node.parentSessionId)}</span></div>
+              {mode === 'session' && tooltip.node.parentSessionId && (
+                <div className="truncate">Parent: <span className="text-sky-400 font-mono">{shortId(tooltip.node.parentSessionId, mode)}</span></div>
               )}
             </div>
             <div className="mt-2 text-slate-600 text-[10px]">Click to view details →</div>
@@ -330,7 +410,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
       <div className="flex items-center gap-4 mt-3 px-2 text-xs text-slate-500 flex-wrap">
         <span className="flex items-center gap-1.5">
           <span className="w-3 h-3 rounded-full bg-indigo-900 border border-indigo-400 inline-block" />
-          Main session
+          {mode === 'agent' ? 'Main agent' : 'Main session'}
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-3 h-3 rounded-full bg-sky-900 border border-sky-400 inline-block" />
