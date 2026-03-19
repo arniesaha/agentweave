@@ -76,20 +76,25 @@ function layoutTree(
 
   let col = 0
 
-  function subtreeWidth(id: string): number {
+  // Guard against cycles (e.g. nix-v1 → max-v1 → nix-v1 in agent mode)
+  const visitStack = new Set<string>()
+
+  function subtreeWidth(id: string, depth = 0): number {
+    if (depth > 20 || visitStack.has(id)) return 1   // cycle / depth guard
+    visitStack.add(id)
     const kids = children.get(id) ?? []
-    if (kids.length === 0) return 1
-    return kids.reduce((sum, kid) => sum + subtreeWidth(kid), 0)
+    const w = kids.length === 0 ? 1 : kids.reduce((sum, kid) => sum + subtreeWidth(kid, depth + 1), 0)
+    visitStack.delete(id)
+    return w
   }
 
   function place(id: string, depth: number, leftCol: number): number {
-    if (positionedIds.has(id)) return leftCol
+    if (positionedIds.has(id)) return leftCol  // already placed — cycle guard
     positionedIds.add(id)
     const node = nodeMap.get(id)
     if (!node) return leftCol
 
-    const kids = children.get(id) ?? []
-    const width = subtreeWidth(id)
+    const kids = (children.get(id) ?? []).filter((k) => !positionedIds.has(k))  // skip already-placed
 
     let childCol = leftCol
     for (const kid of kids) {
