@@ -73,6 +73,12 @@ graph LR
   <em>Session Explorer — multi-level sub-agent hierarchy with parent→child edges</em>
 </p>
 
+<p align="center">
+  <img src="screenshots/aw_tempo_trace.jpg" alt="Grafana Tempo TraceQL — span attributes, cost, cache hit rate, and agent ID per LLM call" width="100%">
+  <br>
+  <em>Grafana Tempo — full span detail per LLM call: model, cost, cache hit rate, latency, agent ID</em>
+</p>
+
 ## Install
 
 | SDK | Language | Install |
