@@ -93,7 +93,7 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
           />
           <button
             onClick={() => setFullscreenPanel(0)}
-            className="absolute bottom-3 right-3 p-1.5 rounded-md bg-slate-800/60 text-slate-400 opacity-60 hover:opacity-100 transition-opacity hover:bg-slate-700"
+            className="absolute bottom-3 right-3 z-10 p-1.5 rounded-md bg-slate-700/80 text-slate-300 hover:bg-slate-600 hover:text-white transition-colors"
             aria-label="Expand Agents panel"
           >
             <Maximize2 size={14} />
@@ -112,7 +112,7 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
           />
           <button
             onClick={() => setFullscreenPanel(1)}
-            className="absolute bottom-3 right-3 p-1.5 rounded-md bg-slate-800/60 text-slate-400 opacity-60 hover:opacity-100 transition-opacity hover:bg-slate-700"
+            className="absolute bottom-3 right-3 z-10 p-1.5 rounded-md bg-slate-700/80 text-slate-300 hover:bg-slate-600 hover:text-white transition-colors"
             aria-label="Expand Sessions panel"
           >
             <Maximize2 size={14} />
