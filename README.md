@@ -40,7 +40,7 @@ graph LR
 
     subgraph Observability
         OT["OTLP Collector — Tempo / Jaeger / Langfuse"]
-        GR["Grafana Dashboard"]
+        GR["AgentWeave Dashboard"]
     end
 
     A1 -- "ANTHROPIC_BASE_URL" --> P
@@ -62,9 +62,15 @@ graph LR
 3. **Proxy** — point any agent's base URL at AgentWeave. It auto-detects the provider, forwards upstream, extracts token counts, and emits OTel spans. No code changes.
 
 <p align="center">
-  <img src="screenshots/AgentWeave-SS.png" alt="AgentWeave Grafana dashboard showing LLM call counts, latency by model, and recent traces across Claude and Gemini" width="100%">
+  <img src="screenshots/aw_overview_3h.png" alt="AgentWeave dashboard overview — LLM calls, cost, and latency by model" width="100%">
   <br>
-  <em>AgentWeave dashboard — 80 LLM calls across Claude Opus, Sonnet, and Haiku with latency breakdowns and live trace feed</em>
+  <em>Overview — LLM calls, cost over time, and p95 latency by model</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/aw_sessions_1h.png" alt="AgentWeave session explorer — multi-level sub-agent graph with parent-child edges" width="100%">
+  <br>
+  <em>Session Explorer — multi-level sub-agent hierarchy with parent→child edges</em>
 </p>
 
 ## Install
@@ -115,6 +121,15 @@ async def handle(message: str) -> str:
 ```
 
 All three spans link to the same trace ID. Open any OTLP backend and you see the waterfall.
+
+## Framework Examples
+
+| Framework | Example |
+|-----------|---------|
+| LangGraph | [examples/langgraph](./examples/langgraph) |
+| CrewAI | [examples/crewai](./examples/crewai) |
+| AutoGen | [examples/autogen](./examples/autogen) |
+| OpenAI Agents SDK | [examples/openai-agents-sdk](./examples/openai-agents-sdk) |
 
 ## Auto-Instrumentation
 
@@ -258,6 +273,7 @@ const subAgent = traceAgent({
 | `prov.llm.completion_tokens` | Output token count |
 | `prov.llm.total_tokens` | Total tokens |
 | `prov.llm.stop_reason` | Why the model stopped |
+| `prov.task.label` | Human-readable label for the task this agent is executing |
 
 Full schema: [`sdk/python/agentweave/schema.py`](sdk/python/agentweave/schema.py)
 
@@ -290,13 +306,27 @@ AgentWeave emits standard OTLP HTTP — works with any compatible backend:
 | **Langfuse v3** | `https://cloud.langfuse.com/api/public/otel` |
 | **Console (dev)** | `from agentweave import add_console_exporter; add_console_exporter()` |
 
+## Docs
+
+| Topic | Doc |
+|-------|-----|
+| Claude Code proxy setup | [docs/claude-code-proxy.md](./docs/claude-code-proxy.md) |
+| Session grouping | [docs/session-grouping.md](./docs/session-grouping.md) |
+| Proxy setup | [docs/proxy-setup.md](./docs/proxy-setup.md) |
+| Production hardening | [docs/production-hardening.md](./docs/production-hardening.md) |
+| Provider compatibility | [docs/compatibility.md](./docs/compatibility.md) |
+| Deterministic trace IDs | [docs/deterministic-trace-ids.md](./docs/deterministic-trace-ids.md) |
+| Span linking design | [docs/span-linking-design.md](./docs/span-linking-design.md) |
+| Proxy benchmarks | [docs/benchmarks.md](./docs/benchmarks.md) |
+| Versioning policy | [docs/versioning.md](./docs/versioning.md) |
+
 ## Development
 
 ```bash
 git clone https://github.com/arniesaha/agentweave && cd agentweave
 pip install -e "./sdk/python[dev]"
 
-pytest sdk/python                                    # 41 Python tests
+pytest sdk/python                                    # 237 Python tests
 (cd sdk/js && npm ci && npx jest --verbose)           # 10 TypeScript tests
 (cd sdk/go && go test ./... -v)                       # 4 Go tests
 ```
