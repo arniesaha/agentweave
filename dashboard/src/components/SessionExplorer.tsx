@@ -3,7 +3,7 @@ import { SessionNode, SessionEdge } from '../lib/queries'
 import { TempoSpan } from '../lib/queries'
 import { SessionGraph } from './SessionGraph'
 import { SessionDetail, DailySummaryBanner } from './SessionDetail'
-import { Maximize2, X } from 'lucide-react'
+import { X } from 'lucide-react'
 
 interface Props {
   nodes: SessionNode[]
@@ -80,7 +80,7 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
 
       {/* Graph panels — Agents + Sessions side by side on desktop, stacked on mobile */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="relative bg-[#111118] border border-slate-800 rounded-xl p-4">
+        <div className="bg-[#111118] border border-slate-800 rounded-xl p-4">
           <SessionGraph
             nodes={nodes}
             edges={edges}
@@ -90,16 +90,10 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
             error={error}
             fixedMode="agent"
             title="Agents"
+            onFullscreen={() => setFullscreenPanel(0)}
           />
-          <button
-            onClick={() => setFullscreenPanel(0)}
-            className="absolute bottom-3 right-3 z-10 p-1.5 rounded-md bg-slate-700/80 text-slate-300 hover:bg-slate-600 hover:text-white transition-colors"
-            aria-label="Expand Agents panel"
-          >
-            <Maximize2 size={14} />
-          </button>
         </div>
-        <div className="relative bg-[#111118] border border-slate-800 rounded-xl p-4">
+        <div className="bg-[#111118] border border-slate-800 rounded-xl p-4">
           <SessionGraph
             nodes={nodes}
             edges={edges}
@@ -109,14 +103,8 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
             error={error}
             fixedMode="session"
             title="Sessions"
+            onFullscreen={() => setFullscreenPanel(1)}
           />
-          <button
-            onClick={() => setFullscreenPanel(1)}
-            className="absolute bottom-3 right-3 z-10 p-1.5 rounded-md bg-slate-700/80 text-slate-300 hover:bg-slate-600 hover:text-white transition-colors"
-            aria-label="Expand Sessions panel"
-          >
-            <Maximize2 size={14} />
-          </button>
         </div>
       </div>
 

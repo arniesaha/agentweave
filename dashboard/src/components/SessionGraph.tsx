@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react'
+import { Maximize2 } from 'lucide-react'
 import { SessionNode, SessionEdge } from '../lib/queries'
 
 interface LayoutNode extends SessionNode {
@@ -145,9 +146,10 @@ interface Props {
   error: string | null
   fixedMode?: GraphMode  // if set, locks mode and hides the toggle
   title?: string         // optional label shown above graph
+  onFullscreen?: () => void  // if provided, shows expand button in header
 }
 
-export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, error, fixedMode, title }: Props) {
+export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, error, fixedMode, title, onFullscreen }: Props) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
   const [mode, setMode] = useState<GraphMode>(fixedMode ?? 'agent')
   const svgRef = useRef<SVGSVGElement>(null)
@@ -282,6 +284,16 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         {/* Legend */}
         <div className="flex items-center gap-3 text-xs text-slate-500">
           {title && <span className="text-slate-300 font-medium text-sm mr-1">{title}</span>}
+          {onFullscreen && (
+            <button
+              onClick={onFullscreen}
+              className="p-1 rounded-md bg-slate-700/60 text-slate-400 hover:bg-slate-600 hover:text-white transition-colors"
+              aria-label="Expand to fullscreen"
+              title="Expand"
+            >
+              <Maximize2 size={13} />
+            </button>
+          )}
           <span className="flex items-center gap-1">
             <svg width="24" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#334155" strokeWidth="2" strokeDasharray="4 3"/><polygon points="20,2 20,8 24,5" fill="#334155"/></svg>
             delegates to
