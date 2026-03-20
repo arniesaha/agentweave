@@ -201,8 +201,8 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
       latencyMs: span ? span.durationNanos / 1e6 : t.durationMs,
       tokensIn: parseInt(getSpanAttr(attrs, 'prov.llm.prompt_tokens') || '0'),
       tokensOut: parseInt(getSpanAttr(attrs, 'prov.llm.completion_tokens') || '0'),
-      costUsd: parseFloat(getSpanAttr(attrs, 'cost.usd') || '0'),
-      cacheHitRate: parseFloat(getSpanAttr(attrs, 'cache.hit_rate') || '0'),
+      costUsd: Math.max(0, parseFloat(getSpanAttr(attrs, 'cost.usd') || '0') || 0),
+      cacheHitRate: Math.max(0, parseFloat(getSpanAttr(attrs, 'cache.hit_rate') || '0') || 0),
       sessionId: getSpanAttr(attrs, 'session.id') || '—',
       agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
       attributes: allAttrs,
@@ -332,7 +332,7 @@ export function transformAgentAttributionTraces(traces: TempoSpan[]): AgentAttri
       parentSessionId: getSpanAttr(attrs, 'prov.parent.session.id'),
       sessionTurn: parseInt(getSpanAttr(attrs, 'prov.session.turn') || '0'),
       sessionId: getSpanAttr(attrs, 'session.id') || '',
-      costUsd: parseFloat(getSpanAttr(attrs, 'cost.usd') || '0'),
+      costUsd: Math.max(0, parseFloat(getSpanAttr(attrs, 'cost.usd') || '0') || 0),
       agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
     }
   })
@@ -422,7 +422,7 @@ export function transformSubagentTraces(traces: TempoSpan[]): SubagentTraceRow[]
       agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
       tokensIn: parseInt(getSpanAttr(attrs, 'prov.llm.prompt_tokens') || '0'),
       tokensOut: parseInt(getSpanAttr(attrs, 'prov.llm.completion_tokens') || '0'),
-      costUsd: parseFloat(getSpanAttr(attrs, 'cost.usd') || '0'),
+      costUsd: Math.max(0, parseFloat(getSpanAttr(attrs, 'cost.usd') || '0') || 0),
       sessionId: getSpanAttr(attrs, 'session.id') || '—',
       parentSessionId: getSpanAttr(attrs, 'prov.parent.session.id') || '—',
     }
@@ -532,7 +532,7 @@ function spanRowFromTempoSpan(t: TempoSpan): SessionSpanRow {
     taskLabel: getSpanAttr(attrs, 'prov.task.label') || '',
     agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
     agentType: getSpanAttr(attrs, 'prov.agent.type') || 'unknown',
-    costUsd: parseFloat(getSpanAttr(attrs, 'cost.usd') || '0'),
+    costUsd: Math.max(0, parseFloat(getSpanAttr(attrs, 'cost.usd') || '0') || 0),
     tokensIn: parseInt(getSpanAttr(attrs, 'prov.llm.prompt_tokens') || '0'),
     tokensOut: parseInt(getSpanAttr(attrs, 'prov.llm.completion_tokens') || '0'),
     model: getSpanAttr(attrs, 'prov.llm.model') || modelFromName || 'unknown',

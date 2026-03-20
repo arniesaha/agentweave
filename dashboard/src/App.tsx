@@ -78,7 +78,10 @@ export default function App() {
     useTempoSearchCount(tempoSearchQuery(), timeRange, refreshKey)
 
   // 2. Total Cost — summed from trace attributes
-  const costValue = tracesLoading ? null : traceRows.reduce((s, t) => s + t.costUsd, 0)
+  // Filter out -1.0 sentinel (unknown model pricing) before summing
+  const costValue = tracesLoading ? null : traceRows
+    .filter((t) => t.costUsd >= 0)
+    .reduce((s, t) => s + t.costUsd, 0)
 
   // 3. Avg Cache Hit Rate — averaged across traces that have the attribute
   const tracesWithCache = traceRows.filter((t) => t.cacheHitRate > 0)

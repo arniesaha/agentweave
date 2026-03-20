@@ -11,7 +11,7 @@ ts() { printf "[%s] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 fail() { ts "ERROR: $*" >&2; exit 1; }
 
 # --- Get current version tag from k8s, increment ---
-CURRENT_TAG=$(kubectl get deployment agentweave-dashboard -n "${NAMESPACE}" \
+CURRENT_TAG=$(KUBECONFIG=/home/Arnab/.kube/config kubectl get deployment agentweave-dashboard -n "${NAMESPACE}" \
   -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | grep -o 'v[0-9]*$' || echo "v0")
 CURRENT_VER="${CURRENT_TAG#v}"
 NEXT_VER=$((CURRENT_VER + 1))
@@ -34,12 +34,12 @@ docker push "${IMAGE}:${NEXT_TAG}" -q || fail "Push failed"
 
 # --- Deploy ---
 ts "Updating deployment to ${NEXT_TAG}"
-kubectl set image deployment/agentweave-dashboard dashboard="${IMAGE}:${NEXT_TAG}" -n "${NAMESPACE}" \
-  || fail "kubectl set image failed"
+KUBECONFIG=/home/Arnab/.kube/config kubectl set image deployment/agentweave-dashboard dashboard="${IMAGE}:${NEXT_TAG}" -n "${NAMESPACE}" \
+  || fail "KUBECONFIG=/home/Arnab/.kube/config kubectl set image failed"
 
 # --- Wait for rollout ---
 ts "Waiting for rollout..."
-kubectl rollout status deployment/agentweave-dashboard -n "${NAMESPACE}" --timeout=60s \
+KUBECONFIG=/home/Arnab/.kube/config kubectl rollout status deployment/agentweave-dashboard -n "${NAMESPACE}" --timeout=60s \
   || fail "Rollout did not complete"
 
 # --- Verify new bundle is live ---

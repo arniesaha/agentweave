@@ -50,6 +50,8 @@ _DEFAULT_PRICING: dict[str, _PriceEntry] = {
     "claude-sonnet-4-6":          (3.00, 15.00, 0.30, 3.75),
     "claude-sonnet-4-5":          (3.00, 15.00, 0.30, 3.75),
     "claude-3-5-sonnet":          (3.00, 15.00, 0.30, 3.75),
+    # claude-3-haiku (legacy)
+    "claude-3-haiku":             (0.25,  1.25, 0.03, 0.30),
     # claude-haiku-4-5 / claude-3-5-haiku-*
     "claude-haiku-4-5":           (0.80,  4.00, 0.08, 1.00),
     "claude-haiku-3-5":           (0.80,  4.00, 0.08, 1.00),
