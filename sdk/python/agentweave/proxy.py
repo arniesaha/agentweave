@@ -329,15 +329,19 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     # (including placeholder values like ANTHROPIC_API_KEY=dummy).
     if provider == "anthropic" and _ANTHROPIC_INJECT_KEY:
         if _ANTHROPIC_INJECT_KEY.startswith("sk-ant-oat"):
-            # OAuth tokens must use Bearer auth + oauth beta header
+            # OAuth tokens must use Bearer auth + oauth beta header + ?beta=true query
             forward_headers["authorization"] = f"Bearer {_ANTHROPIC_INJECT_KEY}"
             forward_headers.pop("x-api-key", None)
             existing_beta = forward_headers.get("anthropic-beta", "")
             oauth_beta = "oauth-2025-04-20"
-            if oauth_beta not in existing_beta:
-                forward_headers["anthropic-beta"] = (
-                    f"{existing_beta},{oauth_beta}" if existing_beta else oauth_beta
-                )
+            claude_code_beta = "claude-code-20250219"
+            betas_to_add = [b for b in [oauth_beta, claude_code_beta] if b not in existing_beta]
+            if betas_to_add:
+                new_beta = ",".join(filter(None, [existing_beta] + betas_to_add))
+                forward_headers["anthropic-beta"] = new_beta
+            # Append ?beta=true — required for OAuth tokens to access non-Haiku models
+            if "beta=true" not in query_string:
+                query_string = f"{query_string}&beta=true" if query_string else "beta=true"
         else:
             forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
     elif provider == "openai" and _OPENAI_INJECT_KEY:

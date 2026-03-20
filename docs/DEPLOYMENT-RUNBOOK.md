@@ -1,6 +1,6 @@
-# AgentWeave — Deployment Runbook for Max
+# AgentWeave — Deployment Runbook
 
-*Everything not obvious from the repo. Last updated Mar 19, 2026.*
+*Everything not obvious from the repo. Last updated Mar 20, 2026.*
 
 ---
 
@@ -61,13 +61,54 @@ Tempo is the exception: it uses the official `grafana/tempo` image (public), so 
 
 ## Proxy Auth Model
 
-The proxy is currently in **open mode** — `AGENTWEAVE_PROXY_TOKEN` is empty, so no auth is required. Callers must pass their own API key via:
-- `Authorization: Bearer <oauth_token>` — for Claude OAuth tokens
-- `x-api-key: <api_key>` — for standard Anthropic API keys
+All proxies run in **passthrough mode** — no `AGENTWEAVE_PROXY_TOKEN`, no `AGENTWEAVE_ANTHROPIC_API_KEY`. Each caller's SDK handles authentication natively, and the proxy forwards headers untouched to Anthropic.
 
-The proxy does **not** inject API keys (the `anthropic-api-key` secret field is empty). This is intentional after a March 19 incident where the wrong credentials were injected and broke OpenClaw's gateway.
+### How each agent authenticates
 
-**To enable key injection** (future): set `anthropic-api-key` in the `agentweave-proxy` k8s secret to a real `sk-ant-api03-...` key (not an OAuth token). The proxy will then override caller-supplied keys automatically.
+| Agent | Proxy | SDK | Auth method |
+|-------|-------|-----|-------------|
+| **Nix** (OpenClaw) | 30400 | OpenClaw embedded (Node.js `@anthropic-ai/sdk`) | OAuth token (`sk-ant-oat01-*`) via `Authorization: Bearer` |
+| **Max** (pi-mono) | 30401 | `@anthropic-ai/sdk` v0.73.0 with `authToken` | OAuth token (`sk-ant-oat01-*`) via `Authorization: Bearer` |
+| **Sub-agents** | 30402 | Claude Code CLI | OAuth token via SDK |
+
+### Why passthrough mode is required for OAuth
+
+Anthropic OAuth tokens (`sk-ant-oat01-*`) require specific handling by the Node.js `@anthropic-ai/sdk` to work with Sonnet/Opus models. The SDK adds:
+- `anthropic-beta: claude-code-20250219,oauth-2025-04-20` headers
+- `?beta=true` query parameter
+- TLS/HTTP fingerprint headers (`X-Stainless-*`, `user-agent: claude-cli/*`, `x-app: cli`)
+
+These cannot be replicated by the Python proxy's `httpx` client. If the proxy injects its own `x-api-key` or `Authorization` header (`AGENTWEAVE_ANTHROPIC_API_KEY`), it overrides the SDK's native OAuth flow and breaks authentication.
+
+**DO NOT set `AGENTWEAVE_ANTHROPIC_API_KEY` to an OAuth token** — it will fail with 400/401 for all non-Haiku models.
+
+### Fallback: API key injection
+
+If OAuth stops working or you need to bypass it, you can inject a standard Anthropic API key (`sk-ant-api03-*` from console.anthropic.com):
+
+```bash
+kubectl create secret generic agentweave-proxy -n agentweave \
+  --from-literal=anthropic-api-key='sk-ant-api03-YOUR_KEY' \
+  --from-literal=proxy-token='' \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl delete pod -n agentweave -l app=agentweave-proxy
+```
+
+This costs API credits instead of using the Max subscription. To revert to passthrough:
+
+```bash
+kubectl create secret generic agentweave-proxy -n agentweave \
+  --from-literal=proxy-token='' \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl delete pod -n agentweave -l app=agentweave-proxy
+```
+
+### Incident history (Mar 19-20, 2026)
+
+1. **Root cause:** `AGENTWEAVE_ANTHROPIC_API_KEY` was set to an OAuth token (`sk-ant-oat01-*`). The proxy injected it as `x-api-key`, which Anthropic rejected (OAuth tokens must use `Authorization: Bearer` + specific beta headers that only the Node.js SDK provides).
+2. **Misdiagnosis:** Initially appeared as an OpenClaw update issue (2026.3.11 → 2026.3.13), then as an Anthropic API restriction on OAuth tokens. Multiple config changes (removing `baseUrl`, regenerating tokens, downgrading OpenClaw) did not fix it.
+3. **Resolution:** Removed `AGENTWEAVE_ANTHROPIC_API_KEY` from the proxy secret, making it a pure passthrough. OpenClaw's embedded Node.js SDK handles OAuth natively, same as Max's pi-mono setup.
+4. **Key learning:** OAuth tokens only work when the Anthropic Node.js SDK makes the request end-to-end. Python `httpx`, raw `curl`, and even Node.js with manual header construction all fail with 400 "Error" for Sonnet/Opus models. The SDK adds TLS-level fingerprinting that Anthropic validates server-side.
 
 ---
 
@@ -165,15 +206,19 @@ Things you need to know that aren't documented elsewhere:
 
 1. **The NAS registry at `localhost:5000`** is not a k8s service — it's a Docker container running directly on the NAS host. Check with `docker ps | grep registry` if images fail to push.
 
-2. **The `agentweave-proxy` secret** currently has empty `anthropic-api-key` — this was intentionally cleared after an incident. Don't put an OAuth token there (it'll break OpenClaw's gateway which uses the same auth system).
+2. **The `agentweave-proxy` secret has NO `anthropic-api-key`** — this is intentional. All proxies run in passthrough mode. The caller's SDK handles auth. See "Proxy Auth Model" above.
 
 3. **Max's proxy (`agentweave-proxy-max`) uses `localhost:5000`** — so it must stay on the NAS node too. Any attempt to schedule it on Mac Mini will result in ImagePullBackOff.
 
 4. **Tempo data is ephemeral.** Local-path PVCs on the Mac Mini node are stored in OrbStack's VM filesystem. If the VM is recreated or the PVC deleted, all trace history is lost. There is no backup. For production use, migrate to MinIO (config already exists as `tempo-config-minio`).
 
-5. **The demo script** at `/home/Arnab/clawd/scripts/agentweave_graph_demo.py` does real Nix→Max A2A calls (Max's A2A server at `http://192.168.1.149:8770`). It requires `NIX_A2A_SECRET` from `.secrets` and a working Anthropic API key (not OAuth). Use Claude Code sub-agents to run LLM calls instead.
+5. **The demo script** at `/home/Arnab/clawd/scripts/agentweave_graph_demo.py` does real Nix→Max A2A calls (Max's A2A server at `http://192.168.1.149:8770`). It requires `NIX_A2A_SECRET` from `.secrets`.
 
 6. **`KUBECONFIG=/home/Arnab/.kube/config`** must be set explicitly — `sudo kubectl` doesn't work on this NAS.
+
+7. **OAuth tokens only work via the Node.js SDK.** Raw `curl`, Python `httpx`, or manual header construction will fail with 400 "Error" for Sonnet/Opus models. Anthropic validates TLS-level SDK fingerprinting for consumer OAuth tokens. If you need to test the proxy from the command line, use a standard API key (`sk-ant-api03-*`), not OAuth.
+
+8. **OpenClaw's `openclaw.json` must have `models.providers.anthropic.baseUrl`** set to the proxy URL (`http://192.168.1.70:30400`) for traces to flow through AgentWeave. Without it, OpenClaw calls Anthropic directly and bypasses tracing.
 
 ---
 

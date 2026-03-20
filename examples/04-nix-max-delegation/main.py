@@ -154,7 +154,7 @@ def nix_orchestrator(topic: str) -> str:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    topic = "AI agent observability and tracing in production systems"
+    topic = os.environ.get("TOPIC", "AI agent observability and tracing in production systems")
     print(f"\n{'='*60}")
     print(f"Nix → Max → Sub-agents delegation demo")
     print(f"Session: {nix_session}")
