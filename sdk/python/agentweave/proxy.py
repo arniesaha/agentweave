@@ -303,6 +303,9 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         except (ValueError, TypeError):
             logger.warning("x-agentweave-turn-count is not a valid integer: %r", turn_count_raw)
 
+    # W3C traceparent passthrough (issue #44)
+    traceparent: str | None = request.headers.get("traceparent")
+
     # Sub-agent attribution headers (issue #15)
     parent_session_id: str | None = request.headers.get("x-agentweave-parent-session-id")
     agent_type: str | None = request.headers.get("x-agentweave-agent-type")
@@ -378,6 +381,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         parent_session_id=parent_session_id,
         agent_type=agent_type,
         turn_depth=turn_depth,
+        traceparent=traceparent,
     )
 
     if is_stream:
@@ -398,6 +402,7 @@ async def _request_and_trace(
     turn_count: int | None = None,
     parent_session_id: str | None = None, agent_type: str | None = None,
     turn_depth: int | None = None,
+    traceparent: str | None = None,
 ) -> JSONResponse:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
@@ -408,7 +413,8 @@ async def _request_and_trace(
                            session_id=session_id, project=project, turn=turn,
                            det_trace_id_raw=det_trace_id_raw,
                            parent_session_id=parent_session_id,
-                           agent_type=agent_type, turn_depth=turn_depth)
+                           agent_type=agent_type, turn_depth=turn_depth,
+                           traceparent=traceparent)
         if turn_count is not None:
             span.set_attribute(schema.AGENT_TURN_COUNT, turn_count)
         start = time.perf_counter()
@@ -440,6 +446,7 @@ async def _stream_and_trace(
     turn_count: int | None = None,
     parent_session_id: str | None = None, agent_type: str | None = None,
     turn_depth: int | None = None,
+    traceparent: str | None = None,
 ) -> AsyncIterator[bytes]:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
@@ -450,7 +457,8 @@ async def _stream_and_trace(
                        session_id=session_id, project=project, turn=turn,
                        det_trace_id_raw=det_trace_id_raw,
                        parent_session_id=parent_session_id,
-                       agent_type=agent_type, turn_depth=turn_depth)
+                       agent_type=agent_type, turn_depth=turn_depth,
+                       traceparent=traceparent)
     if turn_count is not None:
         span.set_attribute(schema.AGENT_TURN_COUNT, turn_count)
 
@@ -821,6 +829,7 @@ def _set_request_attrs(
     det_trace_id_raw: str | None = None,
     parent_session_id: str | None = None, agent_type: str | None = None,
     turn_depth: int | None = None,
+    traceparent: str | None = None,
 ) -> None:
     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
     span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
@@ -847,6 +856,10 @@ def _set_request_attrs(
         span.set_attribute(schema.PROV_AGENT_TYPE, agent_type)
     if turn_depth is not None:
         span.set_attribute(schema.PROV_SESSION_TURN, turn_depth)
+
+    # W3C traceparent passthrough (issue #44)
+    if traceparent is not None:
+        span.set_attribute(schema.PROV_TRACE_PARENT, traceparent)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)

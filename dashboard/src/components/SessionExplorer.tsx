@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { SessionNode, SessionEdge } from '../lib/queries'
-import { TempoSpan } from '../lib/queries'
+import { TempoSpan, tempoSessionQuery } from '../lib/queries'
 import { SessionGraph } from './SessionGraph'
 import { SessionDetail, DailySummaryBanner } from './SessionDetail'
-import { X } from 'lucide-react'
+import { X, ExternalLink } from 'lucide-react'
 
 interface Props {
   nodes: SessionNode[]
@@ -16,6 +16,7 @@ interface Props {
 export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [fullscreenPanel, setFullscreenPanel] = useState<null | 0 | 1>(null)
+  const [replaySessionId, setReplaySessionId] = useState('')
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -33,6 +34,21 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
 
   const handleClose = () => setSelectedId(null)
 
+  const openSessionReplay = () => {
+    const sid = replaySessionId.trim()
+    if (!sid) return
+    const query = tempoSessionQuery(sid)
+    const left = JSON.stringify({
+      datasource: 'tempo',
+      queries: [{ refId: 'A', query, queryType: 'traceql' }],
+      range: { from: 'now-1h', to: 'now' },
+    })
+    window.open(
+      `https://o11y.arnabsaha.com/explore?orgId=1&left=${encodeURIComponent(left)}`,
+      '_blank',
+    )
+  }
+
   return (
     <div className="space-y-4">
       {/* Section header */}
@@ -48,6 +64,26 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
             {nodes.length} session{nodes.length !== 1 ? 's' : ''}
           </span>
         )}
+      </div>
+
+      {/* Session replay — open in Grafana Explore */}
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={replaySessionId}
+          onChange={(e) => setReplaySessionId(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') openSessionReplay() }}
+          placeholder="Paste session ID to replay in Tempo…"
+          className="flex-1 bg-[#111118] border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+        />
+        <button
+          onClick={openSessionReplay}
+          disabled={!replaySessionId.trim()}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <ExternalLink size={12} />
+          Open in Grafana
+        </button>
       </div>
 
       {/* Daily summary */}

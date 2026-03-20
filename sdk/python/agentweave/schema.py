@@ -56,6 +56,9 @@ AGENT_TYPE_MAIN = "main"
 AGENT_TYPE_SUBAGENT = "subagent"
 AGENT_TYPE_DELEGATED = "delegated"
 
+# Distributed tracing — W3C traceparent passthrough (issue #44)
+PROV_TRACE_PARENT = "prov.trace.parent"
+
 # session.id — canonical session attribute (dual-emitted alongside prov.session.id)
 # Set via @trace_agent(session_id=...) or X-AgentWeave-Session-Id proxy header.
 SESSION_ID = "session.id"
