@@ -328,7 +328,18 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     # Inject proxy-configured API keys, overriding whatever the caller sent
     # (including placeholder values like ANTHROPIC_API_KEY=dummy).
     if provider == "anthropic" and _ANTHROPIC_INJECT_KEY:
-        forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
+        if _ANTHROPIC_INJECT_KEY.startswith("sk-ant-oat"):
+            # OAuth tokens must use Bearer auth + oauth beta header
+            forward_headers["authorization"] = f"Bearer {_ANTHROPIC_INJECT_KEY}"
+            forward_headers.pop("x-api-key", None)
+            existing_beta = forward_headers.get("anthropic-beta", "")
+            oauth_beta = "oauth-2025-04-20"
+            if oauth_beta not in existing_beta:
+                forward_headers["anthropic-beta"] = (
+                    f"{existing_beta},{oauth_beta}" if existing_beta else oauth_beta
+                )
+        else:
+            forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
     elif provider == "openai" and _OPENAI_INJECT_KEY:
         forward_headers["authorization"] = f"Bearer {_OPENAI_INJECT_KEY}"
     elif provider == "google" and _GOOGLE_INJECT_KEY:
