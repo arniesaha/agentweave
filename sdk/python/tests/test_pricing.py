@@ -210,7 +210,8 @@ class TestProxyCostAttrs:
             },
         }
         _set_anthropic_response_attrs(span, data, elapsed_ms=10, model="claude-sonnet-4-6")
-        assert abs(span.attrs["cost.usd"] - 3.00) < 1e-9
+        # 1M cache_read tokens at $0.30/MTok = $0.30 (not $3.00 which was the buggy behavior)
+        assert abs(span.attrs["cost.usd"] - 0.30) < 1e-9
 
     def test_openai_cost_emitted(self):
         from agentweave.proxy import _set_openai_response_attrs
