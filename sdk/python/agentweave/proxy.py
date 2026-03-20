@@ -509,8 +509,14 @@ async def _stream_and_trace(
         span.set_attribute(schema.CACHE_HIT_RATE, hit_rate)
 
         # Cost tracking for streaming responses
+        # Pass cache token breakdown so each bucket is priced at the correct rate
+        # (cache_read is ~10x cheaper, cache_write slightly more than regular input).
         if input_tokens > 0 or output_tokens > 0:
-            span.set_attribute(schema.COST_USD, compute_cost(model, input_tokens, output_tokens))
+            span.set_attribute(schema.COST_USD, compute_cost(
+                model, input_tokens, output_tokens,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+            ))
 
         # Warn when OpenAI streaming completes with no token usage data
         if provider == "openai" and input_tokens == 0 and output_tokens == 0:
@@ -689,9 +695,14 @@ def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int, model:
     hit_rate = (cache_read / denominator) if denominator > 0 else 0.0
     span.set_attribute(schema.CACHE_HIT_RATE, hit_rate)
 
-    # Cost tracking
+    # Cost tracking — pass cache breakdown so each bucket is priced correctly
+    # (cache_read ~10x cheaper, cache_write slightly above regular input rate).
     if model and (pt > 0 or ct > 0):
-        span.set_attribute(schema.COST_USD, compute_cost(model, pt, ct))
+        span.set_attribute(schema.COST_USD, compute_cost(
+            model, pt, ct,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+        ))
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
