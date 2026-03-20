@@ -30,7 +30,9 @@ from agentweave import AgentWeaveConfig, trace_agent
 
 # ── Config ─────────────────────────────────────────────────────────────────
 
-PROXY_URL = os.environ.get("ANTHROPIC_BASE_URL", "http://192.168.1.70:30400/v1")
+# Strip trailing /v1 if present — Anthropic SDK appends its own /v1 path prefix
+_raw_proxy = os.environ.get("ANTHROPIC_BASE_URL", "http://192.168.1.70:30400/v1")
+PROXY_URL = _raw_proxy.rstrip("/").removesuffix("/v1")
 OTLP_URL  = os.environ.get("AGENTWEAVE_OTLP_ENDPOINT", "http://192.168.1.70:30418")
 MODEL     = "claude-3-haiku-20240307"
 
