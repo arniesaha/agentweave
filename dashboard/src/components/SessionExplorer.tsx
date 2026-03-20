@@ -26,10 +26,20 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
     return () => document.removeEventListener('keydown', handler)
   }, [])
 
+  useEffect(() => {
+    if (fullscreenPanel !== null) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = ''
+    }
+    return () => { document.body.style.overflow = '' }
+  }, [fullscreenPanel])
+
   const selectedNode = selectedId ? (nodes.find((n) => n.sessionId === selectedId) ?? null) : null
 
   const handleSelect = (sessionId: string) => {
     setSelectedId((prev) => (prev === sessionId ? null : sessionId))
+    setReplaySessionId(sessionId)
   }
 
   const handleClose = () => setSelectedId(null)
@@ -73,7 +83,7 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
           value={replaySessionId}
           onChange={(e) => setReplaySessionId(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') openSessionReplay() }}
-          placeholder="Paste session ID to replay in Tempo…"
+          placeholder="Click a session node or paste ID to replay in Tempo…"
           className="flex-1 bg-[#111118] border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
         />
         <button

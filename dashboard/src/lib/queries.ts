@@ -235,8 +235,10 @@ export function extractLastTempoMetricValue(result: TempoMetricResult | null): n
 
 /** TraceQL search query returning all spans for a specific session. */
 export function tempoSessionQuery(sessionId: string): string {
+  // Search both session.id (main agents) and prov.session.id (sub-agents) so
+  // clicking any node in the session graph finds its traces.
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && span.session.id = "${sessionId}" }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}") }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id)`
   )
