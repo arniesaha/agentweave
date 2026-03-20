@@ -1,9 +1,10 @@
 // All query strings and transformers for AgentWeave Dashboard
 
-export type TimeRange = '1h' | '3h' | '6h' | '24h' | '7d'
+export type TimeRange = '15m' | '1h' | '3h' | '6h' | '24h' | '7d'
 
 export function getTimeRangeSeconds(range: TimeRange): number {
   const map: Record<TimeRange, number> = {
+    '15m': 900,
     '1h': 3600,
     '3h': 10800,
     '6h': 21600,
@@ -21,6 +22,7 @@ export function getTimeRangeBounds(range: TimeRange): { start: number; end: numb
 
 export function getStepForRange(range: TimeRange): number {
   const map: Record<TimeRange, number> = {
+    '15m': 30,
     '1h': 60,
     '3h': 120,
     '6h': 300,

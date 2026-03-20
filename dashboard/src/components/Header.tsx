@@ -12,6 +12,7 @@ interface HeaderProps {
 }
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
+  { value: '15m', label: 'Last 15m' },
   { value: '1h', label: 'Last 1h' },
   { value: '3h', label: 'Last 3h' },
   { value: '6h', label: 'Last 6h' },
