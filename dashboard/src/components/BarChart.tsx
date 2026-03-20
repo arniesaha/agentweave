@@ -23,6 +23,8 @@ interface BarChartProps {
   error?: string | null
   valueFormatter?: (v: number) => string
   color?: string
+  onBarClick?: (label: string) => void
+  selectedLabel?: string | null
 }
 
 const COLORS = [
@@ -71,6 +73,8 @@ export function BarChartPanel({
   loading,
   error,
   valueFormatter,
+  onBarClick,
+  selectedLabel,
 }: BarChartProps) {
   const chartData = data.map((d) => ({ ...d, name: d.label.length > 20 ? d.label.slice(0, 20) + '…' : d.label }))
 
@@ -115,9 +119,19 @@ export function BarChartPanel({
               width={110}
             />
             <Tooltip content={<CustomTooltip valueFormatter={valueFormatter} />} cursor={{ fill: '#1e1e2e' }} />
-            <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={24}>
-              {chartData.map((_, i) => (
-                <Cell key={i} fill={COLORS[i % COLORS.length]} />
+            <Bar
+              dataKey="value"
+              radius={[0, 4, 4, 0]}
+              maxBarSize={24}
+              cursor={onBarClick ? 'pointer' : undefined}
+              onClick={onBarClick ? (entry: BarData & { name: string }) => onBarClick(entry.label) : undefined}
+            >
+              {chartData.map((entry, i) => (
+                <Cell
+                  key={i}
+                  fill={COLORS[i % COLORS.length]}
+                  opacity={selectedLabel && selectedLabel !== entry.label ? 0.35 : 1}
+                />
               ))}
             </Bar>
           </RechartsBarChart>

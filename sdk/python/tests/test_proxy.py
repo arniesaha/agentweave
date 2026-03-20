@@ -723,6 +723,35 @@ class TestSubAgentAttributionHeaders:
         assert "x-agentweave-turn-depth" in _SKIP_HEADERS_ALWAYS
 
 
+class TestTraceparentPassthrough:
+    """Verify W3C traceparent header is read, set on spans, and forwarded downstream (issue #44)."""
+
+    def _call(self, monkeypatch, traceparent=None):
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+            traceparent=traceparent,
+        )
+        return span
+
+    def test_traceparent_set_on_span(self, monkeypatch):
+        tp = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+        span = self._call(monkeypatch, traceparent=tp)
+        assert span.attrs["prov.trace.parent"] == tp
+
+    def test_traceparent_not_set_when_absent(self, monkeypatch):
+        span = self._call(monkeypatch)
+        assert "prov.trace.parent" not in span.attrs
+
+    def test_traceparent_not_stripped_from_forwarding(self):
+        """traceparent must NOT be in _SKIP_HEADERS_ALWAYS — it should be forwarded."""
+        assert "traceparent" not in _SKIP_HEADERS_ALWAYS
+
+
 class TestSessionEndpoint:
     """POST /session stores context, GET /session returns it, env-var fallback works."""
 

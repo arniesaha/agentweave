@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Activity, DollarSign, Zap, RefreshCw, GitBranch, BarChart2 } from 'lucide-react'
+import { Activity, DollarSign, Zap, RefreshCw, GitBranch, BarChart2, X } from 'lucide-react'
 import { Header } from './components/Header'
 import { StatCard } from './components/StatCard'
 import { TimeSeriesChart } from './components/TimeSeriesChart'
@@ -37,6 +37,11 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const initialTab = (new URLSearchParams(window.location.search).get('tab') as ActiveTab) ?? 'overview'
   const [activeTab, setActiveTab] = useState<ActiveTab>(initialTab)
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
+
+  const handleAgentBarClick = useCallback((agentId: string) => {
+    setSelectedAgent((prev) => (prev === agentId ? null : agentId))
+  }, [])
 
   // Auto-refresh every 60s
   useEffect(() => {
@@ -70,6 +75,9 @@ export default function App() {
     useTempoSearch(tempoSearchQuery(), timeRange, refreshKey)
 
   const traceRows = transformTempoTraces(rawTraces)
+  const filteredTraceRows = selectedAgent
+    ? traceRows.filter((t) => t.agentId === selectedAgent)
+    : traceRows
 
   // ─── Stat Card Data ───────────────────────────────────────────────────────
 
@@ -298,11 +306,13 @@ export default function App() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <BarChartPanel
             title="Calls by Agent"
-            subtitle="Total LLM calls per agent in time range"
+            subtitle="Total LLM calls per agent in time range — click a bar to filter traces"
             data={callsByAgent}
             loading={callsByAgentLoading}
             error={callsByAgentError}
             valueFormatter={(v) => v.toFixed(0)}
+            onBarClick={handleAgentBarClick}
+            selectedLabel={selectedAgent}
           />
           <BarChartPanel
             title="Cost by Agent (USD)"
@@ -325,8 +335,24 @@ export default function App() {
         />
 
         {/* Row 5: Trace Table */}
+        {selectedAgent && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">Showing traces for:</span>
+            <span className="flex items-center gap-1.5 text-xs font-medium text-indigo-300 bg-slate-700 px-2.5 py-1 rounded-full">
+              {selectedAgent}
+              <button
+                onClick={() => setSelectedAgent(null)}
+                className="ml-0.5 text-indigo-400 hover:text-white transition-colors"
+                aria-label="Clear agent filter"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+            <span className="text-xs text-gray-600">({filteredTraceRows.length} traces)</span>
+          </div>
+        )}
         <TraceTable
-          traces={traceRows}
+          traces={filteredTraceRows}
           loading={tracesLoading}
           error={tracesError}
         />
