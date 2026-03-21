@@ -278,12 +278,9 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     )
 
     session_id = request.headers.get("x-agentweave-session-id")
-    project = request.headers.get("x-agentweave-project")
-    # Infer project from agent_id prefix when not explicitly set
-    if not project and agent_id and agent_id != "unknown":
-        prefix = agent_id.split("-")[0]  # nix-v1→nix, max-v1→max, claude-code-mac→claude
-        if prefix:
-            project = prefix
+    # Only use explicitly set project — do NOT infer from agent_id prefix.
+    # Use AGENTWEAVE_PROJECT env var or X-AgentWeave-Project header.
+    project = request.headers.get("x-agentweave-project") or os.getenv("AGENTWEAVE_PROJECT") or None
     turn: int | None = None
     turn_raw = request.headers.get("x-agentweave-turn")
     if turn_raw is not None:
