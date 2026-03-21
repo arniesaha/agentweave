@@ -665,11 +665,15 @@ export function buildDailySummary(nodes: SessionNode[]): DailySummary {
 
 // ─── Project tracking (issue #101) ─────────────────────────────────────────
 
-/** Extract distinct prov.project values from trace rows. */
+// Agent IDs that were incorrectly inferred as project names before the fix.
+// Filter these out of the project dropdown so only real project names appear.
+const KNOWN_AGENT_ID_PREFIXES = new Set(['nix', 'max', 'claude', 'gemini', 'openai', 'unknown'])
+
+/** Extract distinct prov.project values from trace rows, excluding legacy agent_id-derived values. */
 export function extractProjects(traces: TraceRow[]): string[] {
   const set = new Set<string>()
   for (const t of traces) {
-    if (t.project) set.add(t.project)
+    if (t.project && !KNOWN_AGENT_ID_PREFIXES.has(t.project)) set.add(t.project)
   }
   return Array.from(set).sort()
 }
