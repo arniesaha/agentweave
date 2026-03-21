@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { Activity, DollarSign, Zap, RefreshCw, GitBranch, BarChart2, X } from 'lucide-react'
 import { Header } from './components/Header'
 import { StatCard } from './components/StatCard'
@@ -134,9 +134,24 @@ export default function App() {
   const { bars: callsByModel, loading: callsByModelLoading, error: callsByModelError } =
     usePromQueryInstant(promCallsByModelQuery(timeRange), timeRange, refreshKey, 'prov_llm_model')
 
-  // 8. P95 Latency by Model
-  const { bars: latencyByModel, loading: latencyByModelLoading, error: latencyByModelError } =
-    usePromQueryInstant(promP95LatencyByModelQuery(), timeRange, refreshKey, 'prov_llm_model')
+  // 8. P95 Latency by Model — computed client-side from loaded traces (spanmetrics latency_bucket not available)
+  const { bars: latencyByModel, loading: latencyByModelLoading, error: latencyByModelError } = useMemo(() => {
+    if (tracesLoading) return { bars: [], loading: true, error: null }
+    if (!traceRows.length) return { bars: [], loading: false, error: null }
+    // Group latencies by model, compute p95 per group
+    const byModel: Record<string, number[]> = {}
+    for (const t of traceRows) {
+      if (!t.model || t.model === 'unknown') continue
+      if (!byModel[t.model]) byModel[t.model] = []
+      byModel[t.model].push(t.latencyMs)
+    }
+    const bars = Object.entries(byModel).map(([model, latencies]) => {
+      latencies.sort((a, b) => a - b)
+      const p95idx = Math.floor(latencies.length * 0.95)
+      return { label: model, value: latencies[Math.min(p95idx, latencies.length - 1)] }
+    }).sort((a, b) => b.value - a.value)
+    return { bars, loading: false, error: null }
+  }, [traceRows, tracesLoading])
 
   // 9. Calls by Agent (Prometheus spanmetrics)
   const { bars: callsByAgent, loading: callsByAgentLoading, error: callsByAgentError } =
@@ -300,7 +315,7 @@ export default function App() {
           />
           <BarChartPanel
             title="P95 Latency by Model"
-            subtitle="95th percentile latency in ms"
+            subtitle="95th percentile latency in ms (from loaded traces)"
             data={latencyByModel}
             loading={latencyByModelLoading}
             error={latencyByModelError}
