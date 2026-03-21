@@ -844,6 +844,73 @@ class TestSessionEndpoint:
         assert "prov.task.label" not in span.attrs
 
 
+class TestProjectTracking:
+    """Verify prov.project is propagated via env var, POST /session, and header (issue #101)."""
+
+    def test_post_session_with_project(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        client = TestClient(app)
+        resp = client.post("/session", json={
+            "session_id": "sess-proj-1",
+            "project": "launchpad",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["context"]["prov.project"] == "launchpad"
+
+    def test_post_session_empty_project_excluded(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        client = TestClient(app)
+        resp = client.post("/session", json={
+            "session_id": "sess-proj-2",
+            "project": "",
+        })
+        data = resp.json()
+        assert "prov.project" not in data["context"]
+
+    def test_env_var_agentweave_project(self, monkeypatch):
+        """AGENTWEAVE_PROJECT env var populates _session_context at module reload."""
+        import importlib
+        monkeypatch.setenv("AGENTWEAVE_PROJECT", "skynet")
+        monkeypatch.setenv("AGENTWEAVE_SESSION_ID", "")
+        importlib.reload(proxy_module)
+        assert proxy_module._session_context.get("prov.project") == "skynet"
+        monkeypatch.delenv("AGENTWEAVE_PROJECT")
+        importlib.reload(proxy_module)
+
+    def test_project_header_sets_span_attr(self, monkeypatch):
+        """X-AgentWeave-Project header sets prov.project on spans."""
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+            project="launchpad",
+        )
+        assert span.attrs["prov.project"] == "launchpad"
+
+    def test_project_absent_when_not_provided(self, monkeypatch):
+        """prov.project should not appear when neither header nor session sets it."""
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        monkeypatch.setattr(proxy_module, "_session_context", {})
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+        )
+        assert "prov.project" not in span.attrs
+
+    def test_project_header_stripped_from_forwarding(self):
+        """x-agentweave-project must be in _SKIP_HEADERS_ALWAYS."""
+        assert "x-agentweave-project" in _SKIP_HEADERS_ALWAYS
+
+
 class TestNormalizeTraceId:
     """Unit tests for the _normalize_trace_id helper."""
 

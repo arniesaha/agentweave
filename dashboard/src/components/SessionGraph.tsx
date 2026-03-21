@@ -179,6 +179,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           lastSeen: n.lastSeen,
           durationMs: n.durationMs,
           hasError: n.hasError,
+          project: n.project,
         })
       }
     }
@@ -468,6 +469,29 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
                 >
                   {formatCost(node.totalCost)}
                 </text>
+              )}
+              {/* Project badge (issue #101) */}
+              {node.project && (
+                <g transform={`translate(0, ${radius + (node.totalCost > 0 ? 37 : 27)})`}>
+                  <rect
+                    x={-(node.project.length * 3 + 6)}
+                    y={-7}
+                    width={node.project.length * 6 + 12}
+                    height={14}
+                    rx={7}
+                    fill="#4338ca"
+                    opacity={0.6}
+                  />
+                  <text
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fontSize="8"
+                    fill="#c7d2fe"
+                    fontFamily="monospace"
+                  >
+                    {node.project}
+                  </text>
+                </g>
               )}
             </g>
           )

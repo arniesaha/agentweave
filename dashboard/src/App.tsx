@@ -23,6 +23,7 @@ import {
   transformSubagentTraces,
   buildCostTimeSeries,
   buildCostByAgent,
+  extractProjects,
 } from './lib/queries'
 import { useTempoSearch, useTempoSearchCount, useTempoMetrics, useSessionGraph } from './hooks/useTempo'
 import { usePromQueryRange, usePromQueryInstant } from './hooks/usePrometheus'
@@ -38,6 +39,7 @@ export default function App() {
   const initialTab = (new URLSearchParams(window.location.search).get('tab') as ActiveTab) ?? 'overview'
   const [activeTab, setActiveTab] = useState<ActiveTab>(initialTab)
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
+  const [selectedProject, setSelectedProject] = useState<string | null>(null)
 
   const handleAgentBarClick = useCallback((agentId: string) => {
     setSelectedAgent((prev) => (prev === agentId ? null : agentId))
@@ -72,9 +74,10 @@ export default function App() {
 
   // Fetch up to 1000 traces with span attributes (used for table AND stat aggregation)
   const { traces: rawTraces, loading: tracesLoading, error: tracesError } =
-    useTempoSearch(tempoSearchQuery(), timeRange, refreshKey)
+    useTempoSearch(tempoSearchQuery(selectedProject ?? undefined), timeRange, refreshKey)
 
   const traceRows = transformTempoTraces(rawTraces)
+  const projects = extractProjects(traceRows)
   const filteredTraceRows = selectedAgent
     ? traceRows.filter((t) => t.agentId === selectedAgent)
     : traceRows
@@ -83,7 +86,7 @@ export default function App() {
 
   // 1. Total LLM Calls (separate high-limit query for accurate count)
   const { count: llmCallCount, loading: llmCallLoading, error: llmCallError } =
-    useTempoSearchCount(tempoSearchQuery(), timeRange, refreshKey)
+    useTempoSearchCount(tempoSearchQuery(selectedProject ?? undefined), timeRange, refreshKey)
 
   // 2. Total Cost — summed from trace attributes
   // Filter out -1.0 sentinel (unknown model pricing) before summing
@@ -171,6 +174,9 @@ export default function App() {
         onRefresh={handleRefresh}
         lastUpdated={lastUpdated}
         tempoError={tempoError}
+        projects={projects}
+        selectedProject={selectedProject}
+        onProjectChange={setSelectedProject}
       />
 
       {/* Tab navigation */}
