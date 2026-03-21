@@ -36,12 +36,13 @@ export function getStepForRange(range: TimeRange): number {
 
 export const TEMPO_SERVICE = 'agentweave-proxy'
 
-export function tempoSearchQuery(): string {
+export function tempoSearchQuery(project?: string): string {
   // select() fetches span attributes; used for both trace table and stat card aggregation
+  const projectFilter = project ? ` && span.prov.project = "${project}"` : ''
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown"${projectFilter} }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
-    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id)`
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project)`
   )
 }
 
@@ -160,6 +161,7 @@ export interface TraceRow {
   costUsd: number
   cacheHitRate: number
   sessionId: string
+  project: string
   attributes: Record<string, string>
 }
 
@@ -207,6 +209,7 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
       cacheHitRate: Math.max(0, parseFloat(getSpanAttr(attrs, 'cache.hit_rate') || '0') || 0),
       sessionId: getSpanAttr(attrs, 'session.id') || '—',
       agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
+      project: getSpanAttr(attrs, 'prov.project') || '',
       attributes: allAttrs,
     }
   })
@@ -297,7 +300,7 @@ export function tempoSessionGraphQuery(): string {
     `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
     ` | select(span.prov.session.id, span.session.id, span.prov.parent.session.id, span.prov.task.label,` +
     ` span.prov.agent.id, span.prov.agent.type, span.cost.usd, span.prov.llm.model,` +
-    ` span.prov.llm.prompt_tokens, span.prov.llm.completion_tokens)`
+    ` span.prov.llm.prompt_tokens, span.prov.llm.completion_tokens, span.prov.project)`
   )
 }
 
@@ -486,6 +489,7 @@ export interface SessionNode {
   lastSeen: number           // unix ms
   durationMs: number
   hasError: boolean
+  project?: string           // prov.project value (issue #101)
 }
 
 /** An edge between two session nodes (parent → child). */
@@ -519,6 +523,7 @@ interface SessionSpanRow {
   tokensOut: number
   model: string
   durationNanos: number
+  project: string
 }
 
 function spanRowFromTempoSpan(t: TempoSpan): SessionSpanRow {
@@ -541,6 +546,7 @@ function spanRowFromTempoSpan(t: TempoSpan): SessionSpanRow {
     tokensOut: parseInt(getSpanAttr(attrs, 'prov.llm.completion_tokens') || '0'),
     model: getSpanAttr(attrs, 'prov.llm.model') || modelFromName || 'unknown',
     durationNanos: span?.durationNanos ?? 0,
+    project: getSpanAttr(attrs, 'prov.project'),
   }
 }
 
@@ -565,6 +571,7 @@ export function buildSessionGraph(
       if (row.time > existing.lastSeen) existing.lastSeen = row.time
       if (row.taskLabel && !existing.taskLabel) existing.taskLabel = row.taskLabel
       if (row.parentSessionId && !existing.parentSessionId) existing.parentSessionId = row.parentSessionId
+      if (row.project && !existing.project) existing.project = row.project
       if (row.agentType && row.agentType !== 'unknown' && existing.agentType === 'unknown') {
         existing.agentType = row.agentType
       }
@@ -584,6 +591,7 @@ export function buildSessionGraph(
         lastSeen: row.time,
         durationMs: 0,
         hasError: false,
+        project: row.project || undefined,
       })
     }
 
@@ -653,4 +661,15 @@ export function buildDailySummary(nodes: SessionNode[]): DailySummary {
     totalCost: nodes.reduce((s, n) => s + n.totalCost, 0),
     totalCalls: nodes.reduce((s, n) => s + n.callCount, 0),
   }
+}
+
+// ─── Project tracking (issue #101) ─────────────────────────────────────────
+
+/** Extract distinct prov.project values from trace rows. */
+export function extractProjects(traces: TraceRow[]): string[] {
+  const set = new Set<string>()
+  for (const t of traces) {
+    if (t.project) set.add(t.project)
+  }
+  return Array.from(set).sort()
 }

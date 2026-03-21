@@ -9,6 +9,9 @@ interface HeaderProps {
   onRefresh: () => void
   lastUpdated: Date | null
   tempoError: boolean
+  projects?: string[]
+  selectedProject: string | null
+  onProjectChange: (project: string | null) => void
 }
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
@@ -20,7 +23,7 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: '7d', label: 'Last 7d' },
 ]
 
-export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, tempoError }: HeaderProps) {
+export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, tempoError, projects, selectedProject, onProjectChange }: HeaderProps) {
   return (
     <>
       {tempoError && (
@@ -48,6 +51,20 @@ export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, t
               <span className="text-gray-500 text-xs hidden sm:block">
                 Updated {formatDistanceToNow(lastUpdated, { addSuffix: true })}
               </span>
+            )}
+
+            {/* Project filter */}
+            {projects && projects.length > 0 && (
+              <select
+                value={selectedProject ?? ''}
+                onChange={(e) => onProjectChange(e.target.value || null)}
+                className="px-2 py-1 text-xs bg-[#111118] border border-[#1e1e2e] rounded-lg text-gray-300 hover:border-indigo-500/50 transition-colors appearance-none cursor-pointer"
+              >
+                <option value="">All projects</option>
+                {projects.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
             )}
 
             {/* Time range selector */}
