@@ -62,21 +62,9 @@ graph LR
 3. **Proxy** — point any agent's base URL at AgentWeave. It auto-detects the provider, forwards upstream, extracts token counts, and emits OTel spans. No code changes.
 
 <p align="center">
-  <img src="screenshots/aw_overview_v2.png" alt="AgentWeave dashboard overview — LLM calls, cost, latency, agent attribution, and session table" width="100%">
+  <img src="screenshots/aw_composite_v3.jpg" alt="AgentWeave — Overview, Session Explorer with delegation graph, session drilldown, and Grafana trace waterfall" width="100%">
   <br>
-  <em>Overview — KPIs, calls and cost over time, model/agent breakdown, attribution, and full session + trace tables</em>
-</p>
-
-<p align="center">
-  <img src="screenshots/aw_sessions_v2.png" alt="AgentWeave session explorer — Agents topology and Sessions tree side by side" width="100%">
-  <br>
-  <em>Session Explorer — Agents topology (with back-edge delegation) and Sessions tree side by side</em>
-</p>
-
-<p align="center">
-  <img src="screenshots/aw_tempo_trace_v2.jpg" alt="Grafana Tempo TraceQL — span attributes, cost, cache hit rate, and agent ID per LLM call" width="100%">
-  <br>
-  <em>Grafana Tempo — full span detail per LLM call: model, cost, cache hit rate, latency, agent ID</em>
+  <em>Overview (KPIs, P95 latency, model/agent breakdown) · Session Explorer (delegation tree, cost per session) · Grafana Tempo (TraceQL + span waterfall)</em>
 </p>
 
 ## Install
