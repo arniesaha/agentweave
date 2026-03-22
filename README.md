@@ -4,14 +4,15 @@
 
 When agents delegate, loop, and fanout across tools and models, the final output tells you nothing. AgentWeave makes the decision chain the first-class artifact — every span carries [W3C PROV-O](https://www.w3.org/TR/prov-o/) provenance on [OpenTelemetry](https://opentelemetry.io/): which agent acted, which model ran, what was consumed, what was generated, and how much it cost.
 
-Three paths to instrumentation — decorators, auto-instrumentation, or zero-code proxy. Any OTLP backend.
+Three paths to instrumentation: decorators, auto-instrumentation, or zero-code proxy. Any OTLP backend.
 
 ```
 agent.nix                          94ms
 ├── llm.claude-sonnet-4-6          81ms  ← prompt_tokens=847, completion_tokens=312
-├── tool.image_search               52ms
-├── llm.claude-sonnet-4-6          79ms  ← prompt_tokens=847, completion_tokens=312
-├── tool.image_search               51ms
+├── tool.delegate_to_max           312ms
+│   └── agent.max                  298ms
+│       ├── llm.gemini-2.0-flash   187ms ← prompt_tokens=1203, completion_tokens=89
+│       └── tool.web_search         94ms
 ├── llm.claude-sonnet-4-6          80ms  ← found it
 └── tool.deploy_portfolio           48ms
 ```
@@ -66,6 +67,28 @@ graph LR
   <br>
   <em>Overview (KPIs, P95 latency, model/agent breakdown) · Session Explorer (delegation tree, cost per session) · Grafana Tempo (TraceQL + span waterfall)</em>
 </p>
+
+## How AgentWeave fits in the ecosystem
+
+Tools like [OpenLIT](https://openlit.io), [Langfuse](https://langfuse.com), and [LangSmith](https://smith.langchain.com) are good at answering: *what did my LLM do?* Token counts, latency, cost per request, prompt logging. If you have a single agent or a single app making LLM calls, those tools cover the problem well.
+
+AgentWeave answers a different question: *what did my agent system do?*
+
+When one agent delegates to another across different machines, frameworks, or providers, you lose the thread. A trace that stops at the process boundary tells you nothing about why the overall task failed, which agent introduced the bad output, or where the cost actually went.
+
+| | OpenLIT / Langfuse / LangSmith | AgentWeave |
+|---|---|---|
+| Single-agent LLM tracing | Great | Basic |
+| Cost and token tracking per request | Great | Supported |
+| Prompt management, evals, playground | Yes (varies) | Out of scope |
+| Cross-agent delegation traces | No | Core feature |
+| Traces spanning multiple machines | No | Core feature |
+| Proxy-based, zero code changes | No | Yes |
+| Open source, self-hosted, no SaaS tier | Varies | Yes (MIT) |
+
+**The intended use:** run OpenLIT or Langfuse inside each agent for deep per-agent observability, and point them all at AgentWeave for the system view above that. The delegation graph, cross-agent cost rollups, and traces that span process boundaries are what AgentWeave adds.
+
+No cloud, no SaaS, no enterprise tier. Just the tool.
 
 ## Install
 
