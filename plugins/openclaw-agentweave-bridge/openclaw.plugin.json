@@ -1,0 +1,14 @@
+{
+  "id": "agentweave-bridge",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["otlpEndpoint"],
+    "properties": {
+      "otlpEndpoint": { "type": "string" },
+      "agentId": { "type": "string", "default": "nix-v1" },
+      "project": { "type": "string" },
+      "enabled": { "type": "boolean", "default": true }
+    }
+  }
+}

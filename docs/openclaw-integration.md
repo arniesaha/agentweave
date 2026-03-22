@@ -136,6 +136,52 @@ def run_sub_agent(task: str, headers: dict):
 5. In Grafana Explore, you should see the full trace tree: root span →
    LLM calls → sub-agent spans, all linked by `traceparent`.
 
+## Plugin: openclaw-agentweave-bridge
+
+For OpenClaw users, the `@agentweave/openclaw-bridge` plugin automates all
+of the above — it listens for diagnostic events and creates root OTel spans
+automatically, with no code changes needed.
+
+### Installation
+
+1. Clone or copy the plugin directory into your workspace:
+
+```bash
+cp -r plugins/openclaw-agentweave-bridge ~/.openclaw/plugins/agentweave-bridge
+cd ~/.openclaw/plugins/agentweave-bridge && npm install
+```
+
+2. Register the plugin in `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "agentweave-bridge": {
+        "path": "/home/user/clawd/plugins/openclaw-agentweave-bridge",
+        "config": {
+          "otlpEndpoint": "http://192.168.1.70:30418",
+          "agentId": "nix-v1",
+          "project": "my-project",
+          "enabled": true
+        }
+      }
+    }
+  }
+}
+```
+
+### What the plugin does
+
+| Diagnostic Event | Action |
+|-----------------|--------|
+| `message.queued` | Creates a root span `openclaw.turn` with session/agent attributes, injects `traceparent` into `process.env.AGENTWEAVE_TRACEPARENT` |
+| `message.processed` | Sets outcome attribute and ends the root span |
+| `model.usage` | Adds cost/token data as span events on the root span |
+
+The injected `AGENTWEAVE_TRACEPARENT` env var is picked up by the proxy for
+downstream LLM calls, linking them as child spans in the trace tree.
+
 ## Proxy Headers Reference
 
 | Header | Purpose |

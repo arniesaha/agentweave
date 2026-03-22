@@ -1,0 +1,17 @@
+{
+  "name": "@agentweave/openclaw-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AgentWeave bridge plugin for OpenClaw — creates root OTel spans per user message",
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.213.0",
+    "@opentelemetry/resources": "^2.6.0",
+    "@opentelemetry/sdk-node": "^0.213.0",
+    "@opentelemetry/sdk-trace-base": "^2.6.0",
+    "@opentelemetry/semantic-conventions": "^1.40.0"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}
