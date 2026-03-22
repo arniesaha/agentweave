@@ -135,7 +135,7 @@ export function createAgentWeaveBridgeService() {
               turn.span.end()
               activeTurns.delete(sessionKey)
               delete process.env.AGENTWEAVE_TRACEPARENT
-              console.log("[agentweave-bridge] ended root span for session:", e.sessionId)
+              console.log("[agentweave-bridge] ended root span for session:", sessionKey)
               break
             }
 
