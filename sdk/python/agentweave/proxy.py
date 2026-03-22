@@ -385,8 +385,61 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
 
     if is_stream:
         media = "application/json" if provider == "google" else "text/event-stream"
+        # Peek at upstream status before committing to a 200 StreamingResponse.
+        # If upstream returned an error (4xx/5xx), return the error body with the
+        # correct status code so callers see the real error instead of an empty
+        # SSE stream that looks like a timeout.
+        preflight = await _stream_preflight(
+            method=kwargs["method"],
+            upstream_url=kwargs["upstream_url"],
+            headers=kwargs["headers"],
+            body_bytes=kwargs["body_bytes"],
+        )
+        if preflight is not None:
+            logger.warning("← upstream error status=%d (short-circuit)", preflight.status_code)
+            return preflight
         return StreamingResponse(_stream_and_trace(**kwargs), media_type=media)
     return await _request_and_trace(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Streaming preflight — detect upstream errors before committing to HTTP 200
+# ---------------------------------------------------------------------------
+
+async def _stream_preflight(
+    method: str, upstream_url: str, headers: dict, body_bytes: bytes,
+) -> JSONResponse | None:
+    """Send a HEAD-style probe using the real request.
+
+    Opens a streaming connection, reads the status code, and if it indicates
+    an error (>= 400), consumes the body and returns a JSONResponse with the
+    correct status.  Returns None when the upstream is healthy so the caller
+    can proceed with the normal streaming path.
+
+    NOTE: This intentionally does NOT consume the body on success — the
+    subsequent ``_stream_and_trace`` call opens its own connection.  The
+    extra round-trip on errors is negligible compared to the cost of
+    silently swallowing a 429 behind a 200.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            async with client.stream(
+                method, upstream_url, headers=headers, content=body_bytes,
+            ) as resp:
+                if resp.status_code < 400:
+                    return None  # healthy — let the real stream handler run
+                # Read the error body so we can relay it to the caller.
+                body = await resp.aread()
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {"type": "error", "error": {"type": "proxy_error",
+                            "message": body.decode(errors="replace")[:2000]}}
+                return JSONResponse(content=data, status_code=resp.status_code)
+    except httpx.TimeoutException:
+        return None  # let the real handler deal with timeouts
+    except Exception:
+        return None  # unexpected error — fall through to normal path
 
 
 # ---------------------------------------------------------------------------
