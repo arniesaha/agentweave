@@ -248,17 +248,21 @@ def hooks_install(
             console.print(f"[red]Error:[/red] Invalid JSON in {settings_file}")
             raise typer.Exit(code=1)
 
-    # Load our hook template
+    # Load our hook template and resolve __HOOKS_DIR__ to the actual
+    # path of the shell scripts (resolved once at install time, not at
+    # hook runtime — avoids fragile dynamic path resolution).
     package_dir = Path(__file__).parent
-    template_file = package_dir / "hooks" / "claude-code" / "settings_template.json"
+    hooks_dir = package_dir / "hooks" / "claude-code"
+    template_file = hooks_dir / "settings_template.json"
     if not template_file.exists():
         # Try from project root (for development installs)
-        template_file = package_dir.parent.parent.parent / "agentweave" / "hooks" / "claude-code" / "settings_template.json"
+        hooks_dir = package_dir.parent.parent.parent / "agentweave" / "hooks" / "claude-code"
+        template_file = hooks_dir / "settings_template.json"
     if not template_file.exists():
         console.print("[red]Error:[/red] Could not find hooks template file.")
         console.print(f"[dim]Searched: {package_dir / 'hooks' / 'claude-code' / 'settings_template.json'}[/dim]")
         raise typer.Exit(code=1)
-    template_content = template_file.read_text()
+    template_content = template_file.read_text().replace("__HOOKS_DIR__", str(hooks_dir))
 
     template_hooks = json.loads(template_content).get("hooks", {})
 

@@ -252,20 +252,33 @@ async def get_session_context():
 # Claude Code hooks endpoints
 # ---------------------------------------------------------------------------
 
+def _extract_parent_context(traceparent: str | None):
+    """Parse a W3C traceparent header into an OTel context for span linking."""
+    if not traceparent:
+        return None
+    try:
+        from opentelemetry.propagators.textmap import DictGetter
+        from opentelemetry import propagate
+        ctx = propagate.extract(carrier={"traceparent": traceparent}, getter=DictGetter())
+        return ctx
+    except Exception:
+        return None
+
+
 @app.post("/hooks/span", include_in_schema=True)
 async def hooks_span(body: dict):
     """Receive a single span from Claude Code hooks (e.g., SubagentStop).
 
     Creates an OTel span with the provided attributes and exports it.
+    Accepts optional ``traceparent`` to link the span to a parent trace.
     """
-    from opentelemetry import trace as otel_trace
-
     tracer = get_tracer("agentweave.hooks")
     span_name = body.get("span_name", "hook.span")
     session_id = body.get("session_id", "")
     attributes = body.get("attributes", {})
+    parent_ctx = _extract_parent_context(body.get("traceparent"))
 
-    with tracer.start_as_current_span(span_name) as span:
+    with tracer.start_as_current_span(span_name, context=parent_ctx) as span:
         span.set_attribute("prov.session.id", session_id)
         span.set_attribute("prov.hook.source", "claude-code")
         for key, value in attributes.items():
@@ -279,13 +292,14 @@ async def hooks_span(body: dict):
 async def hooks_batch(body: dict):
     """Receive a batch of buffered events from Claude Code hooks (Stop hook).
 
-    Creates OTel spans for each event in the batch.
+    Creates OTel spans for each event in the batch. Accepts optional
+    ``traceparent`` so tool-call spans become children of the session's
+    root span rather than floating as orphans.
     """
-    from opentelemetry import trace as otel_trace
-
     tracer = get_tracer("agentweave.hooks")
     session_id = body.get("session_id", "")
     events = body.get("events", [])
+    parent_ctx = _extract_parent_context(body.get("traceparent"))
 
     spans_created = 0
     for event in events:
@@ -294,7 +308,7 @@ async def hooks_batch(body: dict):
         data = event.get("data", {})
 
         span_name = f"hook.{event_type}"
-        with tracer.start_as_current_span(span_name) as span:
+        with tracer.start_as_current_span(span_name, context=parent_ctx) as span:
             span.set_attribute("prov.session.id", session_id or event.get("session_id", ""))
             span.set_attribute("prov.hook.source", "claude-code")
             span.set_attribute("prov.hook.event_type", event_type)
