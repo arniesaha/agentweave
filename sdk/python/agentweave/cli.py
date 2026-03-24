@@ -367,7 +367,10 @@ def hooks_uninstall(
             cleaned_entry_hooks = []
             for h in entry.get("hooks", []):
                 cmd = h.get("command", "")
-                if not cmd.startswith("agentweave-hook-"):
+                is_ours = cmd.startswith("agentweave-hook-") or "agentweave" in cmd and any(
+                    s in cmd for s in ("post_tool_use.sh", "subagent_stop.sh", "stop.sh")
+                )
+                if not is_ours:
                     cleaned_entry_hooks.append(h)
                 else:
                     changes_made.append(f"Removed {cmd} from {hook_type}")
