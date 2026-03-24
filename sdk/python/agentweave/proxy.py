@@ -248,6 +248,75 @@ async def get_session_context():
     return _session_context
 
 
+# ---------------------------------------------------------------------------
+# Claude Code hooks endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/hooks/span", include_in_schema=True)
+async def hooks_span(body: dict):
+    """Receive a single span from Claude Code hooks (e.g., SubagentStop).
+
+    Creates an OTel span with the provided attributes and exports it.
+    """
+    from opentelemetry import trace as otel_trace
+
+    tracer = get_tracer("agentweave.hooks")
+    span_name = body.get("span_name", "hook.span")
+    session_id = body.get("session_id", "")
+    attributes = body.get("attributes", {})
+
+    with tracer.start_as_current_span(span_name) as span:
+        span.set_attribute("prov.session.id", session_id)
+        span.set_attribute("prov.hook.source", "claude-code")
+        for key, value in attributes.items():
+            if value is not None:
+                span.set_attribute(key, str(value) if not isinstance(value, (int, float, bool)) else value)
+
+    return {"ok": True, "span_name": span_name}
+
+
+@app.post("/hooks/batch", include_in_schema=True)
+async def hooks_batch(body: dict):
+    """Receive a batch of buffered events from Claude Code hooks (Stop hook).
+
+    Creates OTel spans for each event in the batch.
+    """
+    from opentelemetry import trace as otel_trace
+
+    tracer = get_tracer("agentweave.hooks")
+    session_id = body.get("session_id", "")
+    events = body.get("events", [])
+
+    spans_created = 0
+    for event in events:
+        event_type = event.get("event", "unknown")
+        ts = event.get("ts")
+        data = event.get("data", {})
+
+        span_name = f"hook.{event_type}"
+        with tracer.start_as_current_span(span_name) as span:
+            span.set_attribute("prov.session.id", session_id or event.get("session_id", ""))
+            span.set_attribute("prov.hook.source", "claude-code")
+            span.set_attribute("prov.hook.event_type", event_type)
+            if ts:
+                span.set_attribute("prov.hook.timestamp_ms", ts)
+
+            # Extract tool use data if present
+            tool_name = data.get("tool_name") or data.get("toolName")
+            if tool_name:
+                span.set_attribute("prov.tool.name", tool_name)
+            tool_input = data.get("tool_input") or data.get("toolInput")
+            if tool_input and isinstance(tool_input, str):
+                span.set_attribute("prov.tool.input_preview", tool_input[:512])
+            tool_result = data.get("tool_result") or data.get("toolResult")
+            if tool_result and isinstance(tool_result, str):
+                span.set_attribute("prov.tool.result_preview", tool_result[:512])
+
+        spans_created += 1
+
+    return {"ok": True, "spans_created": spans_created}
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], response_model=None)
 async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse:
     if (denied := _check_auth(request)) is not None:

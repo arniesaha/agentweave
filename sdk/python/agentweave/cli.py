@@ -13,8 +13,10 @@ from rich.tree import Tree
 app = typer.Typer(name="agentweave", help="AgentWeave — observability for multi-agent AI systems.")
 trace_app = typer.Typer(name="trace", help="Inspect decision provenance traces.")
 proxy_app = typer.Typer(name="proxy", help="Anthropic API proxy for zero-config tracing.")
+hooks_app = typer.Typer(name="hooks", help="Claude Code hooks integration.")
 app.add_typer(trace_app)
 app.add_typer(proxy_app)
+app.add_typer(hooks_app)
 
 console = Console()
 
@@ -205,6 +207,187 @@ def proxy_start(
     console.print()
 
     proxy_run(host=host, port=port)
+
+
+# ---------------------------------------------------------------------------
+# agentweave hooks install
+# ---------------------------------------------------------------------------
+
+
+@hooks_app.command("install")
+def hooks_install(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n",
+        help="Show what would be changed without modifying settings.json.",
+    ),
+    settings_path: Optional[str] = typer.Option(
+        None, "--settings-path",
+        help="Path to Claude Code settings.json (default: ~/.claude/settings.json).",
+    ),
+) -> None:
+    """Install AgentWeave hooks into Claude Code settings.
+
+    Idempotently merges PostToolUse, SubagentStop, and Stop hooks into
+    ~/.claude/settings.json. Existing hooks are preserved.
+    """
+    import os
+    from pathlib import Path
+
+    # Determine settings path
+    if settings_path:
+        settings_file = Path(settings_path)
+    else:
+        settings_file = Path.home() / ".claude" / "settings.json"
+
+    # Load existing settings or create empty
+    existing_settings: dict = {}
+    if settings_file.exists():
+        try:
+            existing_settings = json.loads(settings_file.read_text())
+        except json.JSONDecodeError:
+            console.print(f"[red]Error:[/red] Invalid JSON in {settings_file}")
+            raise typer.Exit(code=1)
+
+    # Load our hook template
+    package_dir = Path(__file__).parent
+    template_file = package_dir / "hooks" / "claude-code" / "settings_template.json"
+    if not template_file.exists():
+        # Try from project root (for development installs)
+        template_file = package_dir.parent.parent.parent / "agentweave" / "hooks" / "claude-code" / "settings_template.json"
+    if not template_file.exists():
+        console.print("[red]Error:[/red] Could not find hooks template file.")
+        console.print(f"[dim]Searched: {package_dir / 'hooks' / 'claude-code' / 'settings_template.json'}[/dim]")
+        raise typer.Exit(code=1)
+    template_content = template_file.read_text()
+
+    template_hooks = json.loads(template_content).get("hooks", {})
+
+    # Merge hooks (preserve existing, add new)
+    existing_hooks = existing_settings.get("hooks", {})
+    merged_hooks = dict(existing_hooks)
+
+    changes_made = []
+    for hook_type, hook_config in template_hooks.items():
+        if hook_type not in merged_hooks:
+            merged_hooks[hook_type] = hook_config
+            changes_made.append(f"Added {hook_type} hook")
+        else:
+            # Check if our hook is already present
+            existing_commands = []
+            for entry in merged_hooks[hook_type]:
+                for h in entry.get("hooks", []):
+                    if h.get("type") == "command":
+                        existing_commands.append(h.get("command", ""))
+
+            our_commands = []
+            for entry in hook_config:
+                for h in entry.get("hooks", []):
+                    if h.get("type") == "command":
+                        our_commands.append(h.get("command", ""))
+
+            for cmd in our_commands:
+                if cmd not in existing_commands:
+                    merged_hooks[hook_type].extend(hook_config)
+                    changes_made.append(f"Added AgentWeave to {hook_type} hook")
+                    break
+
+    if not changes_made:
+        console.print("[green]AgentWeave hooks already installed.[/green]")
+        return
+
+    # Update settings
+    existing_settings["hooks"] = merged_hooks
+
+    if dry_run:
+        console.print("[yellow]Dry run — would make these changes:[/yellow]")
+        for change in changes_made:
+            console.print(f"  - {change}")
+        console.print(f"\n[dim]Settings file: {settings_file}[/dim]")
+        console.print("\n[bold]Merged settings:[/bold]")
+        console.print_json(json.dumps(existing_settings, indent=2))
+    else:
+        # Ensure directory exists
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.write_text(json.dumps(existing_settings, indent=2) + "\n")
+        console.print("[green]AgentWeave hooks installed successfully![/green]")
+        for change in changes_made:
+            console.print(f"  - {change}")
+        console.print(f"\n[dim]Settings file: {settings_file}[/dim]")
+        console.print("\n[yellow]Next steps:[/yellow]")
+        console.print("  1. Ensure the AgentWeave proxy is running:")
+        console.print("     [bold]agentweave proxy start[/bold]")
+        console.print("  2. Restart Claude Code to load the new hooks")
+
+
+@hooks_app.command("uninstall")
+def hooks_uninstall(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n",
+        help="Show what would be changed without modifying settings.json.",
+    ),
+    settings_path: Optional[str] = typer.Option(
+        None, "--settings-path",
+        help="Path to Claude Code settings.json (default: ~/.claude/settings.json).",
+    ),
+) -> None:
+    """Remove AgentWeave hooks from Claude Code settings."""
+    from pathlib import Path
+
+    # Determine settings path
+    if settings_path:
+        settings_file = Path(settings_path)
+    else:
+        settings_file = Path.home() / ".claude" / "settings.json"
+
+    if not settings_file.exists():
+        console.print("[yellow]No settings file found — nothing to uninstall.[/yellow]")
+        return
+
+    try:
+        existing_settings = json.loads(settings_file.read_text())
+    except json.JSONDecodeError:
+        console.print(f"[red]Error:[/red] Invalid JSON in {settings_file}")
+        raise typer.Exit(code=1)
+
+    existing_hooks = existing_settings.get("hooks", {})
+    if not existing_hooks:
+        console.print("[yellow]No hooks configured — nothing to uninstall.[/yellow]")
+        return
+
+    changes_made = []
+    cleaned_hooks = {}
+
+    for hook_type, hook_entries in existing_hooks.items():
+        cleaned_entries = []
+        for entry in hook_entries:
+            cleaned_entry_hooks = []
+            for h in entry.get("hooks", []):
+                cmd = h.get("command", "")
+                if not cmd.startswith("agentweave-hook-"):
+                    cleaned_entry_hooks.append(h)
+                else:
+                    changes_made.append(f"Removed {cmd} from {hook_type}")
+            if cleaned_entry_hooks:
+                entry["hooks"] = cleaned_entry_hooks
+                cleaned_entries.append(entry)
+        if cleaned_entries:
+            cleaned_hooks[hook_type] = cleaned_entries
+
+    if not changes_made:
+        console.print("[green]No AgentWeave hooks found — nothing to uninstall.[/green]")
+        return
+
+    existing_settings["hooks"] = cleaned_hooks if cleaned_hooks else {}
+
+    if dry_run:
+        console.print("[yellow]Dry run — would make these changes:[/yellow]")
+        for change in changes_made:
+            console.print(f"  - {change}")
+    else:
+        settings_file.write_text(json.dumps(existing_settings, indent=2) + "\n")
+        console.print("[green]AgentWeave hooks uninstalled successfully![/green]")
+        for change in changes_made:
+            console.print(f"  - {change}")
 
 
 # ---------------------------------------------------------------------------
