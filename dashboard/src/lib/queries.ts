@@ -42,7 +42,8 @@ export function tempoSearchQuery(project?: string): string {
   return (
     `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown"${projectFilter} }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
-    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project)`
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project,` +
+    ` span.prov.security.pii_detected, span.prov.security.pii_kinds)`
   )
 }
 
@@ -162,6 +163,8 @@ export interface TraceRow {
   cacheHitRate: number
   sessionId: string
   project: string
+  piiDetected: boolean
+  piiKinds: string
   attributes: Record<string, string>
 }
 
@@ -210,6 +213,8 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
       sessionId: getSpanAttr(attrs, 'session.id') || '—',
       agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
       project: getSpanAttr(attrs, 'prov.project') || '',
+      piiDetected: getSpanAttr(attrs, 'prov.security.pii_detected') === 'true',
+      piiKinds: getSpanAttr(attrs, 'prov.security.pii_kinds') || '',
       attributes: allAttrs,
     }
   })
@@ -566,6 +571,8 @@ export interface SessionNode {
   durationMs: number
   hasError: boolean
   project?: string           // prov.project value (issue #101)
+  piiDetected: boolean       // true if any span in this session had PII detected (issue #112)
+  piiKinds: string           // comma-separated PII kinds, e.g. "EMAIL,PHONE"
 }
 
 /** An edge between two session nodes (parent → child). */
@@ -600,6 +607,8 @@ interface SessionSpanRow {
   model: string
   durationNanos: number
   project: string
+  piiDetected: boolean
+  piiKinds: string
 }
 
 function spanRowFromTempoSpan(t: TempoSpan): SessionSpanRow {
@@ -623,6 +632,8 @@ function spanRowFromTempoSpan(t: TempoSpan): SessionSpanRow {
     model: getSpanAttr(attrs, 'prov.llm.model') || modelFromName || 'unknown',
     durationNanos: span?.durationNanos ?? 0,
     project: getSpanAttr(attrs, 'prov.project'),
+    piiDetected: getSpanAttr(attrs, 'prov.security.pii_detected') === 'true',
+    piiKinds: getSpanAttr(attrs, 'prov.security.pii_kinds') || '',
   }
 }
 
@@ -651,6 +662,13 @@ export function buildSessionGraph(
       if (row.agentType && row.agentType !== 'unknown' && existing.agentType === 'unknown') {
         existing.agentType = row.agentType
       }
+      if (row.piiDetected) {
+        existing.piiDetected = true
+        if (row.piiKinds) {
+          const kinds = new Set([...existing.piiKinds.split(','), ...row.piiKinds.split(',')].filter(Boolean))
+          existing.piiKinds = Array.from(kinds).sort().join(',')
+        }
+      }
       existing.durationMs = existing.lastSeen - existing.firstSeen
     } else {
       nodeMap.set(row.sessionId, {
@@ -668,6 +686,8 @@ export function buildSessionGraph(
         durationMs: 0,
         hasError: false,
         project: row.project || undefined,
+        piiDetected: row.piiDetected,
+        piiKinds: row.piiKinds,
       })
     }
 

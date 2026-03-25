@@ -180,6 +180,8 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           durationMs: n.durationMs,
           hasError: n.hasError,
           project: n.project,
+          piiDetected: n.piiDetected,
+          piiKinds: n.piiKinds,
         })
       }
     }
@@ -523,6 +525,9 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
               )}
               {mode === 'session' && tooltip.node.parentSessionId && (
                 <div className="truncate">Parent: <span className="text-sky-400 font-mono">{shortId(tooltip.node.parentSessionId, mode)}</span></div>
+              )}
+              {tooltip.node.piiDetected && (
+                <div className="mt-1 text-amber-400">⚠️ PII detected{tooltip.node.piiKinds ? `: ${tooltip.node.piiKinds}` : ''}</div>
               )}
             </div>
             <div className="mt-2 text-slate-600 text-[10px]">Click to view details →</div>
