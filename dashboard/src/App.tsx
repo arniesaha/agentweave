@@ -6,6 +6,7 @@ import { TimeSeriesChart } from './components/TimeSeriesChart'
 import { BarChartPanel } from './components/BarChart'
 import { TraceTable } from './components/TraceTable'
 import { AgentAttribution } from './components/AgentAttribution'
+import { CostSparklines } from './components/CostSparklines'
 import { SessionExplorer } from './components/SessionExplorer'
 import {
   TimeRange,
@@ -344,6 +345,13 @@ export default function App() {
             valueFormatter={(v) => `$${v.toFixed(4)}`}
           />
         </div>
+
+        {/* Cost Sparklines per Agent + Budget Progress */}
+        <CostSparklines
+          traces={traceRows}
+          timeRange={timeRange}
+          loading={tracesLoading}
+        />
 
         {/* Agent Attribution Section */}
         <AgentAttribution
