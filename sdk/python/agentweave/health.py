@@ -30,9 +30,9 @@ Per-agent thresholds can be injected at runtime via ``POST /v1/agent-health/conf
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -57,9 +57,9 @@ class SpanRecord:
     tool_name: Optional[str] = None   # set for tool_call spans
 
 
-# Module-level span buffer — rotated every _WINDOW_SECONDS
+# Module-level span buffer — pruned to _WINDOW_SECONDS on each ingest
 _spans: List[SpanRecord] = []
-_spans_lock = asyncio.Lock()
+_spans_lock = threading.Lock()
 
 def _window_seconds() -> int:
     return int(os.getenv("AGENTWEAVE_HEALTH_WINDOW_SECONDS", "3600"))
@@ -85,26 +85,27 @@ def record_span(
     cost_usd: float,
     tool_name: Optional[str] = None,
 ) -> None:
-    """Add a span record.  Thread-safe (uses asyncio lock via run_coroutine_threadsafe
-    if called from outside an event loop, or schedules on the loop otherwise).
+    """Add a span record.  Thread-safe via ``_spans_lock``.
+
+    Also prunes spans older than the configured window to prevent unbounded
+    memory growth.
     """
+    now_ms = time.time() * 1000
     rec = SpanRecord(
         agent_id=agent_id,
         session_id=session_id,
-        timestamp_ms=time.time() * 1000,
+        timestamp_ms=now_ms,
         duration_ms=duration_ms,
         is_error=is_error,
         cost_usd=cost_usd,
         tool_name=tool_name,
     )
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.call_soon_threadsafe(_spans.append, rec)
-        else:
-            _spans.append(rec)
-    except RuntimeError:
+    cutoff_ms = now_ms - _window_seconds() * 1000
+    with _spans_lock:
         _spans.append(rec)
+        # Prune old spans every 100 ingests to amortise cost
+        if len(_spans) % 100 == 0:
+            _spans[:] = [s for s in _spans if s.timestamp_ms >= cutoff_ms]
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +246,8 @@ def compute_health_score(
 def get_all_scores() -> List[AgentHealthScore]:
     """Compute health scores for all agents observed in the current window."""
     cutoff_ms = (time.time() - _window_seconds()) * 1000
-    recent = [s for s in _spans if s.timestamp_ms >= cutoff_ms]
+    with _spans_lock:
+        recent = [s for s in _spans if s.timestamp_ms >= cutoff_ms]
 
     agents: Dict[str, List[SpanRecord]] = {}
     for s in recent:
