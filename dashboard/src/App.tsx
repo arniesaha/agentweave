@@ -6,6 +6,7 @@ import { TimeSeriesChart } from './components/TimeSeriesChart'
 import { BarChartPanel } from './components/BarChart'
 import { TraceTable } from './components/TraceTable'
 import { AgentAttribution } from './components/AgentAttribution'
+import { AgentHealthBadges } from './components/AgentHealthBadges'
 import { SessionExplorer } from './components/SessionExplorer'
 import {
   TimeRange,
@@ -24,6 +25,7 @@ import {
   buildCostTimeSeries,
   buildCostByAgent,
   extractProjects,
+  computeAgentHealthScores,
 } from './lib/queries'
 import { useTempoSearch, useTempoSearchCount, useTempoMetrics, useSessionGraph } from './hooks/useTempo'
 import { usePromQueryRange, usePromQueryInstant } from './hooks/usePrometheus'
@@ -159,6 +161,12 @@ export default function App() {
 
   // 10. Cost by Agent — derived from trace rows (no extra fetch needed)
   const costByAgent = buildCostByAgent(traceRows)
+
+  // 10b. Agent health scores — derived from trace rows (issue #116)
+  const agentHealthScores = useMemo(
+    () => computeAgentHealthScores(traceRows),
+    [traceRows]
+  )
 
   // ─── Agent Attribution Data ─────────────────────────────────────────────────
 
@@ -345,6 +353,12 @@ export default function App() {
           />
         </div>
 
+        {/* Agent Health Badges (issue #116) */}
+        <AgentHealthBadges
+          scores={agentHealthScores}
+          loading={tracesLoading}
+          error={tracesError}
+        />
         {/* Agent Attribution Section */}
         <AgentAttribution
           attributionRows={attributionRows}
