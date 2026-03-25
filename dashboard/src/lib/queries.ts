@@ -677,3 +677,114 @@ export function extractProjects(traces: TraceRow[]): string[] {
   }
   return Array.from(set).sort()
 }
+
+// ─── Agent Health Scoring (issue #116) ──────────────────────────────────────
+
+export interface AgentHealthScore {
+  agentId: string
+  score: number         // 0-100
+  badge: 'green' | 'yellow' | 'red'
+  errorRate: number     // 0.0-1.0
+  p95LatencyMs: number
+  avgCostPerSession: number
+  toolRetryRate: number
+  spanCount: number
+  components: {
+    error_rate: number
+    latency: number
+    cost: number
+    tool_retry: number
+  }
+}
+
+function computeP95(values: number[]): number {
+  if (!values.length) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const idx = Math.floor(sorted.length * 0.95)
+  return sorted[Math.min(idx, sorted.length - 1)]
+}
+
+/**
+ * Compute per-agent health scores from TraceRow data.
+ * Mirrors the Python health.py logic so the dashboard works without
+ * calling the proxy directly.
+ */
+export function computeAgentHealthScores(
+  traces: TraceRow[],
+  opts: {
+    p95BaselineMs?: number
+    costBaselineUsd?: number
+    threshold?: number
+  } = {}
+): AgentHealthScore[] {
+  const p95Baseline = opts.p95BaselineMs ?? 10_000
+  const costBaseline = opts.costBaselineUsd ?? 0.01
+
+  // Group by agentId
+  const agentTraces = new Map<string, TraceRow[]>()
+  for (const t of traces) {
+    const aid = t.agentId || 'unknown'
+    if (!agentTraces.has(aid)) agentTraces.set(aid, [])
+    agentTraces.get(aid)!.push(t)
+  }
+
+  const scores: AgentHealthScore[] = []
+  for (const [agentId, rows] of agentTraces) {
+    if (!rows.length) continue
+
+    // Signal 1: Error rate — use otel.status_code attribute if present
+    const errorCount = rows.filter((r) => {
+      const errAttr = r.attributes?.['otel.status_code']
+      return errAttr === 'ERROR' || errAttr === 'error'
+    }).length
+    const errorRate = errorCount / rows.length
+    const errorScore = Math.max(0, 100 * (1 - errorRate))
+
+    // Signal 2: P95 latency
+    const latencies = rows.map((r) => r.latencyMs).filter((l) => l > 0)
+    const p95Ms = computeP95(latencies)
+    const latencyRatio = p95Baseline > 0 ? p95Ms / p95Baseline : 1
+    const latencyScore = Math.max(0, Math.min(100, 100 * (1 - Math.max(0, latencyRatio - 1) / 3)))
+
+    // Signal 3: Cost per session
+    const sessionCosts: Record<string, number> = {}
+    for (const r of rows) {
+      const sid = r.sessionId || '_default'
+      sessionCosts[sid] = (sessionCosts[sid] ?? 0) + r.costUsd
+    }
+    const costVals = Object.values(sessionCosts)
+    const avgCost = costVals.length ? costVals.reduce((a, b) => a + b, 0) / costVals.length : 0
+    const costRatio = costBaseline > 0 ? avgCost / costBaseline : 1
+    const costScore = Math.max(0, Math.min(100, 100 * (1 - Math.max(0, costRatio - 1) / 5)))
+
+    // Signal 4: Tool retry rate (not tracked in TraceRow — default full score)
+    const toolRetryScore = 100
+
+    const score = Math.round(
+      0.30 * errorScore +
+      0.30 * latencyScore +
+      0.20 * costScore +
+      0.20 * toolRetryScore
+    )
+    const badge: AgentHealthScore['badge'] = score >= 80 ? 'green' : score >= 60 ? 'yellow' : 'red'
+
+    scores.push({
+      agentId,
+      score,
+      badge,
+      errorRate: Math.round(errorRate * 10000) / 10000,
+      p95LatencyMs: Math.round(p95Ms),
+      avgCostPerSession: Math.round(avgCost * 1e6) / 1e6,
+      toolRetryRate: 0,
+      spanCount: rows.length,
+      components: {
+        error_rate: Math.round(errorScore),
+        latency: Math.round(latencyScore),
+        cost: Math.round(costScore),
+        tool_retry: toolRetryScore,
+      },
+    })
+  }
+
+  return scores.sort((a, b) => a.score - b.score)
+}
