@@ -64,6 +64,7 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, StatusCode, Trace
 
 from agentweave import schema
 from agentweave.config import AgentWeaveConfig
+from agentweave.pii import PIIBlockedError, PIIMode, scan_text as _pii_scan
 from agentweave.exporter import get_tracer, _provider
 from agentweave.pricing import compute_cost
 
@@ -652,23 +653,30 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         traceparent=traceparent,
     )
 
-    if is_stream:
-        media = "application/json" if provider == "google" else "text/event-stream"
-        # Peek at upstream status before committing to a 200 StreamingResponse.
-        # If upstream returned an error (4xx/5xx), return the error body with the
-        # correct status code so callers see the real error instead of an empty
-        # SSE stream that looks like a timeout.
-        preflight = await _stream_preflight(
-            method=kwargs["method"],
-            upstream_url=kwargs["upstream_url"],
-            headers=kwargs["headers"],
-            body_bytes=kwargs["body_bytes"],
+    try:
+        if is_stream:
+            media = "application/json" if provider == "google" else "text/event-stream"
+            # Peek at upstream status before committing to a 200 StreamingResponse.
+            # If upstream returned an error (4xx/5xx), return the error body with the
+            # correct status code so callers see the real error instead of an empty
+            # SSE stream that looks like a timeout.
+            preflight = await _stream_preflight(
+                method=kwargs["method"],
+                upstream_url=kwargs["upstream_url"],
+                headers=kwargs["headers"],
+                body_bytes=kwargs["body_bytes"],
+            )
+            if preflight is not None:
+                logger.warning("← upstream error status=%d (short-circuit)", preflight.status_code)
+                return preflight
+            return StreamingResponse(_stream_and_trace(**kwargs), media_type=media)
+        return await _request_and_trace(**kwargs)
+    except PIIBlockedError as exc:
+        logger.warning("PII blocked: %s", exc)
+        return JSONResponse(
+            {"error": {"type": "pii_blocked", "message": str(exc)}},
+            status_code=400,
         )
-        if preflight is not None:
-            logger.warning("← upstream error status=%d (short-circuit)", preflight.status_code)
-            return preflight
-        return StreamingResponse(_stream_and_trace(**kwargs), media_type=media)
-    return await _request_and_trace(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -1134,9 +1142,39 @@ def _openai_response_text(data: dict) -> str:
         return ""
 
 
+def _set_pii_attrs(span: Any, matches: list) -> None:
+    """Attach PII detection attributes to *span*.
+
+    Sets:
+      - ``prov.security.pii_detected`` = "true"
+      - ``prov.security.pii_kinds``    = comma-separated unique kinds, e.g. "EMAIL,PHONE"
+      - ``prov.security.pii_mode``     = active mode, e.g. "flag" | "redact"
+    """
+    span.set_attribute(schema.SECURITY_PII_DETECTED, "true")
+    kinds = sorted({m.kind for m in matches})
+    span.set_attribute(schema.SECURITY_PII_KINDS, ",".join(kinds))
+    span.set_attribute(schema.SECURITY_PII_MODE, PIIMode.from_env())
+
+
 def _maybe_set_response_preview(span: Any, text: str) -> None:
-    if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes") and text:
-        span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, text[:512])
+    pii_mode = PIIMode.from_env()
+    # Cap input to PII scanner to avoid scanning unbounded LLM responses
+    scan_text_cap = text[:4096] if text else ""
+    if pii_mode != PIIMode.OFF and scan_text_cap:
+        try:
+            result = _pii_scan(scan_text_cap, mode=pii_mode)
+            if result.is_detected:
+                _set_pii_attrs(span, result.matches)
+            scan_text_cap = result.cleaned  # may be redacted
+        except PIIBlockedError:
+            raise  # let upstream handler deal with it
+        except Exception:
+            logger.debug("PII scan error in response preview", exc_info=True)
+
+    _capture_prompts = os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes")
+    preview = scan_text_cap if pii_mode != PIIMode.OFF else text
+    if _capture_prompts and preview:
+        span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, preview[:512])
 
 
 # ---------------------------------------------------------------------------
@@ -1198,9 +1236,10 @@ def _set_request_attrs(
         if cfg and cfg.agent_id:
             span.set_attribute(schema.PROV_AGENT_ID, cfg.agent_id)
 
-    # Optionally capture a prompt preview on the span
+    # PII scanning on prompt (runs regardless of AGENTWEAVE_CAPTURE_PROMPTS)
+    pii_mode = PIIMode.from_env()
     _capture_prompts = os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes")
-    if not _capture_prompts:
+    if pii_mode == PIIMode.OFF and not _capture_prompts:
         return
     try:
         if provider == "google":
@@ -1214,10 +1253,18 @@ def _set_request_attrs(
                 content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
             preview = str(content)[:512]
 
-        if preview:
+        if pii_mode != PIIMode.OFF and preview:
+            result = _pii_scan(preview, mode=pii_mode)
+            if result.is_detected:
+                _set_pii_attrs(span, result.matches)
+            preview = result.cleaned  # may be redacted
+
+        if _capture_prompts and preview:
             span.set_attribute(schema.PROV_LLM_PROMPT_PREVIEW, preview)
+    except PIIBlockedError:
+        raise  # propagate so the route handler can return 400
     except Exception:
-        pass
+        logger.debug("PII scan error in request attrs", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
