@@ -653,23 +653,30 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         traceparent=traceparent,
     )
 
-    if is_stream:
-        media = "application/json" if provider == "google" else "text/event-stream"
-        # Peek at upstream status before committing to a 200 StreamingResponse.
-        # If upstream returned an error (4xx/5xx), return the error body with the
-        # correct status code so callers see the real error instead of an empty
-        # SSE stream that looks like a timeout.
-        preflight = await _stream_preflight(
-            method=kwargs["method"],
-            upstream_url=kwargs["upstream_url"],
-            headers=kwargs["headers"],
-            body_bytes=kwargs["body_bytes"],
+    try:
+        if is_stream:
+            media = "application/json" if provider == "google" else "text/event-stream"
+            # Peek at upstream status before committing to a 200 StreamingResponse.
+            # If upstream returned an error (4xx/5xx), return the error body with the
+            # correct status code so callers see the real error instead of an empty
+            # SSE stream that looks like a timeout.
+            preflight = await _stream_preflight(
+                method=kwargs["method"],
+                upstream_url=kwargs["upstream_url"],
+                headers=kwargs["headers"],
+                body_bytes=kwargs["body_bytes"],
+            )
+            if preflight is not None:
+                logger.warning("← upstream error status=%d (short-circuit)", preflight.status_code)
+                return preflight
+            return StreamingResponse(_stream_and_trace(**kwargs), media_type=media)
+        return await _request_and_trace(**kwargs)
+    except PIIBlockedError as exc:
+        logger.warning("PII blocked: %s", exc)
+        return JSONResponse(
+            {"error": {"type": "pii_blocked", "message": str(exc)}},
+            status_code=400,
         )
-        if preflight is not None:
-            logger.warning("← upstream error status=%d (short-circuit)", preflight.status_code)
-            return preflight
-        return StreamingResponse(_stream_and_trace(**kwargs), media_type=media)
-    return await _request_and_trace(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -1151,19 +1158,23 @@ def _set_pii_attrs(span: Any, matches: list) -> None:
 
 def _maybe_set_response_preview(span: Any, text: str) -> None:
     pii_mode = PIIMode.from_env()
-    if pii_mode != PIIMode.OFF and text:
+    # Cap input to PII scanner to avoid scanning unbounded LLM responses
+    scan_text_cap = text[:4096] if text else ""
+    if pii_mode != PIIMode.OFF and scan_text_cap:
         try:
-            result = _pii_scan(text, mode=pii_mode)
+            result = _pii_scan(scan_text_cap, mode=pii_mode)
             if result.is_detected:
                 _set_pii_attrs(span, result.matches)
-            text = result.cleaned  # may be redacted
+            scan_text_cap = result.cleaned  # may be redacted
         except PIIBlockedError:
             raise  # let upstream handler deal with it
         except Exception:
-            pass
+            logger.debug("PII scan error in response preview", exc_info=True)
 
-    if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes") and text:
-        span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, text[:512])
+    _capture_prompts = os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes")
+    preview = scan_text_cap if pii_mode != PIIMode.OFF else text
+    if _capture_prompts and preview:
+        span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, preview[:512])
 
 
 # ---------------------------------------------------------------------------
@@ -1251,9 +1262,9 @@ def _set_request_attrs(
         if _capture_prompts and preview:
             span.set_attribute(schema.PROV_LLM_PROMPT_PREVIEW, preview)
     except PIIBlockedError:
-        raise  # propagate so the proxy can return 400
+        raise  # propagate so the route handler can return 400
     except Exception:
-        pass
+        logger.debug("PII scan error in request attrs", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

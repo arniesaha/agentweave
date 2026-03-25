@@ -108,7 +108,7 @@ class PIIMode:
             warnings.warn(
                 f"AGENTWEAVE_PII_MODE={raw!r} is not valid; defaulting to 'off'. "
                 f"Valid values: {', '.join(sorted(cls._VALID))}",
-                stacklevel=3,
+                stacklevel=2,
             )
             return cls.OFF
         return raw
