@@ -134,6 +134,33 @@ _ANTHROPIC_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_ANTHROPIC_API_KEY") or
 _GOOGLE_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_GOOGLE_API_KEY") or None
 _OPENAI_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_OPENAI_API_KEY") or None
 
+
+def _inject_anthropic_key(forward_headers: dict[str, str], query_string: str) -> str:
+    """Inject the proxy-configured Anthropic API key into *forward_headers*.
+
+    Handles both standard ``sk-ant-api03_*`` keys (set as ``x-api-key``) and
+    OAuth tokens (``sk-ant-oat*``, set as ``Bearer`` + beta headers).
+
+    Returns the (possibly modified) *query_string*.
+    """
+    if not _ANTHROPIC_INJECT_KEY:
+        return query_string
+    if _ANTHROPIC_INJECT_KEY.startswith("sk-ant-oat"):
+        forward_headers["authorization"] = f"Bearer {_ANTHROPIC_INJECT_KEY}"
+        forward_headers.pop("x-api-key", None)
+        existing_beta = forward_headers.get("anthropic-beta", "")
+        oauth_beta = "oauth-2025-04-20"
+        claude_code_beta = "claude-code-20250219"
+        betas_to_add = [b for b in [oauth_beta, claude_code_beta] if b not in existing_beta]
+        if betas_to_add:
+            forward_headers["anthropic-beta"] = ",".join(filter(None, [existing_beta] + betas_to_add))
+        if "beta=true" not in query_string:
+            query_string = f"{query_string}&beta=true" if query_string else "beta=true"
+    else:
+        forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
+    return query_string
+
+
 # Global session context — set at startup from env, overrideable via POST /session
 _session_context: dict[str, str] = {
     k: v for k, v in {
@@ -376,21 +403,7 @@ async def list_models(request: Request) -> JSONResponse:
     )
 
     if is_anthropic_caller:
-        # Inject proxy-configured Anthropic key if needed
-        if _ANTHROPIC_INJECT_KEY:
-            if _ANTHROPIC_INJECT_KEY.startswith("sk-ant-oat"):
-                forward_headers["authorization"] = f"Bearer {_ANTHROPIC_INJECT_KEY}"
-                forward_headers.pop("x-api-key", None)
-                existing_beta = forward_headers.get("anthropic-beta", "")
-                oauth_beta = "oauth-2025-04-20"
-                claude_code_beta = "claude-code-20250219"
-                betas_to_add = [b for b in [oauth_beta, claude_code_beta] if b not in existing_beta]
-                if betas_to_add:
-                    forward_headers["anthropic-beta"] = ",".join(filter(None, [existing_beta] + betas_to_add))
-                if "beta=true" not in query_string:
-                    query_string = f"{query_string}&beta=true" if query_string else "beta=true"
-            else:
-                forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
+        query_string = _inject_anthropic_key(forward_headers, query_string)
         upstream_url = f"{_ANTHROPIC_BASE}/v1/models"
     else:
         if _OPENAI_INJECT_KEY:
@@ -404,7 +417,11 @@ async def list_models(request: Request) -> JSONResponse:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(upstream_url, headers=forward_headers)
-        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+        try:
+            content = resp.json()
+        except (ValueError, UnicodeDecodeError):
+            content = {"error": {"type": "upstream_error", "message": resp.text}}
+        return JSONResponse(content=content, status_code=resp.status_code)
     except Exception as exc:
         logger.error("models passthrough error: %s", exc)
         return JSONResponse(
@@ -495,22 +512,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     # Inject proxy-configured API keys, overriding whatever the caller sent
     # (including placeholder values like ANTHROPIC_API_KEY=dummy).
     if provider == "anthropic" and _ANTHROPIC_INJECT_KEY:
-        if _ANTHROPIC_INJECT_KEY.startswith("sk-ant-oat"):
-            # OAuth tokens must use Bearer auth + oauth beta header + ?beta=true query
-            forward_headers["authorization"] = f"Bearer {_ANTHROPIC_INJECT_KEY}"
-            forward_headers.pop("x-api-key", None)
-            existing_beta = forward_headers.get("anthropic-beta", "")
-            oauth_beta = "oauth-2025-04-20"
-            claude_code_beta = "claude-code-20250219"
-            betas_to_add = [b for b in [oauth_beta, claude_code_beta] if b not in existing_beta]
-            if betas_to_add:
-                new_beta = ",".join(filter(None, [existing_beta] + betas_to_add))
-                forward_headers["anthropic-beta"] = new_beta
-            # Append ?beta=true — required for OAuth tokens to access non-Haiku models
-            if "beta=true" not in query_string:
-                query_string = f"{query_string}&beta=true" if query_string else "beta=true"
-        else:
-            forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
+        query_string = _inject_anthropic_key(forward_headers, query_string)
     elif provider == "openai" and _OPENAI_INJECT_KEY:
         forward_headers["authorization"] = f"Bearer {_OPENAI_INJECT_KEY}"
     elif provider == "google" and _GOOGLE_INJECT_KEY:
