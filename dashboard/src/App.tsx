@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { Activity, DollarSign, Zap, RefreshCw, GitBranch, BarChart2, X } from 'lucide-react'
+import { Activity, DollarSign, Zap, RefreshCw, GitBranch, BarChart2, X, PlayCircle } from 'lucide-react'
 import { Header } from './components/Header'
 import { StatCard } from './components/StatCard'
 import { TimeSeriesChart } from './components/TimeSeriesChart'
@@ -7,6 +7,7 @@ import { BarChartPanel } from './components/BarChart'
 import { TraceTable } from './components/TraceTable'
 import { AgentAttribution } from './components/AgentAttribution'
 import { SessionExplorer } from './components/SessionExplorer'
+import { SessionReplay } from './components/SessionReplay'
 import {
   TimeRange,
   tempoSearchQuery,
@@ -28,7 +29,7 @@ import {
 import { useTempoSearch, useTempoSearchCount, useTempoMetrics, useSessionGraph } from './hooks/useTempo'
 import { usePromQueryRange, usePromQueryInstant } from './hooks/usePrometheus'
 
-type ActiveTab = 'overview' | 'sessions'
+type ActiveTab = 'overview' | 'sessions' | 'replay'
 
 const REFRESH_INTERVAL_MS = 60_000 // 60s
 
@@ -36,7 +37,8 @@ export default function App() {
   const [timeRange, setTimeRange] = useState<TimeRange>('6h')
   const [refreshKey, setRefreshKey] = useState(0)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
-  const initialTab = (new URLSearchParams(window.location.search).get('tab') as ActiveTab) ?? 'overview'
+  const rawTab = new URLSearchParams(window.location.search).get('tab')
+  const initialTab: ActiveTab = (rawTab === 'sessions' || rawTab === 'replay' ? rawTab : 'overview')
   const [activeTab, setActiveTab] = useState<ActiveTab>(initialTab)
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] = useState<string | null>(null)
@@ -224,6 +226,17 @@ export default function App() {
               </span>
             )}
           </button>
+          <button
+            onClick={() => setActiveTab('replay')}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'replay'
+                ? 'border-indigo-500 text-indigo-300'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <PlayCircle className="w-4 h-4" />
+            Session Replay
+          </button>
         </div>
       </div>
 
@@ -236,6 +249,14 @@ export default function App() {
             rawTraces={sessionRawTraces}
             loading={sessionLoading}
             error={sessionError}
+          />
+        )}
+
+        {/* Session Replay tab */}
+        {activeTab === 'replay' && (
+          <SessionReplay
+            timeRange={timeRange}
+            refreshKey={refreshKey}
           />
         )}
 
