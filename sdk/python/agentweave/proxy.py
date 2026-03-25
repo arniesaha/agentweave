@@ -6,12 +6,18 @@ forwards the response transparently to the caller.
 
 Provider is detected automatically from the request path:
   /v1/messages              → Anthropic  (api.anthropic.com)
+  /v1/models                → Anthropic or OpenAI (detected from auth headers)
   /v1beta/models/...        → Google     (generativelanguage.googleapis.com)
   /v1/models/...            → Google     (generativelanguage.googleapis.com)
   /v1/chat/completions      → OpenAI     (api.openai.com)
   /v1/completions           → OpenAI     (api.openai.com)
   /v1/embeddings            → OpenAI     (api.openai.com)
   /v1/responses             → OpenAI     (api.openai.com)  [Responses API]
+
+Note: ``GET /v1/models`` is handled by a dedicated route that inspects auth
+headers to determine whether to forward to Anthropic or OpenAI.  This fixes
+Claude Code CLI model validation when ``ANTHROPIC_BASE_URL`` points at the
+AgentWeave proxy (see issue #119).
 
 Works for both streaming and non-streaming requests. Zero code changes needed
 in calling agents — just point ANTHROPIC_BASE_URL / GOOGLE_GENAI_BASE_URL /
@@ -329,6 +335,82 @@ async def hooks_batch(body: dict):
         spans_created += 1
 
     return {"ok": True, "spans_created": spans_created}
+
+
+@app.get("/v1/models", include_in_schema=True, response_model=None)
+async def list_models(request: Request) -> JSONResponse:
+    """Passthrough for GET /v1/models.
+
+    Claude Code CLI calls this endpoint on startup to validate the model name.
+    The path ``v1/models`` is also used by OpenAI-compatible clients. We detect
+    which upstream to forward to by inspecting the auth headers:
+
+    * ``x-api-key`` header (Anthropic SDK style) → Anthropic models API
+    * ``authorization: Bearer sk-ant-*`` → Anthropic models API
+    * Otherwise → OpenAI models API
+
+    This ensures Claude Code CLI launched with
+    ``ANTHROPIC_BASE_URL=http://<proxy>/v1`` sees the full Anthropic model
+    list and can validate model names successfully.
+    """
+    if (denied := _check_auth(request)) is not None:
+        return denied
+
+    query_string = request.url.query
+
+    forward_headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in _SKIP_HEADERS_ALWAYS
+    }
+    if _PROXY_TOKEN:
+        forward_headers.pop("authorization", None)
+
+    # Detect provider from auth headers: Anthropic uses x-api-key or Bearer sk-ant-*
+    x_api_key = forward_headers.get("x-api-key", "")
+    auth_header = forward_headers.get("authorization", "")
+    is_anthropic_caller = bool(
+        x_api_key
+        or auth_header.startswith("Bearer sk-ant-")
+        or auth_header.startswith("Bearer sk-oat-")
+        or (_ANTHROPIC_INJECT_KEY and not forward_headers.get("authorization", "").startswith("Bearer sk-"))
+    )
+
+    if is_anthropic_caller:
+        # Inject proxy-configured Anthropic key if needed
+        if _ANTHROPIC_INJECT_KEY:
+            if _ANTHROPIC_INJECT_KEY.startswith("sk-ant-oat"):
+                forward_headers["authorization"] = f"Bearer {_ANTHROPIC_INJECT_KEY}"
+                forward_headers.pop("x-api-key", None)
+                existing_beta = forward_headers.get("anthropic-beta", "")
+                oauth_beta = "oauth-2025-04-20"
+                claude_code_beta = "claude-code-20250219"
+                betas_to_add = [b for b in [oauth_beta, claude_code_beta] if b not in existing_beta]
+                if betas_to_add:
+                    forward_headers["anthropic-beta"] = ",".join(filter(None, [existing_beta] + betas_to_add))
+                if "beta=true" not in query_string:
+                    query_string = f"{query_string}&beta=true" if query_string else "beta=true"
+            else:
+                forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
+        upstream_url = f"{_ANTHROPIC_BASE}/v1/models"
+    else:
+        if _OPENAI_INJECT_KEY:
+            forward_headers["authorization"] = f"Bearer {_OPENAI_INJECT_KEY}"
+        upstream_url = f"{_OPENAI_BASE}/v1/models"
+
+    if query_string:
+        upstream_url += f"?{query_string}"
+
+    logger.debug("→ GET %s (models passthrough, anthropic=%s)", upstream_url, is_anthropic_caller)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(upstream_url, headers=forward_headers)
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as exc:
+        logger.error("models passthrough error: %s", exc)
+        return JSONResponse(
+            {"error": {"type": "proxy_error", "message": str(exc)}},
+            status_code=502,
+        )
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], response_model=None)
