@@ -149,6 +149,14 @@ TOKENS_CACHE_WRITE = "tokens.cache_write"
 CACHE_HIT_RATE = "cache.hit_rate"
 
 # ---------------------------------------------------------------------------
+# Prompt versioning — enriched on spans via PromptHandle (issue #111)
+# ---------------------------------------------------------------------------
+
+PROV_PROMPT_ID = "prov.prompt.id"          # numeric DB row ID (stable across versions)
+PROV_PROMPT_NAME = "prov.prompt.name"      # registry key / human-readable name
+PROV_PROMPT_VERSION = "prov.prompt.version"  # content-hash (or user-supplied semver)
+
+# ---------------------------------------------------------------------------
 # Turn counter — tracks how many LLM calls a single agent session makes
 # ---------------------------------------------------------------------------
 

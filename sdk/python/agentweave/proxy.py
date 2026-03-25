@@ -298,6 +298,108 @@ def _extract_parent_context(traceparent: str | None):
         return None
 
 
+# ---------------------------------------------------------------------------
+# Prompt registry endpoints (issue #111)
+# ---------------------------------------------------------------------------
+
+from agentweave import prompts as _prompts_mod  # noqa: E402 — lazy import after app init
+
+
+@app.get("/v1/prompts", include_in_schema=True)
+async def list_prompts():
+    """List the latest version of every named prompt in the registry."""
+    records = _prompts_mod.list_prompts()
+    return {"prompts": [r.to_dict() for r in records]}
+
+
+@app.get("/v1/prompts/{name}", include_in_schema=True)
+async def get_prompt_latest(name: str):
+    """Get the latest version of a named prompt."""
+    record = _prompts_mod.get_prompt(name)
+    if record is None:
+        return JSONResponse({"error": f"Prompt '{name}' not found"}, status_code=404)
+    return record.to_dict()
+
+
+@app.get("/v1/prompts/{name}/versions", include_in_schema=True)
+async def list_prompt_versions(name: str):
+    """List all versions of a named prompt."""
+    records = _prompts_mod.list_prompt_versions(name)
+    if not records:
+        return JSONResponse({"error": f"Prompt '{name}' not found"}, status_code=404)
+    return {"name": name, "versions": [r.to_dict() for r in records]}
+
+
+@app.get("/v1/prompts/{name}/{version}", include_in_schema=True)
+async def get_prompt_version(name: str, version: str):
+    """Get a specific version of a named prompt."""
+    record = _prompts_mod.get_prompt(name, version)
+    if record is None:
+        return JSONResponse(
+            {"error": f"Prompt '{name}' version '{version}' not found"}, status_code=404
+        )
+    return record.to_dict()
+
+
+@app.post("/v1/prompts", include_in_schema=True)
+async def create_prompt(body: dict):
+    """Create or version a prompt.
+
+    Body::
+
+        {
+            "name": "system-prompt",
+            "content": "You are a helpful assistant...",
+            "description": "Main system prompt",  // optional
+            "version": "v2"                        // optional; default: SHA-256 hash of content
+        }
+    """
+    name = body.get("name")
+    content = body.get("content")
+    if not name or not content:
+        return JSONResponse({"error": "name and content are required"}, status_code=400)
+    description = body.get("description", "")
+    version = body.get("version") or None
+    try:
+        record = _prompts_mod.create_prompt(name, content, description=description, version=version)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return JSONResponse(record.to_dict(), status_code=201)
+
+
+@app.put("/v1/prompts/{name}", include_in_schema=True)
+async def update_prompt(name: str, body: dict):
+    """Update a prompt by creating a new version.
+
+    Body::
+
+        {
+            "content": "New prompt text...",
+            "description": "Updated description",  // optional
+            "version": "v3"                         // optional; default: SHA-256 hash
+        }
+    """
+    content = body.get("content")
+    if not content:
+        return JSONResponse({"error": "content is required"}, status_code=400)
+    description = body.get("description", None)
+    version = body.get("version") or None
+    try:
+        record = _prompts_mod.update_prompt(name, content, description=description, version=version)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return record.to_dict()
+
+
+@app.delete("/v1/prompts/{name}", include_in_schema=True)
+async def delete_prompt(name: str):
+    """Delete all versions of a named prompt."""
+    deleted = _prompts_mod.delete_prompt(name)
+    if deleted == 0:
+        return JSONResponse({"error": f"Prompt '{name}' not found"}, status_code=404)
+    return {"ok": True, "deleted": deleted, "name": name}
+
+
 @app.post("/hooks/span", include_in_schema=True)
 async def hooks_span(body: dict):
     """Receive a single span from Claude Code hooks (e.g., SubagentStop).
@@ -1096,7 +1198,9 @@ def _set_request_attrs(
         if cfg and cfg.agent_id:
             span.set_attribute(schema.PROV_AGENT_ID, cfg.agent_id)
 
-    if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() not in ("1", "true", "yes"):
+    # Optionally capture a prompt preview on the span
+    _capture_prompts = os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes")
+    if not _capture_prompts:
         return
     try:
         if provider == "google":
@@ -1109,6 +1213,7 @@ def _set_request_attrs(
             if isinstance(content, list):
                 content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
             preview = str(content)[:512]
+
         if preview:
             span.set_attribute(schema.PROV_LLM_PROMPT_PREVIEW, preview)
     except Exception:
