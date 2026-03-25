@@ -198,7 +198,9 @@ export function PromptVersionFilter({ traces, selectedPromptVersion, onSelectPro
  */
 export function filterByPromptVersion(traces: TraceRow[], selectedKey: string | null): TraceRow[] {
   if (!selectedKey) return traces
-  const [name, version] = selectedKey.split('@')
+  const atIdx = selectedKey.lastIndexOf('@')
+  const name = atIdx >= 0 ? selectedKey.slice(0, atIdx) : selectedKey
+  const version = atIdx >= 0 ? selectedKey.slice(atIdx + 1) : ''
   return traces.filter(
     (t) =>
       t.attributes?.['prov.prompt.name'] === name &&

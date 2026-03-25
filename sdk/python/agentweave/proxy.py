@@ -58,7 +58,6 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, StatusCode, Trace
 
 from agentweave import schema
 from agentweave.config import AgentWeaveConfig
-from agentweave.pii import PIIBlockedError, PIIMode, scan_text as _pii_scan
 from agentweave.exporter import get_tracer, _provider
 from agentweave.pricing import compute_cost
 
@@ -1051,33 +1050,7 @@ def _openai_response_text(data: dict) -> str:
         return ""
 
 
-def _set_pii_attrs(span: Any, matches: list) -> None:
-    """Attach PII detection attributes to *span*.
-
-    Sets:
-      - ``prov.security.pii_detected`` = "true"
-      - ``prov.security.pii_kinds``    = comma-separated unique kinds, e.g. "EMAIL,PHONE"
-      - ``prov.security.pii_mode``     = active mode, e.g. "flag" | "redact"
-    """
-    span.set_attribute(schema.SECURITY_PII_DETECTED, "true")
-    kinds = sorted({m.kind for m in matches})
-    span.set_attribute(schema.SECURITY_PII_KINDS, ",".join(kinds))
-    span.set_attribute(schema.SECURITY_PII_MODE, PIIMode.from_env())
-
-
 def _maybe_set_response_preview(span: Any, text: str) -> None:
-    pii_mode = PIIMode.from_env()
-    if pii_mode != PIIMode.OFF and text:
-        try:
-            result = _pii_scan(text, mode=pii_mode)
-            if result.is_detected:
-                _set_pii_attrs(span, result.matches)
-            text = result.cleaned  # may be redacted
-        except PIIBlockedError:
-            raise  # let upstream handler deal with it
-        except Exception:
-            pass
-
     if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes") and text:
         span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, text[:512])
 
@@ -1141,10 +1114,9 @@ def _set_request_attrs(
         if cfg and cfg.agent_id:
             span.set_attribute(schema.PROV_AGENT_ID, cfg.agent_id)
 
-    # PII scanning on prompt (runs regardless of AGENTWEAVE_CAPTURE_PROMPTS)
-    pii_mode = PIIMode.from_env()
+    # Optionally capture a prompt preview on the span
     _capture_prompts = os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes")
-    if pii_mode == PIIMode.OFF and not _capture_prompts:
+    if not _capture_prompts:
         return
     try:
         if provider == "google":
@@ -1158,16 +1130,8 @@ def _set_request_attrs(
                 content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
             preview = str(content)[:512]
 
-        if pii_mode != PIIMode.OFF and preview:
-            result = _pii_scan(preview, mode=pii_mode)
-            if result.is_detected:
-                _set_pii_attrs(span, result.matches)
-            preview = result.cleaned  # may be redacted
-
-        if _capture_prompts and preview:
+        if preview:
             span.set_attribute(schema.PROV_LLM_PROMPT_PREVIEW, preview)
-    except PIIBlockedError:
-        raise  # propagate so the proxy can return 400
     except Exception:
         pass
 

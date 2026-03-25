@@ -254,7 +254,7 @@ export default function App() {
             <SessionExplorer
               nodes={sessionNodes}
               edges={sessionEdges}
-              rawTraces={sessionRawTraces}
+              rawTraces={filterByPromptVersion(sessionRawTraces, selectedPromptVersion)}
               loading={sessionLoading}
               error={sessionError}
             />

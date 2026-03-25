@@ -42,8 +42,7 @@ export function tempoSearchQuery(project?: string): string {
   return (
     `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown"${projectFilter} }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
-    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project,` +
-    ` span.prov.security.pii_detected, span.prov.security.pii_kinds)`
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project)`
   )
 }
 
@@ -163,8 +162,6 @@ export interface TraceRow {
   cacheHitRate: number
   sessionId: string
   project: string
-  piiDetected: boolean
-  piiKinds: string
   attributes: Record<string, string>
 }
 
@@ -213,8 +210,6 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
       sessionId: getSpanAttr(attrs, 'session.id') || '—',
       agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
       project: getSpanAttr(attrs, 'prov.project') || '',
-      piiDetected: getSpanAttr(attrs, 'prov.security.pii_detected') === 'true',
-      piiKinds: getSpanAttr(attrs, 'prov.security.pii_kinds') || '',
       attributes: allAttrs,
     }
   })

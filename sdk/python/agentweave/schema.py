@@ -164,16 +164,3 @@ PROV_PROMPT_VERSION = "prov.prompt.version"  # content-hash (or user-supplied se
 # Scoped per async task / thread via contextvars.ContextVar so parallel
 # agent sessions never interfere with each other.
 AGENT_TURN_COUNT = "agent.turn_count"
-
-# ---------------------------------------------------------------------------
-# PII detection attributes (issue #112)
-# ---------------------------------------------------------------------------
-
-# Set to "true" (string) when PII is detected in this span's request/response
-SECURITY_PII_DETECTED = "prov.security.pii_detected"
-
-# Comma-separated list of PII kinds found, e.g. "EMAIL,PHONE"
-SECURITY_PII_KINDS = "prov.security.pii_kinds"
-
-# PII mode active during this span: "off" | "flag" | "redact" | "block"
-SECURITY_PII_MODE = "prov.security.pii_mode"
