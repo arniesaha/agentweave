@@ -58,6 +58,7 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, StatusCode, Trace
 
 from agentweave import schema
 from agentweave.config import AgentWeaveConfig
+from agentweave.pii import PIIBlockedError, PIIMode, scan_text as _pii_scan
 from agentweave.exporter import get_tracer, _provider
 from agentweave.pricing import compute_cost
 
@@ -263,6 +264,108 @@ def _extract_parent_context(traceparent: str | None):
         return ctx
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Prompt registry endpoints (issue #111)
+# ---------------------------------------------------------------------------
+
+from agentweave import prompts as _prompts_mod  # noqa: E402 — lazy import after app init
+
+
+@app.get("/v1/prompts", include_in_schema=True)
+async def list_prompts():
+    """List the latest version of every named prompt in the registry."""
+    records = _prompts_mod.list_prompts()
+    return {"prompts": [r.to_dict() for r in records]}
+
+
+@app.get("/v1/prompts/{name}", include_in_schema=True)
+async def get_prompt_latest(name: str):
+    """Get the latest version of a named prompt."""
+    record = _prompts_mod.get_prompt(name)
+    if record is None:
+        return JSONResponse({"error": f"Prompt '{name}' not found"}, status_code=404)
+    return record.to_dict()
+
+
+@app.get("/v1/prompts/{name}/versions", include_in_schema=True)
+async def list_prompt_versions(name: str):
+    """List all versions of a named prompt."""
+    records = _prompts_mod.list_prompt_versions(name)
+    if not records:
+        return JSONResponse({"error": f"Prompt '{name}' not found"}, status_code=404)
+    return {"name": name, "versions": [r.to_dict() for r in records]}
+
+
+@app.get("/v1/prompts/{name}/{version}", include_in_schema=True)
+async def get_prompt_version(name: str, version: str):
+    """Get a specific version of a named prompt."""
+    record = _prompts_mod.get_prompt(name, version)
+    if record is None:
+        return JSONResponse(
+            {"error": f"Prompt '{name}' version '{version}' not found"}, status_code=404
+        )
+    return record.to_dict()
+
+
+@app.post("/v1/prompts", include_in_schema=True)
+async def create_prompt(body: dict):
+    """Create or version a prompt.
+
+    Body::
+
+        {
+            "name": "system-prompt",
+            "content": "You are a helpful assistant...",
+            "description": "Main system prompt",  // optional
+            "version": "v2"                        // optional; default: SHA-256 hash of content
+        }
+    """
+    name = body.get("name")
+    content = body.get("content")
+    if not name or not content:
+        return JSONResponse({"error": "name and content are required"}, status_code=400)
+    description = body.get("description", "")
+    version = body.get("version") or None
+    try:
+        record = _prompts_mod.create_prompt(name, content, description=description, version=version)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return JSONResponse(record.to_dict(), status_code=201)
+
+
+@app.put("/v1/prompts/{name}", include_in_schema=True)
+async def update_prompt(name: str, body: dict):
+    """Update a prompt by creating a new version.
+
+    Body::
+
+        {
+            "content": "New prompt text...",
+            "description": "Updated description",  // optional
+            "version": "v3"                         // optional; default: SHA-256 hash
+        }
+    """
+    content = body.get("content")
+    if not content:
+        return JSONResponse({"error": "content is required"}, status_code=400)
+    description = body.get("description", None)
+    version = body.get("version") or None
+    try:
+        record = _prompts_mod.update_prompt(name, content, description=description, version=version)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return record.to_dict()
+
+
+@app.delete("/v1/prompts/{name}", include_in_schema=True)
+async def delete_prompt(name: str):
+    """Delete all versions of a named prompt."""
+    deleted = _prompts_mod.delete_prompt(name)
+    if deleted == 0:
+        return JSONResponse({"error": f"Prompt '{name}' not found"}, status_code=404)
+    return {"ok": True, "deleted": deleted, "name": name}
 
 
 @app.post("/hooks/span", include_in_schema=True)
@@ -948,7 +1051,33 @@ def _openai_response_text(data: dict) -> str:
         return ""
 
 
+def _set_pii_attrs(span: Any, matches: list) -> None:
+    """Attach PII detection attributes to *span*.
+
+    Sets:
+      - ``prov.security.pii_detected`` = "true"
+      - ``prov.security.pii_kinds``    = comma-separated unique kinds, e.g. "EMAIL,PHONE"
+      - ``prov.security.pii_mode``     = active mode, e.g. "flag" | "redact"
+    """
+    span.set_attribute(schema.SECURITY_PII_DETECTED, "true")
+    kinds = sorted({m.kind for m in matches})
+    span.set_attribute(schema.SECURITY_PII_KINDS, ",".join(kinds))
+    span.set_attribute(schema.SECURITY_PII_MODE, PIIMode.from_env())
+
+
 def _maybe_set_response_preview(span: Any, text: str) -> None:
+    pii_mode = PIIMode.from_env()
+    if pii_mode != PIIMode.OFF and text:
+        try:
+            result = _pii_scan(text, mode=pii_mode)
+            if result.is_detected:
+                _set_pii_attrs(span, result.matches)
+            text = result.cleaned  # may be redacted
+        except PIIBlockedError:
+            raise  # let upstream handler deal with it
+        except Exception:
+            pass
+
     if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes") and text:
         span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, text[:512])
 
@@ -1012,7 +1141,10 @@ def _set_request_attrs(
         if cfg and cfg.agent_id:
             span.set_attribute(schema.PROV_AGENT_ID, cfg.agent_id)
 
-    if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() not in ("1", "true", "yes"):
+    # PII scanning on prompt (runs regardless of AGENTWEAVE_CAPTURE_PROMPTS)
+    pii_mode = PIIMode.from_env()
+    _capture_prompts = os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes")
+    if pii_mode == PIIMode.OFF and not _capture_prompts:
         return
     try:
         if provider == "google":
@@ -1025,8 +1157,17 @@ def _set_request_attrs(
             if isinstance(content, list):
                 content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
             preview = str(content)[:512]
-        if preview:
+
+        if pii_mode != PIIMode.OFF and preview:
+            result = _pii_scan(preview, mode=pii_mode)
+            if result.is_detected:
+                _set_pii_attrs(span, result.matches)
+            preview = result.cleaned  # may be redacted
+
+        if _capture_prompts and preview:
             span.set_attribute(schema.PROV_LLM_PROMPT_PREVIEW, preview)
+    except PIIBlockedError:
+        raise  # propagate so the proxy can return 400
     except Exception:
         pass
 

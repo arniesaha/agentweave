@@ -42,7 +42,8 @@ export function tempoSearchQuery(project?: string): string {
   return (
     `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown"${projectFilter} }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
-    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project)`
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project,` +
+    ` span.prov.security.pii_detected, span.prov.security.pii_kinds)`
   )
 }
 
@@ -162,6 +163,8 @@ export interface TraceRow {
   cacheHitRate: number
   sessionId: string
   project: string
+  piiDetected: boolean
+  piiKinds: string
   attributes: Record<string, string>
 }
 
@@ -210,6 +213,8 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
       sessionId: getSpanAttr(attrs, 'session.id') || '—',
       agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
       project: getSpanAttr(attrs, 'prov.project') || '',
+      piiDetected: getSpanAttr(attrs, 'prov.security.pii_detected') === 'true',
+      piiKinds: getSpanAttr(attrs, 'prov.security.pii_kinds') || '',
       attributes: allAttrs,
     }
   })
@@ -245,6 +250,82 @@ export function tempoSessionQuery(sessionId: string): string {
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id)`
   )
+}
+
+/** TraceQL search query for session replay — fetches all spans with full attributes. */
+export function tempoSessionReplayQuery(sessionId: string): string {
+  return (
+    `{ resource.service.name = "${TEMPO_SERVICE}" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}") }` +
+    ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id,` +
+    ` span.prov.session.turn, span.prov.activity.type, span.prov.llm.prompt_preview,` +
+    ` span.prov.llm.response_preview, span.prov.task.label, span.prov.project)`
+  )
+}
+
+// ─── Session Replay types & transformers ──────────────────────────────────────
+
+export interface ReplayTurn {
+  turnNumber: number
+  traceId: string
+  time: number
+  agentId: string
+  activityType: string  // 'llm_call' | 'tool_call' | 'agent_turn' | ...
+  toolName: string      // if tool call, the span rootTraceName
+  model: string
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+  promptPreview: string
+  responsePreview: string
+  taskLabel: string
+  project: string
+}
+
+export function buildReplayTurns(traces: TempoSpan[]): ReplayTurn[] {
+  const rows: ReplayTurn[] = []
+  for (const t of traces) {
+    const spans = t.spanSets?.[0]?.spans ?? t.spanSet?.spans ?? []
+    const span = spans[0]
+    const attrs = span?.attributes ?? []
+
+    const modelFromName = t.rootTraceName?.startsWith('llm.')
+      ? t.rootTraceName.slice(4)
+      : ''
+
+    const activityType = getSpanAttr(attrs, 'prov.activity.type') ||
+      (t.rootTraceName?.startsWith('tool.') ? 'tool_call' :
+       t.rootTraceName?.startsWith('llm.') ? 'llm_call' : 'unknown')
+
+    const toolName = t.rootTraceName?.startsWith('tool.')
+      ? t.rootTraceName.slice(5)
+      : ''
+
+    const turnStr = getSpanAttr(attrs, 'prov.session.turn')
+    const turnNumber = parseInt(turnStr || '0') || 0
+
+    rows.push({
+      turnNumber,
+      traceId: t.traceID,
+      time: parseInt(t.startTimeUnixNano) / 1e6,
+      agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
+      activityType,
+      toolName,
+      model: getSpanAttr(attrs, 'prov.llm.model') || modelFromName || 'unknown',
+      tokensIn: parseInt(getSpanAttr(attrs, 'prov.llm.prompt_tokens') || '0') || 0,
+      tokensOut: parseInt(getSpanAttr(attrs, 'prov.llm.completion_tokens') || '0') || 0,
+      costUsd: Math.max(0, parseFloat(getSpanAttr(attrs, 'cost.usd') || '0') || 0),
+      latencyMs: span ? span.durationNanos / 1e6 : t.durationMs,
+      promptPreview: getSpanAttr(attrs, 'prov.llm.prompt_preview'),
+      responsePreview: getSpanAttr(attrs, 'prov.llm.response_preview'),
+      taskLabel: getSpanAttr(attrs, 'prov.task.label'),
+      project: getSpanAttr(attrs, 'prov.project'),
+    })
+  }
+  // Sort by time ascending
+  return rows.sort((a, b) => a.time - b.time)
+    .map((row, i) => ({ ...row, turnNumber: row.turnNumber || i + 1 }))
 }
 
 /** TraceQL metrics query that returns cost.usd summed per time bucket. */

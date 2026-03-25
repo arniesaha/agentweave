@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   TimeRange, getTimeRangeBounds, getStepForRange, TempoSpan, TempoMetricResult,
   SessionNode, SessionEdge, buildSessionGraph, tempoSessionGraphQuery,
+  ReplayTurn, buildReplayTurns, tempoSessionReplayQuery,
 } from '../lib/queries'
 
 const TEMPO_BASE = '/tempo'
@@ -180,4 +181,57 @@ export function useSessionGraph(
   useEffect(() => { fetch_() }, [fetch_])
 
   return { nodes, edges, rawTraces, loading, error }
+}
+
+// ─── Session Replay Hook ──────────────────────────────────────────────────────
+
+interface UseSessionReplayResult {
+  turns: ReplayTurn[]
+  rawTraces: TempoSpan[]
+  loading: boolean
+  error: string | null
+}
+
+export function useSessionReplay(sessionId: string, timeRange: TimeRange, refreshKey: number): UseSessionReplayResult {
+  const [turns, setTurns] = useState<ReplayTurn[]>([])
+  const [rawTraces, setRawTraces] = useState<TempoSpan[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetch_ = useCallback(async () => {
+    if (!sessionId.trim()) {
+      setTurns([])
+      setRawTraces([])
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      const { start, end } = getTimeRangeBounds(timeRange)
+      const query = tempoSessionReplayQuery(sessionId)
+      const params = new URLSearchParams({
+        q: query,
+        limit: '2000',
+        start: String(start),
+        end: String(end),
+      })
+      const resp = await fetch(`${TEMPO_BASE}/api/search?${params}`)
+      if (!resp.ok) throw new Error(`Tempo replay search failed: ${resp.status}`)
+      const data = await resp.json()
+      const traces: TempoSpan[] = data.traces ?? []
+      setRawTraces(traces)
+      setTurns(buildReplayTurns(traces))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Tempo unavailable')
+      setTurns([])
+      setRawTraces([])
+    } finally {
+      setLoading(false)
+    }
+  }, [sessionId, timeRange, refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { fetch_() }, [fetch_])
+
+  return { turns, rawTraces, loading, error }
 }
