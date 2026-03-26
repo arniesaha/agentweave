@@ -625,6 +625,9 @@ class TestSessionContext:
     def _call(self, monkeypatch, session_id=None, project=None, turn=None):
         from agentweave.config import AgentWeaveConfig
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        # Isolate from environment — clear global session context so env vars
+        # (e.g. AGENTWEAVE_SESSION_ID set in the test runner shell) don't bleed in.
+        monkeypatch.setattr(proxy_module, "_session_context", {})
         span = _FakeSpan()
         _set_request_attrs(
             span, model="test-model", provider="anthropic",
