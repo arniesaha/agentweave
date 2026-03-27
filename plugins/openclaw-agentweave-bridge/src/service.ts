@@ -73,13 +73,21 @@ export function createAgentWeaveBridgeService() {
     async start(ctx: { config: Record<string, unknown> }) {
       const pluginEntry = (ctx.config as Record<string, unknown>)?.plugins as Record<string, unknown> | undefined
       const pluginConfig = (pluginEntry?.entries as Record<string, unknown>)?.["agentweave-bridge"] as Record<string, unknown> | undefined
+      const fileConfig = pluginConfig?.config as Partial<BridgeConfig> ?? {}
       const config: BridgeConfig = {
-        otlpEndpoint: "http://192.168.1.70:30418",
-        agentId: "nix-v1",
-        project: "agentweave",
-        enabled: true,
-        proxyUrl: "http://192.168.1.70:30400/v1",
-        ...(pluginConfig?.config as Partial<BridgeConfig> ?? {}),
+        otlpEndpoint: fileConfig.otlpEndpoint
+          ?? process.env.AGENTWEAVE_OTLP_ENDPOINT
+          ?? "http://localhost:4318",
+        agentId: fileConfig.agentId
+          ?? process.env.AGENTWEAVE_AGENT_ID
+          ?? "nix-v1",
+        project: fileConfig.project
+          ?? process.env.AGENTWEAVE_PROJECT
+          ?? undefined,
+        enabled: fileConfig.enabled ?? true,
+        proxyUrl: fileConfig.proxyUrl
+          ?? process.env.AGENTWEAVE_PROXY_URL
+          ?? undefined,
       }
 
       if (config.enabled === false) return
@@ -118,7 +126,9 @@ export function createAgentWeaveBridgeService() {
                 process.env.AGENTWEAVE_TRACEPARENT = carrier["traceparent"]
               }
               process.env.AGENTWEAVE_SESSION_ID = sessionId
-              process.env.ANTHROPIC_BASE_URL = config.proxyUrl ?? "http://192.168.1.70:30400/v1"
+              if (config.proxyUrl) {
+                process.env.ANTHROPIC_BASE_URL = config.proxyUrl
+              }
 
               activeTurns.set(sessionKey, { span, ctx: spanCtx })
               console.log("[agentweave-bridge] started root span for session:", sessionId)

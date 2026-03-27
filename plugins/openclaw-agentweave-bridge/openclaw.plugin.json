@@ -3,13 +3,27 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["otlpEndpoint"],
     "properties": {
-      "otlpEndpoint": { "type": "string" },
-      "agentId": { "type": "string", "default": "nix-v1" },
-      "project": { "type": "string" },
-      "enabled": { "type": "boolean", "default": true },
-      "proxyUrl": { "type": "string", "default": "http://192.168.1.70:30400/v1" }
+      "otlpEndpoint": {
+        "type": "string",
+        "description": "OTLP HTTP endpoint for trace export. Falls back to AGENTWEAVE_OTLP_ENDPOINT env var, then http://localhost:4318"
+      },
+      "agentId": {
+        "type": "string",
+        "description": "Agent identifier for span attribution. Falls back to AGENTWEAVE_AGENT_ID env var, then 'nix-v1'"
+      },
+      "project": {
+        "type": "string",
+        "description": "Project name for span attribution. Falls back to AGENTWEAVE_PROJECT env var"
+      },
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "proxyUrl": {
+        "type": "string",
+        "description": "AgentWeave proxy URL injected as ANTHROPIC_BASE_URL for sub-agents. Falls back to AGENTWEAVE_PROXY_URL env var"
+      }
     }
   }
 }
