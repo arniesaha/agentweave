@@ -94,6 +94,9 @@ export function extractLlmAttrs(response: any, capturesOutput: boolean): Record<
     if (prompt != null) attrs[schema.PROV_LLM_PROMPT_TOKENS] = prompt;
     if (completion != null) attrs[schema.PROV_LLM_COMPLETION_TOKENS] = completion;
     if (prompt != null && completion != null) attrs[schema.PROV_LLM_TOTAL_TOKENS] = prompt + completion;
+    // OTel gen_ai.* token dual-emit
+    if (prompt != null) attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] = prompt;
+    if (completion != null) attrs[schema.GEN_AI_USAGE_OUTPUT_TOKENS] = completion;
   }
 
   // Stop reason — Anthropic: response.stop_reason, OpenAI: choices[0].finish_reason
@@ -101,7 +104,11 @@ export function extractLlmAttrs(response: any, capturesOutput: boolean): Record<
   if (stopReason == null && response?.choices?.[0]) {
     stopReason = response.choices[0].finish_reason;
   }
-  if (stopReason != null) attrs[schema.PROV_LLM_STOP_REASON] = stopReason;
+  if (stopReason != null) {
+    attrs[schema.PROV_LLM_STOP_REASON] = stopReason;
+    // OTel gen_ai.* dual-emit
+    attrs[schema.GEN_AI_RESPONSE_FINISH_REASONS] = [stopReason];
+  }
 
   if (capturesOutput) {
     let preview: string | undefined;
@@ -125,10 +132,17 @@ export function extractGoogleAttrs(response: any, capturesOutput: boolean): Reco
     if (prompt != null) attrs[schema.PROV_LLM_PROMPT_TOKENS] = prompt;
     if (completion != null) attrs[schema.PROV_LLM_COMPLETION_TOKENS] = completion;
     if (prompt != null && completion != null) attrs[schema.PROV_LLM_TOTAL_TOKENS] = prompt + completion;
+    // OTel gen_ai.* token dual-emit
+    if (prompt != null) attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] = prompt;
+    if (completion != null) attrs[schema.GEN_AI_USAGE_OUTPUT_TOKENS] = completion;
   }
 
   const finishReason = response?.candidates?.[0]?.finishReason;
-  if (finishReason != null) attrs[schema.PROV_LLM_STOP_REASON] = String(finishReason);
+  if (finishReason != null) {
+    attrs[schema.PROV_LLM_STOP_REASON] = String(finishReason);
+    // OTel gen_ai.* dual-emit
+    attrs[schema.GEN_AI_RESPONSE_FINISH_REASONS] = [String(finishReason)];
+  }
 
   if (capturesOutput) {
     const text = response?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -282,7 +296,14 @@ function patchOpenAISDK(capturesOutput: boolean): () => void {
   if (!Completions?.prototype?.create) throw new Error('openai: Completions.create not found');
 
   const originalCreate = Completions.prototype.create;
-  Completions.prototype.create = makeLlmWrapper(originalCreate, 'openai', getOpenAIModel, capturesOutput);
+  const wrapped = makeLlmWrapper(originalCreate, 'openai', getOpenAIModel, capturesOutput);
+  Completions.prototype.create = function wrappedOpenAICreate(this: any, ...args: any[]) {
+    const opts = args[0];
+    if (opts && typeof opts === 'object' && (opts as any).stream) {
+      return originalCreate.apply(this, args);
+    }
+    return wrapped.apply(this, args);
+  };
 
   return () => {
     Completions.prototype.create = originalCreate;
