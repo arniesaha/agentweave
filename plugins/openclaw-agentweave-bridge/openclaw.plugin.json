@@ -10,7 +10,11 @@
       },
       "agentId": {
         "type": "string",
-        "description": "Agent identifier for span attribution. Falls back to AGENTWEAVE_AGENT_ID env var, then 'nix-v1'"
+        "description": "Agent identifier for main sessions. Falls back to AGENTWEAVE_AGENT_ID env var, then 'nix-v1'"
+      },
+      "subagentId": {
+        "type": "string",
+        "description": "Agent identifier for isolated/sub-agent sessions (agent:isolated:* format). Defaults to '{agentId}-subagent-v1'"
       },
       "project": {
         "type": "string",

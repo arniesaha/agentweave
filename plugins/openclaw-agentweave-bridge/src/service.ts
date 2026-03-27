@@ -12,9 +12,24 @@ interface ActiveTurn {
 export interface BridgeConfig {
   otlpEndpoint: string
   agentId?: string
+  subagentId?: string
   project?: string
   enabled?: boolean
   proxyUrl?: string
+}
+
+/**
+ * Resolve agent ID from OpenClaw session key format.
+ * - "agent:main:*" → configured agentId (e.g. "nix-v1")
+ * - "agent:isolated:*" → configured subagentId (e.g. "nix-subagent-v1")
+ * - anything else → configured agentId
+ */
+function resolveAgentId(sessionKey: string, config: BridgeConfig): { agentId: string; agentType: string } {
+  if (sessionKey.startsWith("agent:isolated:")) {
+    return { agentId: config.subagentId ?? `${config.agentId ?? "nix"}-subagent-v1`, agentType: "subagent" }
+  }
+  // "agent:main:*" or any other format → main agent
+  return { agentId: config.agentId ?? "nix-v1", agentType: "main" }
 }
 
 const activeTurns = new Map<string, ActiveTurn>()
@@ -109,12 +124,15 @@ export function createAgentWeaveBridgeService() {
               const sessionId = e.sessionId || e.sessionKey || ""
               if (!sessionKey) break
 
+              const { agentId, agentType } = resolveAgentId(sessionKey, config)
+
               const tracer = trace.getTracer("openclaw-agentweave-bridge")
               const span = tracer.startSpan("openclaw.turn")
               span.setAttribute("session_id", sessionId)
               span.setAttribute("session.id", sessionId)
               span.setAttribute("prov.session.id", sessionId)
-              span.setAttribute("prov.agent.id", config.agentId ?? "nix-v1")
+              span.setAttribute("prov.agent.id", agentId)
+              span.setAttribute("prov.agent.type", agentType)
               span.setAttribute("prov.activity.type", "agent_turn")
               if (e.channel) span.setAttribute("channel", e.channel)
               if (config.project) span.setAttribute("prov.project", config.project)
@@ -125,13 +143,28 @@ export function createAgentWeaveBridgeService() {
               if (carrier["traceparent"]) {
                 process.env.AGENTWEAVE_TRACEPARENT = carrier["traceparent"]
               }
+              // Set env vars for sub-agents spawned during this turn
               process.env.AGENTWEAVE_SESSION_ID = sessionId
+              process.env.AGENTWEAVE_AGENT_ID = agentId
+              process.env.AGENTWEAVE_AGENT_TYPE = agentType
+              if (agentType === "subagent") {
+                // Link sub-agent back to the main session
+                const mainSession = Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:"))
+                if (mainSession) {
+                  const parentTurn = activeTurns.get(mainSession)
+                  if (parentTurn) {
+                    const parentSessionId = parentTurn.span.spanContext?.()
+                    span.setAttribute("prov.parent.session.id", mainSession)
+                    process.env.AGENTWEAVE_PARENT_SESSION_ID = mainSession
+                  }
+                }
+              }
               if (config.proxyUrl) {
                 process.env.ANTHROPIC_BASE_URL = config.proxyUrl
               }
 
               activeTurns.set(sessionKey, { span, ctx: spanCtx })
-              console.log("[agentweave-bridge] started root span for session:", sessionId)
+              console.log(`[agentweave-bridge] started root span for ${agentType} session:`, sessionId, "agent:", agentId)
               break
             }
 
@@ -150,6 +183,9 @@ export function createAgentWeaveBridgeService() {
               activeTurns.delete(sessionKey)
               delete process.env.AGENTWEAVE_TRACEPARENT
               delete process.env.ANTHROPIC_BASE_URL
+              delete process.env.AGENTWEAVE_AGENT_ID
+              delete process.env.AGENTWEAVE_AGENT_TYPE
+              delete process.env.AGENTWEAVE_PARENT_SESSION_ID
               console.log("[agentweave-bridge] ended root span for session:", sessionKey)
               break
             }
