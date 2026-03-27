@@ -783,7 +783,12 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
             logger.warning("x-agentweave-turn-count is not a valid integer: %r", turn_count_raw)
 
     # W3C traceparent passthrough (issue #44)
-    traceparent: str | None = request.headers.get("traceparent")
+    # Fall back to AGENTWEAVE_TRACEPARENT env var so LLM spans are linked to
+    # the openclaw.turn root span even when no header is present (issue #133).
+    traceparent: str | None = (
+        request.headers.get("traceparent")
+        or os.environ.get("AGENTWEAVE_TRACEPARENT")
+    )
 
     # Sub-agent attribution headers (issue #15)
     parent_session_id: str | None = request.headers.get("x-agentweave-parent-session-id")
