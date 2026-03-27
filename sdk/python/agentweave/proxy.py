@@ -67,6 +67,7 @@ from agentweave.health import (
     _window_seconds as _health_window_seconds,
     _global_threshold as _health_global_threshold,
 )
+from agentweave.budget import get_tracker as _get_budget_tracker
 from agentweave.pricing import compute_cost
 
 logger = logging.getLogger("agentweave.proxy")
@@ -280,9 +281,7 @@ async def budget_status():
     cfg = tracker._cfg
     agents: dict = {}
     # Include any agent that either has a limit configured or has spend recorded
-    known_ids = set(cfg.agents.keys()) | {
-        k for k in tracker._daily_spend.keys() if k != "_global_"
-    }
+    known_ids = set(cfg.agents.keys()) | tracker.known_agent_ids()
     for aid in known_ids:
         ab = cfg.agents.get(aid)
         agents[aid] = {
@@ -760,13 +759,20 @@ async def _request_and_trace(
             span.set_status(StatusCode.OK)
             # Record span in health tracker
             cost_attr = span.attributes.get(schema.COST_USD) if hasattr(span, "attributes") else None
+            cost_usd = float(cost_attr) if cost_attr is not None else 0.0
             _health_record_span(
                 agent_id=agent_id or "unknown",
                 session_id=session_id or "",
                 duration_ms=float(elapsed_ms),
                 is_error=False,
-                cost_usd=float(cost_attr) if cost_attr is not None else 0.0,
+                cost_usd=cost_usd,
             )
+            # Record cost in budget tracker
+            try:
+                _tracker = _get_budget_tracker()
+                _tracker.record_cost(agent_id or "unknown", cost_usd, session_id=session_id, tracer=tracer)
+            except Exception:
+                pass
             return JSONResponse(content=data, status_code=resp.status_code)
         except Exception as exc:
             span.set_status(StatusCode.ERROR, str(exc))
@@ -894,6 +900,15 @@ async def _stream_and_trace(
             span.set_attribute(schema.GEN_AI_RESPONSE_FINISH_REASONS, [stop_reason])
 
         span.set_status(StatusCode.OK)
+
+        # Record cost in budget tracker
+        try:
+            cost_usd = span.attributes.get(schema.COST_USD, 0.0) if hasattr(span, "attributes") else 0.0
+            if cost_usd > 0:
+                _tracker = _get_budget_tracker()
+                _tracker.record_cost(agent_id or "unknown", cost_usd, session_id=session_id, tracer=tracer)
+        except Exception:
+            pass
 
     except Exception as exc:
         span.set_status(StatusCode.ERROR, str(exc))

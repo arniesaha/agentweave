@@ -137,10 +137,10 @@ function MiniSparkline({ series, budgetLimit, budgetSpent }: MiniSparklineProps)
             {series.agentId}
           </span>
           {isExceeded && (
-            <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" title="Budget exceeded" />
+            <span title="Budget exceeded"><AlertTriangle className="w-3 h-3 text-red-400 shrink-0" /></span>
           )}
           {isNearLimit && !isExceeded && (
-            <AlertTriangle className="w-3 h-3 text-amber-400 shrink-0" title="Near budget limit" />
+            <span title="Near budget limit"><AlertTriangle className="w-3 h-3 text-amber-400 shrink-0" /></span>
           )}
         </div>
         <span className="text-xs font-mono text-gray-400">

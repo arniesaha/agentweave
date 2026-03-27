@@ -37,7 +37,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Dict, Optional
 
 logger = logging.getLogger("agentweave.budget")
@@ -179,7 +179,7 @@ class BudgetTracker:
 
     def _check_date_reset(self) -> None:
         """Reset counters if the UTC day has changed.  Must be called under lock."""
-        today = date.today()
+        today = datetime.now(timezone.utc).date()
         if today != self._date:
             self._date = today
             self._daily_spend = {}
@@ -245,6 +245,12 @@ class BudgetTracker:
                 session_id=session_id,
                 tracer=tracer,
             )
+
+    def known_agent_ids(self) -> set:
+        """Return the set of agent IDs that have recorded spend today (excludes _global_)."""
+        with self._lock:
+            self._check_date_reset()
+            return {k for k in self._daily_spend.keys() if k != "_global_"}
 
     def get_spent(self, agent_id: Optional[str] = None) -> float:
         """Return cumulative spend today for an agent (or global if None)."""
