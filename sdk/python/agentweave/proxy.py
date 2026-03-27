@@ -749,7 +749,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     agent_id = (
         request.headers.get("x-agentweave-agent-id")
         or _config_value("agent_id")
-        or "unknown"
+        or "unattributed"
     )
     agent_model = (
         request.headers.get("x-agentweave-agent-model")

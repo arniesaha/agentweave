@@ -38,3 +38,4 @@ npm-debug.log*
 dist/
 .turbo/
 linkedin-draft-v1.md
+.claude/
