@@ -709,10 +709,14 @@ async def list_models(request: Request) -> JSONResponse:
     )
 
     if is_anthropic_caller:
-        query_string = _inject_anthropic_key(forward_headers, query_string)
+        # Only inject if caller doesn't have a real Anthropic key
+        client_key = x_api_key or auth_header
+        if _ANTHROPIC_INJECT_KEY and (not client_key or not client_key.startswith(("sk-ant", "Bearer sk-ant", "Bearer sk-oat"))):
+            query_string = _inject_anthropic_key(forward_headers, query_string)
         upstream_url = f"{_ANTHROPIC_BASE}/v1/models"
     else:
-        if _OPENAI_INJECT_KEY:
+        client_key = forward_headers.get("authorization", "")
+        if _OPENAI_INJECT_KEY and (not client_key or not client_key.startswith("Bearer sk-")):
             forward_headers["authorization"] = f"Bearer {_OPENAI_INJECT_KEY}"
         upstream_url = f"{_OPENAI_BASE}/v1/models"
 
@@ -826,19 +830,29 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     if _PROXY_TOKEN:
         forward_headers.pop("authorization", None)
 
-    # Inject proxy-configured API keys, overriding whatever the caller sent
-    # (including placeholder values like ANTHROPIC_API_KEY=dummy).
+    # Inject proxy-configured API keys ONLY when the client didn't send a
+    # real key.  This preserves pass-through for clients like OpenClaw and
+    # Claude Code that send their own OAuth/API keys, while allowing
+    # external scripts to call with a placeholder (e.g. x-api-key: dummy).
     if provider == "anthropic" and _ANTHROPIC_INJECT_KEY:
-        query_string = _inject_anthropic_key(forward_headers, query_string)
+        client_key = (
+            forward_headers.get("x-api-key", "")
+            or forward_headers.get("authorization", "")
+        )
+        if not client_key or not client_key.startswith("sk-ant"):
+            query_string = _inject_anthropic_key(forward_headers, query_string)
     elif provider == "openai" and _OPENAI_INJECT_KEY:
-        forward_headers["authorization"] = f"Bearer {_OPENAI_INJECT_KEY}"
+        client_key = forward_headers.get("authorization", "")
+        if not client_key or not client_key.startswith("Bearer sk-"):
+            forward_headers["authorization"] = f"Bearer {_OPENAI_INJECT_KEY}"
     elif provider == "google" and _GOOGLE_INJECT_KEY:
-        forward_headers["x-goog-api-key"] = _GOOGLE_INJECT_KEY
-        # Also strip key from query string (Google also accepts ?key=...)
-        import urllib.parse
-        qs_params = urllib.parse.parse_qs(query_string, keep_blank_values=True)
-        qs_params.pop("key", None)
-        query_string = urllib.parse.urlencode({k: v[0] for k, v in qs_params.items()})
+        client_key = forward_headers.get("x-goog-api-key", "")
+        if not client_key or not client_key.startswith("AIza"):
+            forward_headers["x-goog-api-key"] = _GOOGLE_INJECT_KEY
+            import urllib.parse
+            qs_params = urllib.parse.parse_qs(query_string, keep_blank_values=True)
+            qs_params.pop("key", None)
+            query_string = urllib.parse.urlencode({k: v[0] for k, v in qs_params.items()})
 
     upstream = _upstream_url(provider, path, query_string)
     logger.debug("→ %s %s provider=%s model=%s stream=%s",
