@@ -66,6 +66,15 @@ from agentweave import schema
 from agentweave.config import AgentWeaveConfig
 from agentweave.pii import PIIBlockedError, PIIMode, scan_text as _pii_scan
 from agentweave.exporter import get_tracer, _provider
+from agentweave.health import (
+    record_span as _health_record_span,
+    get_all_scores as _health_get_all_scores,
+    maybe_fire_webhook as _health_maybe_fire_webhook,
+    _agent_config as _health_agent_config,
+    _window_seconds as _health_window_seconds,
+    _global_threshold as _health_global_threshold,
+)
+from agentweave.budget import get_tracker as _get_budget_tracker
 from agentweave.pricing import compute_cost
 
 logger = logging.getLogger("agentweave.proxy")
@@ -280,6 +289,192 @@ async def set_session_context(body: dict):
 async def get_session_context():
     """Return the current global session context."""
     return _session_context
+
+
+# ---------------------------------------------------------------------------
+# Budget endpoints (issue #110)
+# ---------------------------------------------------------------------------
+
+@app.get("/budget/status", include_in_schema=True)
+async def budget_status():
+    """Return current daily spend per agent and global, plus configured limits.
+
+    Response shape::
+
+        {
+          "agents": {
+            "nix-v1": {"spent": 1.23, "limit": 5.00},
+            ...
+          },
+          "global": {"spent": 3.45, "limit": 10.00}
+        }
+
+    ``limit`` is ``null`` when no limit is configured for that scope.
+    """
+    tracker = _get_budget_tracker()
+    cfg = tracker._cfg
+    agents: dict = {}
+    # Include any agent that either has a limit configured or has spend recorded
+    known_ids = set(cfg.agents.keys()) | tracker.known_agent_ids()
+    for aid in known_ids:
+        ab = cfg.agents.get(aid)
+        agents[aid] = {
+            "spent": round(tracker.get_spent(aid), 6),
+            "limit": ab.daily if ab else None,
+        }
+    return {
+        "agents": agents,
+        "global": {
+            "spent": round(tracker.get_spent(), 6),
+            "limit": cfg.global_daily,
+        },
+    }
+
+
+@app.post("/budget/config", include_in_schema=True)
+async def set_budget_config(body: dict):
+    """Update budget limits at runtime and optionally persist them to the config file.
+
+    Request body::
+
+        {
+          "global_daily": 10.00,           // optional
+          "agents": {                       // optional
+            "nix-v1": {"daily": 5.00}
+          },
+          "webhook_url": "https://...",    // optional
+          "persist": true                   // optional; saves to budget.json file
+        }
+
+    Returns the updated configuration.
+    """
+    from agentweave.budget import BudgetConfig, AgentBudget, reset_tracker
+
+    tracker = _get_budget_tracker()
+    cfg = tracker._cfg
+
+    # Update config fields from request
+    if "global_daily" in body:
+        cfg.global_daily = float(body["global_daily"]) if body["global_daily"] is not None else None
+    if "agents" in body:
+        for aid, limits in body["agents"].items():
+            cfg.agents[aid] = AgentBudget(
+                daily=float(limits["daily"]) if limits.get("daily") is not None else None,
+            )
+    if "webhook_url" in body:
+        cfg.webhook_url = str(body["webhook_url"]) if body["webhook_url"] else None
+
+    if body.get("persist"):
+        cfg.save()
+
+    return {
+        "ok": True,
+        "config": {
+            "global_daily": cfg.global_daily,
+            "agents": {aid: {"daily": ab.daily} for aid, ab in cfg.agents.items()},
+            "webhook_url": cfg.webhook_url,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Agent health scoring endpoints (issue #116)
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/agent-health", include_in_schema=True)
+async def get_agent_health():
+    """Return health scores for all agents observed in the current window.
+
+    Each score is a 0-100 composite of error rate, P95 latency, cost per
+    session, and tool retry rate.  The ``badge`` field maps to a colour:
+      ``green``  (score >= 80)
+      ``yellow`` (score >= 60)
+      ``red``    (score < 60)
+
+    Scores are recomputed on every request from the in-memory span buffer.
+    """
+    scores = _health_get_all_scores()
+    # Fire webhooks asynchronously (non-blocking)
+    for score in scores:
+        asyncio.create_task(_health_maybe_fire_webhook(score))
+    return {
+        "scores": [
+            {
+                "agent_id": s.agent_id,
+                "score": s.score,
+                "badge": s.badge,
+                "error_rate": s.error_rate,
+                "p95_latency_ms": s.p95_latency_ms,
+                "avg_cost_per_session": s.avg_cost_per_session,
+                "tool_retry_rate": s.tool_retry_rate,
+                "span_count": s.span_count,
+                "window_seconds": s.window_seconds,
+                "threshold": s.threshold,
+                "computed_at": s.computed_at,
+                "components": s.components,
+            }
+            for s in scores
+        ],
+        "window_seconds": _health_window_seconds(),
+        "global_threshold": _health_global_threshold(),
+    }
+
+
+@app.get("/v1/agent-health/{agent_id}", include_in_schema=True)
+async def get_agent_health_single(agent_id: str):
+    """Return the health score for a single agent."""
+    import time as _time
+    from agentweave.health import _spans, compute_health_score, _window_seconds
+    cutoff_ms = (_time.time() - _window_seconds()) * 1000
+    agent_spans = [s for s in _spans if s.agent_id == agent_id and s.timestamp_ms >= cutoff_ms]
+    score = compute_health_score(agent_id, agent_spans)
+    asyncio.create_task(_health_maybe_fire_webhook(score))
+    return {
+        "agent_id": score.agent_id,
+        "score": score.score,
+        "badge": score.badge,
+        "error_rate": score.error_rate,
+        "p95_latency_ms": score.p95_latency_ms,
+        "avg_cost_per_session": score.avg_cost_per_session,
+        "tool_retry_rate": score.tool_retry_rate,
+        "span_count": score.span_count,
+        "window_seconds": score.window_seconds,
+        "threshold": score.threshold,
+        "computed_at": score.computed_at,
+        "components": score.components,
+    }
+
+
+@app.post("/v1/agent-health/config", include_in_schema=True)
+async def set_agent_health_config(body: dict):
+    """Configure per-agent SLO thresholds and baselines.
+
+    Body example::
+
+        {
+            "agent_id": "nix-v1",
+            "threshold": 70,
+            "p95_baseline_ms": 5000,
+            "cost_baseline_usd": 0.005
+        }
+
+    Set ``agent_id`` to ``"*"`` to update the global defaults for all agents.
+    """
+    agent_id = body.get("agent_id", "*")
+    if not agent_id:
+        return {"ok": False, "error": "agent_id is required"}
+    _health_agent_config[agent_id] = {k: v for k, v in body.items() if k != "agent_id"}
+    return {"ok": True, "agent_id": agent_id, "config": _health_agent_config[agent_id]}
+
+
+@app.get("/v1/agent-health/config/all", include_in_schema=True)
+async def get_agent_health_config():
+    """Return the current per-agent SLO config."""
+    return {
+        "configs": _health_agent_config,
+        "global_threshold": _health_global_threshold(),
+        "window_seconds": _health_window_seconds(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -756,10 +951,35 @@ async def _request_and_trace(
             data = resp.json()
             _extract_and_set_response(span, data=data, provider=provider, elapsed_ms=elapsed_ms, model=model)
             span.set_status(StatusCode.OK)
+            # Record span in health tracker
+            cost_attr = span.attributes.get(schema.COST_USD) if hasattr(span, "attributes") else None
+            cost_usd = float(cost_attr) if cost_attr is not None else 0.0
+            _health_record_span(
+                agent_id=agent_id or "unknown",
+                session_id=session_id or "",
+                duration_ms=float(elapsed_ms),
+                is_error=False,
+                cost_usd=cost_usd,
+            )
+            # Record cost in budget tracker
+            try:
+                _tracker = _get_budget_tracker()
+                _tracker.record_cost(agent_id or "unknown", cost_usd, session_id=session_id, tracer=tracer)
+            except Exception:
+                pass
             return JSONResponse(content=data, status_code=resp.status_code)
         except Exception as exc:
             span.set_status(StatusCode.ERROR, str(exc))
             span.record_exception(exc)
+            # Record error span in health tracker
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            _health_record_span(
+                agent_id=agent_id or "unknown",
+                session_id=session_id or "",
+                duration_ms=float(elapsed_ms),
+                is_error=True,
+                cost_usd=0.0,
+            )
             raise
 
 
@@ -874,6 +1094,15 @@ async def _stream_and_trace(
             span.set_attribute(schema.GEN_AI_RESPONSE_FINISH_REASONS, [stop_reason])
 
         span.set_status(StatusCode.OK)
+
+        # Record cost in budget tracker
+        try:
+            cost_usd = span.attributes.get(schema.COST_USD, 0.0) if hasattr(span, "attributes") else 0.0
+            if cost_usd > 0:
+                _tracker = _get_budget_tracker()
+                _tracker.record_cost(agent_id or "unknown", cost_usd, session_id=session_id, tracer=tracer)
+        except Exception:
+            pass
 
     except Exception as exc:
         span.set_status(StatusCode.ERROR, str(exc))
