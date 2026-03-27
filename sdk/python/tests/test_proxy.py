@@ -13,6 +13,7 @@ from agentweave.proxy import (
     _check_auth,
     _detect_provider,
     _extract_anthropic_cache_tokens,
+    _inject_anthropic_key,
     _openai_response_text,
     _parse_anthropic_sse,
     _parse_google_stream,
@@ -1127,3 +1128,164 @@ class TestCacheTokenBreakdownAttrs:
         }
         _set_anthropic_response_attrs(span, data, elapsed_ms=1)
         assert span.attrs["prov.llm.prompt_tokens"] == 100  # 10 + 30 + 60
+
+
+# ---------------------------------------------------------------------------
+# _inject_anthropic_key helper
+# ---------------------------------------------------------------------------
+
+
+class TestInjectAnthropicKey:
+    """Verify the shared Anthropic key injection helper."""
+
+    def test_noop_when_no_key(self, monkeypatch):
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", None)
+        headers = {"x-api-key": "original"}
+        qs = _inject_anthropic_key(headers, "")
+        assert headers["x-api-key"] == "original"
+        assert qs == ""
+
+    def test_standard_key_sets_x_api_key(self, monkeypatch):
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-api03_real")
+        headers = {"x-api-key": "dummy"}
+        qs = _inject_anthropic_key(headers, "")
+        assert headers["x-api-key"] == "sk-ant-api03_real"
+        assert qs == ""
+
+    def test_oauth_key_sets_bearer_and_beta(self, monkeypatch):
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-oat-abc123")
+        headers = {"x-api-key": "dummy"}
+        qs = _inject_anthropic_key(headers, "")
+        assert headers["authorization"] == "Bearer sk-ant-oat-abc123"
+        assert "x-api-key" not in headers
+        assert "oauth-2025-04-20" in headers["anthropic-beta"]
+        assert "beta=true" in qs
+
+    def test_oauth_preserves_existing_beta(self, monkeypatch):
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-oat-abc123")
+        headers = {"anthropic-beta": "existing-feature"}
+        qs = _inject_anthropic_key(headers, "")
+        assert "existing-feature" in headers["anthropic-beta"]
+        assert "oauth-2025-04-20" in headers["anthropic-beta"]
+
+    def test_oauth_appends_beta_to_existing_qs(self, monkeypatch):
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-oat-abc123")
+        headers = {}
+        qs = _inject_anthropic_key(headers, "foo=bar")
+        assert qs == "foo=bar&beta=true"
+
+    def test_oauth_skips_beta_if_already_present(self, monkeypatch):
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-oat-abc123")
+        headers = {}
+        qs = _inject_anthropic_key(headers, "beta=true")
+        assert qs == "beta=true"
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/models endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestListModelsEndpoint:
+    """Integration tests for the GET /v1/models passthrough route."""
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        return TestClient(app)
+
+    def _mock_httpx_get(self, json_data, status_code=200):
+        """Return an async context-manager mock for httpx.AsyncClient that captures the URL."""
+        from unittest.mock import AsyncMock, MagicMock
+        import httpx
+
+        fake_resp = MagicMock(spec=httpx.Response)
+        fake_resp.status_code = status_code
+        fake_resp.json.return_value = json_data
+
+        client_instance = AsyncMock()
+        client_instance.get.return_value = fake_resp
+
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client_instance)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        return cm, client_instance
+
+    def test_anthropic_with_x_api_key(self, monkeypatch):
+        """x-api-key header routes to Anthropic."""
+        from unittest.mock import patch
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", None)
+        monkeypatch.setattr(proxy_module, "_OPENAI_INJECT_KEY", None)
+        cm, client_inst = self._mock_httpx_get({"data": [{"id": "claude-3-5-sonnet"}]})
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm):
+            resp = self._client().get("/v1/models", headers={"x-api-key": "sk-ant-api03_test"})
+        assert resp.status_code == 200
+        assert resp.json()["data"][0]["id"] == "claude-3-5-sonnet"
+        url = str(client_inst.get.call_args[0][0])
+        assert "api.anthropic.com" in url
+
+    def test_anthropic_with_bearer_sk_ant(self, monkeypatch):
+        """Bearer sk-ant-* routes to Anthropic."""
+        from unittest.mock import patch
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", None)
+        monkeypatch.setattr(proxy_module, "_OPENAI_INJECT_KEY", None)
+        cm, client_inst = self._mock_httpx_get({"data": [{"id": "claude-3-5-sonnet"}]})
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm):
+            resp = self._client().get(
+                "/v1/models",
+                headers={"authorization": "Bearer sk-ant-api03_test123"},
+            )
+        assert resp.status_code == 200
+        url = str(client_inst.get.call_args[0][0])
+        assert "api.anthropic.com" in url
+
+    def test_openai_with_bearer_sk_proj(self, monkeypatch):
+        """Bearer sk-proj-* routes to OpenAI."""
+        from unittest.mock import patch
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", None)
+        monkeypatch.setattr(proxy_module, "_OPENAI_INJECT_KEY", None)
+        cm, client_inst = self._mock_httpx_get({"data": [{"id": "gpt-4o"}]})
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm):
+            resp = self._client().get(
+                "/v1/models",
+                headers={"authorization": "Bearer sk-proj-abc123"},
+            )
+        assert resp.status_code == 200
+        url = str(client_inst.get.call_args[0][0])
+        assert "api.openai.com" in url
+
+    def test_anthropic_inject_key_no_auth(self, monkeypatch):
+        """When ANTHROPIC_INJECT_KEY is set and caller has no auth, routes to Anthropic."""
+        from unittest.mock import patch
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-api03_real")
+        monkeypatch.setattr(proxy_module, "_OPENAI_INJECT_KEY", None)
+        cm, client_inst = self._mock_httpx_get({"data": [{"id": "claude-3-5-sonnet"}]})
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm):
+            resp = self._client().get("/v1/models")
+        assert resp.status_code == 200
+        url = str(client_inst.get.call_args[0][0])
+        assert "api.anthropic.com" in url
+
+    def test_openai_no_auth_no_inject(self, monkeypatch):
+        """No auth and no inject key routes to OpenAI (default)."""
+        from unittest.mock import patch
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", None)
+        monkeypatch.setattr(proxy_module, "_OPENAI_INJECT_KEY", None)
+        cm, client_inst = self._mock_httpx_get({"data": [{"id": "gpt-4o"}]})
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm):
+            resp = self._client().get("/v1/models")
+        assert resp.status_code == 200
+        url = str(client_inst.get.call_args[0][0])
+        assert "api.openai.com" in url
+
+    def test_auth_required_when_proxy_token_set(self, monkeypatch):
+        """Proxy token auth is enforced on /v1/models."""
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", "secret123")
+        resp = self._client().get("/v1/models")
+        assert resp.status_code == 401

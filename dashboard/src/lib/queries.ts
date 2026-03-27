@@ -42,7 +42,8 @@ export function tempoSearchQuery(project?: string): string {
   return (
     `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown"${projectFilter} }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
-    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project)`
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project,` +
+    ` span.prov.security.pii_detected, span.prov.security.pii_kinds)`
   )
 }
 
@@ -162,6 +163,8 @@ export interface TraceRow {
   cacheHitRate: number
   sessionId: string
   project: string
+  piiDetected: boolean
+  piiKinds: string
   attributes: Record<string, string>
 }
 
@@ -210,6 +213,8 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
       sessionId: getSpanAttr(attrs, 'session.id') || '—',
       agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
       project: getSpanAttr(attrs, 'prov.project') || '',
+      piiDetected: getSpanAttr(attrs, 'prov.security.pii_detected') === 'true',
+      piiKinds: getSpanAttr(attrs, 'prov.security.pii_kinds') || '',
       attributes: allAttrs,
     }
   })
@@ -245,6 +250,82 @@ export function tempoSessionQuery(sessionId: string): string {
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id)`
   )
+}
+
+/** TraceQL search query for session replay — fetches all spans with full attributes. */
+export function tempoSessionReplayQuery(sessionId: string): string {
+  return (
+    `{ resource.service.name = "${TEMPO_SERVICE}" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}") }` +
+    ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
+    ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id,` +
+    ` span.prov.session.turn, span.prov.activity.type, span.prov.llm.prompt_preview,` +
+    ` span.prov.llm.response_preview, span.prov.task.label, span.prov.project)`
+  )
+}
+
+// ─── Session Replay types & transformers ──────────────────────────────────────
+
+export interface ReplayTurn {
+  turnNumber: number
+  traceId: string
+  time: number
+  agentId: string
+  activityType: string  // 'llm_call' | 'tool_call' | 'agent_turn' | ...
+  toolName: string      // if tool call, the span rootTraceName
+  model: string
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+  promptPreview: string
+  responsePreview: string
+  taskLabel: string
+  project: string
+}
+
+export function buildReplayTurns(traces: TempoSpan[]): ReplayTurn[] {
+  const rows: ReplayTurn[] = []
+  for (const t of traces) {
+    const spans = t.spanSets?.[0]?.spans ?? t.spanSet?.spans ?? []
+    const span = spans[0]
+    const attrs = span?.attributes ?? []
+
+    const modelFromName = t.rootTraceName?.startsWith('llm.')
+      ? t.rootTraceName.slice(4)
+      : ''
+
+    const activityType = getSpanAttr(attrs, 'prov.activity.type') ||
+      (t.rootTraceName?.startsWith('tool.') ? 'tool_call' :
+       t.rootTraceName?.startsWith('llm.') ? 'llm_call' : 'unknown')
+
+    const toolName = t.rootTraceName?.startsWith('tool.')
+      ? t.rootTraceName.slice(5)
+      : ''
+
+    const turnStr = getSpanAttr(attrs, 'prov.session.turn')
+    const turnNumber = parseInt(turnStr || '0') || 0
+
+    rows.push({
+      turnNumber,
+      traceId: t.traceID,
+      time: parseInt(t.startTimeUnixNano) / 1e6,
+      agentId: getSpanAttr(attrs, 'prov.agent.id') || 'unknown',
+      activityType,
+      toolName,
+      model: getSpanAttr(attrs, 'prov.llm.model') || modelFromName || 'unknown',
+      tokensIn: parseInt(getSpanAttr(attrs, 'prov.llm.prompt_tokens') || '0') || 0,
+      tokensOut: parseInt(getSpanAttr(attrs, 'prov.llm.completion_tokens') || '0') || 0,
+      costUsd: Math.max(0, parseFloat(getSpanAttr(attrs, 'cost.usd') || '0') || 0),
+      latencyMs: span ? span.durationNanos / 1e6 : t.durationMs,
+      promptPreview: getSpanAttr(attrs, 'prov.llm.prompt_preview'),
+      responsePreview: getSpanAttr(attrs, 'prov.llm.response_preview'),
+      taskLabel: getSpanAttr(attrs, 'prov.task.label'),
+      project: getSpanAttr(attrs, 'prov.project'),
+    })
+  }
+  // Sort by time ascending
+  return rows.sort((a, b) => a.time - b.time)
+    .map((row, i) => ({ ...row, turnNumber: row.turnNumber || i + 1 }))
 }
 
 /** TraceQL metrics query that returns cost.usd summed per time bucket. */
@@ -490,6 +571,8 @@ export interface SessionNode {
   durationMs: number
   hasError: boolean
   project?: string           // prov.project value (issue #101)
+  piiDetected: boolean       // true if any span in this session had PII detected (issue #112)
+  piiKinds: string           // comma-separated PII kinds, e.g. "EMAIL,PHONE"
 }
 
 /** An edge between two session nodes (parent → child). */
@@ -524,6 +607,8 @@ interface SessionSpanRow {
   model: string
   durationNanos: number
   project: string
+  piiDetected: boolean
+  piiKinds: string
 }
 
 function spanRowFromTempoSpan(t: TempoSpan): SessionSpanRow {
@@ -547,6 +632,8 @@ function spanRowFromTempoSpan(t: TempoSpan): SessionSpanRow {
     model: getSpanAttr(attrs, 'prov.llm.model') || modelFromName || 'unknown',
     durationNanos: span?.durationNanos ?? 0,
     project: getSpanAttr(attrs, 'prov.project'),
+    piiDetected: getSpanAttr(attrs, 'prov.security.pii_detected') === 'true',
+    piiKinds: getSpanAttr(attrs, 'prov.security.pii_kinds') || '',
   }
 }
 
@@ -575,6 +662,13 @@ export function buildSessionGraph(
       if (row.agentType && row.agentType !== 'unknown' && existing.agentType === 'unknown') {
         existing.agentType = row.agentType
       }
+      if (row.piiDetected) {
+        existing.piiDetected = true
+        if (row.piiKinds) {
+          const kinds = new Set([...existing.piiKinds.split(','), ...row.piiKinds.split(',')].filter(Boolean))
+          existing.piiKinds = Array.from(kinds).sort().join(',')
+        }
+      }
       existing.durationMs = existing.lastSeen - existing.firstSeen
     } else {
       nodeMap.set(row.sessionId, {
@@ -592,6 +686,8 @@ export function buildSessionGraph(
         durationMs: 0,
         hasError: false,
         project: row.project || undefined,
+        piiDetected: row.piiDetected,
+        piiKinds: row.piiKinds,
       })
     }
 
@@ -676,4 +772,115 @@ export function extractProjects(traces: TraceRow[]): string[] {
     if (t.project && !KNOWN_AGENT_ID_PREFIXES.has(t.project)) set.add(t.project)
   }
   return Array.from(set).sort()
+}
+
+// ─── Agent Health Scoring (issue #116) ──────────────────────────────────────
+
+export interface AgentHealthScore {
+  agentId: string
+  score: number         // 0-100
+  badge: 'green' | 'yellow' | 'red'
+  errorRate: number     // 0.0-1.0
+  p95LatencyMs: number
+  avgCostPerSession: number
+  toolRetryRate: number
+  spanCount: number
+  components: {
+    error_rate: number
+    latency: number
+    cost: number
+    tool_retry: number
+  }
+}
+
+function computeP95(values: number[]): number {
+  if (!values.length) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const idx = Math.floor(sorted.length * 0.95)
+  return sorted[Math.min(idx, sorted.length - 1)]
+}
+
+/**
+ * Compute per-agent health scores from TraceRow data.
+ * Mirrors the Python health.py logic so the dashboard works without
+ * calling the proxy directly.
+ */
+export function computeAgentHealthScores(
+  traces: TraceRow[],
+  opts: {
+    p95BaselineMs?: number
+    costBaselineUsd?: number
+    threshold?: number
+  } = {}
+): AgentHealthScore[] {
+  const p95Baseline = opts.p95BaselineMs ?? 10_000
+  const costBaseline = opts.costBaselineUsd ?? 0.01
+
+  // Group by agentId
+  const agentTraces = new Map<string, TraceRow[]>()
+  for (const t of traces) {
+    const aid = t.agentId || 'unknown'
+    if (!agentTraces.has(aid)) agentTraces.set(aid, [])
+    agentTraces.get(aid)!.push(t)
+  }
+
+  const scores: AgentHealthScore[] = []
+  for (const [agentId, rows] of agentTraces) {
+    if (!rows.length) continue
+
+    // Signal 1: Error rate — use otel.status_code attribute if present
+    const errorCount = rows.filter((r) => {
+      const errAttr = r.attributes?.['otel.status_code']
+      return errAttr === 'ERROR' || errAttr === 'error'
+    }).length
+    const errorRate = errorCount / rows.length
+    const errorScore = Math.max(0, 100 * (1 - errorRate))
+
+    // Signal 2: P95 latency
+    const latencies = rows.map((r) => r.latencyMs).filter((l) => l > 0)
+    const p95Ms = computeP95(latencies)
+    const latencyRatio = p95Baseline > 0 ? p95Ms / p95Baseline : 1
+    const latencyScore = Math.max(0, Math.min(100, 100 * (1 - Math.max(0, latencyRatio - 1) / 3)))
+
+    // Signal 3: Cost per session
+    const sessionCosts: Record<string, number> = {}
+    for (const r of rows) {
+      const sid = r.sessionId || '_default'
+      sessionCosts[sid] = (sessionCosts[sid] ?? 0) + r.costUsd
+    }
+    const costVals = Object.values(sessionCosts)
+    const avgCost = costVals.length ? costVals.reduce((a, b) => a + b, 0) / costVals.length : 0
+    const costRatio = costBaseline > 0 ? avgCost / costBaseline : 1
+    const costScore = Math.max(0, Math.min(100, 100 * (1 - Math.max(0, costRatio - 1) / 5)))
+
+    // Signal 4: Tool retry rate (not tracked in TraceRow — default full score)
+    const toolRetryScore = 100
+
+    const score = Math.round(
+      0.30 * errorScore +
+      0.30 * latencyScore +
+      0.20 * costScore +
+      0.20 * toolRetryScore
+    )
+    const badge: AgentHealthScore['badge'] = score >= 80 ? 'green' : score >= 60 ? 'yellow' : 'red'
+
+    scores.push({
+      agentId,
+      score,
+      badge,
+      errorRate: Math.round(errorRate * 10000) / 10000,
+      p95LatencyMs: Math.round(p95Ms),
+      avgCostPerSession: Math.round(avgCost * 1e6) / 1e6,
+      toolRetryRate: 0,
+      spanCount: rows.length,
+      components: {
+        error_rate: Math.round(errorScore),
+        latency: Math.round(latencyScore),
+        cost: Math.round(costScore),
+        tool_retry: toolRetryScore,
+      },
+    })
+  }
+
+  return scores.sort((a, b) => a.score - b.score)
 }

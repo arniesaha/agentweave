@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react'
-import { ChevronDown, ChevronRight, ExternalLink, ChevronLeft } from 'lucide-react'
+import { ChevronDown, ChevronRight, ExternalLink, ChevronLeft, ShieldAlert } from 'lucide-react'
 import { format } from 'date-fns'
 import { TraceRow } from '../lib/queries'
 import { SessionDrilldown } from './SessionDrilldown'
@@ -16,7 +16,7 @@ type SortDir = 'asc' | 'desc'
 function SkeletonRow() {
   return (
     <tr className="border-b border-[#1e1e2e]">
-      {Array.from({ length: 7 }).map((_, i) => (
+      {Array.from({ length: 8 }).map((_, i) => (
         <td key={i} className="px-4 py-3">
           <div className="skeleton h-4 rounded w-full" />
         </td>
@@ -124,6 +124,7 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
               <ThSortable label="Tokens Out" k="tokensOut" />
               <ThSortable label="Cost" k="costUsd" />
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Session</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" title="PII detected in this span">PII</th>
             </tr>
           </thead>
           <tbody>
@@ -131,13 +132,13 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
               Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} />)
             ) : error ? (
               <tr>
-                <td colSpan={10} className="px-4 py-12 text-center text-gray-600 text-sm">
+                <td colSpan={11} className="px-4 py-12 text-center text-gray-600 text-sm">
                   Unable to load traces — {error}
                 </td>
               </tr>
             ) : !sorted.length ? (
               <tr>
-                <td colSpan={10} className="px-4 py-12 text-center text-gray-600 text-sm">
+                <td colSpan={11} className="px-4 py-12 text-center text-gray-600 text-sm">
                   No traces found for this time range
                 </td>
               </tr>
@@ -214,10 +215,23 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
                           <span className="text-xs text-gray-600">—</span>
                         )}
                       </td>
+                      <td className="px-4 py-3">
+                        {row.piiDetected ? (
+                          <span
+                            title={`PII detected: ${row.piiKinds || 'unknown'}`}
+                            className="inline-flex items-center gap-1 text-xs text-amber-400 bg-amber-950/40 border border-amber-800/40 px-1.5 py-0.5 rounded-full font-medium"
+                          >
+                            <ShieldAlert className="w-3 h-3" />
+                            PII
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-700">—</span>
+                        )}
+                      </td>
                     </tr>
                     {sessionDrilldown === row.sessionId && (
                       <tr className="bg-[#0a0a0f]/90 border-b border-[#1e1e2e]">
-                        <td colSpan={10} className="px-6 py-4">
+                        <td colSpan={11} className="px-6 py-4">
                           <div className="space-y-2">
                             <p className="text-xs font-semibold text-violet-400 uppercase tracking-wider mb-3">
                               Session Drilldown
@@ -229,7 +243,7 @@ export function TraceTable({ traces, loading, error }: TraceTableProps) {
                     )}
                     {isOpen && (
                       <tr className="bg-[#0a0a0f]/80 border-b border-[#1e1e2e]">
-                        <td colSpan={10} className="px-6 py-4">
+                        <td colSpan={11} className="px-6 py-4">
                           <div className="space-y-2">
                             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
                               Span Attributes

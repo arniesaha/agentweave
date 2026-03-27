@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { Activity, DollarSign, Zap, RefreshCw, GitBranch, BarChart2, X } from 'lucide-react'
+import { Activity, DollarSign, Zap, RefreshCw, GitBranch, BarChart2, X, PlayCircle } from 'lucide-react'
 import { Header } from './components/Header'
 import { StatCard } from './components/StatCard'
 import { TimeSeriesChart } from './components/TimeSeriesChart'
@@ -7,7 +7,10 @@ import { BarChartPanel } from './components/BarChart'
 import { TraceTable } from './components/TraceTable'
 import { AgentAttribution } from './components/AgentAttribution'
 import { CostSparklines } from './components/CostSparklines'
+import { AgentHealthBadges } from './components/AgentHealthBadges'
 import { SessionExplorer } from './components/SessionExplorer'
+import { PromptVersionFilter, filterByPromptVersion } from './components/PromptVersionFilter'
+import { SessionReplay } from './components/SessionReplay'
 import {
   TimeRange,
   tempoSearchQuery,
@@ -25,11 +28,12 @@ import {
   buildCostTimeSeries,
   buildCostByAgent,
   extractProjects,
+  computeAgentHealthScores,
 } from './lib/queries'
 import { useTempoSearch, useTempoSearchCount, useTempoMetrics, useSessionGraph } from './hooks/useTempo'
 import { usePromQueryRange, usePromQueryInstant } from './hooks/usePrometheus'
 
-type ActiveTab = 'overview' | 'sessions'
+type ActiveTab = 'overview' | 'sessions' | 'replay'
 
 const REFRESH_INTERVAL_MS = 60_000 // 60s
 
@@ -37,10 +41,12 @@ export default function App() {
   const [timeRange, setTimeRange] = useState<TimeRange>('6h')
   const [refreshKey, setRefreshKey] = useState(0)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
-  const initialTab = (new URLSearchParams(window.location.search).get('tab') as ActiveTab) ?? 'overview'
+  const rawTab = new URLSearchParams(window.location.search).get('tab')
+  const initialTab: ActiveTab = (rawTab === 'sessions' || rawTab === 'replay' ? rawTab : 'overview')
   const [activeTab, setActiveTab] = useState<ActiveTab>(initialTab)
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] = useState<string | null>(null)
+  const [selectedPromptVersion, setSelectedPromptVersion] = useState<string | null>(null)
 
   const handleAgentBarClick = useCallback((agentId: string) => {
     setSelectedAgent((prev) => (prev === agentId ? null : agentId))
@@ -161,6 +167,12 @@ export default function App() {
   // 10. Cost by Agent — derived from trace rows (no extra fetch needed)
   const costByAgent = buildCostByAgent(traceRows)
 
+  // 10b. Agent health scores — derived from trace rows (issue #116)
+  const agentHealthScores = useMemo(
+    () => computeAgentHealthScores(traceRows),
+    [traceRows]
+  )
+
   // ─── Agent Attribution Data ─────────────────────────────────────────────────
 
   // 11. Agent attribution traces (prov.agent.type, prov.parent.session.id, etc.)
@@ -225,18 +237,44 @@ export default function App() {
               </span>
             )}
           </button>
+          <button
+            onClick={() => setActiveTab('replay')}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'replay'
+                ? 'border-indigo-500 text-indigo-300'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <PlayCircle className="w-4 h-4" />
+            Session Replay
+          </button>
         </div>
       </div>
 
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 py-6 space-y-6">
         {/* Session Explorer tab */}
         {activeTab === 'sessions' && (
-          <SessionExplorer
-            nodes={sessionNodes}
-            edges={sessionEdges}
-            rawTraces={sessionRawTraces}
-            loading={sessionLoading}
-            error={sessionError}
+          <div className="space-y-4">
+            <PromptVersionFilter
+              traces={traceRows}
+              selectedPromptVersion={selectedPromptVersion}
+              onSelectPromptVersion={setSelectedPromptVersion}
+            />
+            <SessionExplorer
+              nodes={sessionNodes}
+              edges={sessionEdges}
+              rawTraces={filterByPromptVersion(sessionRawTraces, selectedPromptVersion)}
+              loading={sessionLoading}
+              error={sessionError}
+            />
+          </div>
+        )}
+
+        {/* Session Replay tab */}
+        {activeTab === 'replay' && (
+          <SessionReplay
+            timeRange={timeRange}
+            refreshKey={refreshKey}
           />
         )}
 
@@ -353,6 +391,12 @@ export default function App() {
           loading={tracesLoading}
         />
 
+        {/* Agent Health Badges (issue #116) */}
+        <AgentHealthBadges
+          scores={agentHealthScores}
+          loading={tracesLoading}
+          error={tracesError}
+        />
         {/* Agent Attribution Section */}
         <AgentAttribution
           attributionRows={attributionRows}

@@ -6,12 +6,18 @@ forwards the response transparently to the caller.
 
 Provider is detected automatically from the request path:
   /v1/messages              → Anthropic  (api.anthropic.com)
+  /v1/models                → Anthropic or OpenAI (detected from auth headers)
   /v1beta/models/...        → Google     (generativelanguage.googleapis.com)
   /v1/models/...            → Google     (generativelanguage.googleapis.com)
   /v1/chat/completions      → OpenAI     (api.openai.com)
   /v1/completions           → OpenAI     (api.openai.com)
   /v1/embeddings            → OpenAI     (api.openai.com)
   /v1/responses             → OpenAI     (api.openai.com)  [Responses API]
+
+Note: ``GET /v1/models`` is handled by a dedicated route that inspects auth
+headers to determine whether to forward to Anthropic or OpenAI.  This fixes
+Claude Code CLI model validation when ``ANTHROPIC_BASE_URL`` points at the
+AgentWeave proxy (see issue #119).
 
 Works for both streaming and non-streaming requests. Zero code changes needed
 in calling agents — just point ANTHROPIC_BASE_URL / GOOGLE_GENAI_BASE_URL /
@@ -58,6 +64,7 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, StatusCode, Trace
 
 from agentweave import schema
 from agentweave.config import AgentWeaveConfig
+from agentweave.pii import PIIBlockedError, PIIMode, scan_text as _pii_scan
 from agentweave.exporter import get_tracer, _provider
 from agentweave.health import (
     record_span as _health_record_span,
@@ -136,6 +143,33 @@ _PROXY_TOKEN: str | None = os.getenv("AGENTWEAVE_PROXY_TOKEN") or None
 _ANTHROPIC_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_ANTHROPIC_API_KEY") or None
 _GOOGLE_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_GOOGLE_API_KEY") or None
 _OPENAI_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_OPENAI_API_KEY") or None
+
+
+def _inject_anthropic_key(forward_headers: dict[str, str], query_string: str) -> str:
+    """Inject the proxy-configured Anthropic API key into *forward_headers*.
+
+    Handles both standard ``sk-ant-api03_*`` keys (set as ``x-api-key``) and
+    OAuth tokens (``sk-ant-oat*``, set as ``Bearer`` + beta headers).
+
+    Returns the (possibly modified) *query_string*.
+    """
+    if not _ANTHROPIC_INJECT_KEY:
+        return query_string
+    if _ANTHROPIC_INJECT_KEY.startswith("sk-ant-oat"):
+        forward_headers["authorization"] = f"Bearer {_ANTHROPIC_INJECT_KEY}"
+        forward_headers.pop("x-api-key", None)
+        existing_beta = forward_headers.get("anthropic-beta", "")
+        oauth_beta = "oauth-2025-04-20"
+        claude_code_beta = "claude-code-20250219"
+        betas_to_add = [b for b in [oauth_beta, claude_code_beta] if b not in existing_beta]
+        if betas_to_add:
+            forward_headers["anthropic-beta"] = ",".join(filter(None, [existing_beta] + betas_to_add))
+        if "beta=true" not in query_string:
+            query_string = f"{query_string}&beta=true" if query_string else "beta=true"
+    else:
+        forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
+    return query_string
+
 
 # Global session context — set at startup from env, overrideable via POST /session
 _session_context: dict[str, str] = {
@@ -460,6 +494,108 @@ def _extract_parent_context(traceparent: str | None):
         return None
 
 
+# ---------------------------------------------------------------------------
+# Prompt registry endpoints (issue #111)
+# ---------------------------------------------------------------------------
+
+from agentweave import prompts as _prompts_mod  # noqa: E402 — lazy import after app init
+
+
+@app.get("/v1/prompts", include_in_schema=True)
+async def list_prompts():
+    """List the latest version of every named prompt in the registry."""
+    records = _prompts_mod.list_prompts()
+    return {"prompts": [r.to_dict() for r in records]}
+
+
+@app.get("/v1/prompts/{name}", include_in_schema=True)
+async def get_prompt_latest(name: str):
+    """Get the latest version of a named prompt."""
+    record = _prompts_mod.get_prompt(name)
+    if record is None:
+        return JSONResponse({"error": f"Prompt '{name}' not found"}, status_code=404)
+    return record.to_dict()
+
+
+@app.get("/v1/prompts/{name}/versions", include_in_schema=True)
+async def list_prompt_versions(name: str):
+    """List all versions of a named prompt."""
+    records = _prompts_mod.list_prompt_versions(name)
+    if not records:
+        return JSONResponse({"error": f"Prompt '{name}' not found"}, status_code=404)
+    return {"name": name, "versions": [r.to_dict() for r in records]}
+
+
+@app.get("/v1/prompts/{name}/{version}", include_in_schema=True)
+async def get_prompt_version(name: str, version: str):
+    """Get a specific version of a named prompt."""
+    record = _prompts_mod.get_prompt(name, version)
+    if record is None:
+        return JSONResponse(
+            {"error": f"Prompt '{name}' version '{version}' not found"}, status_code=404
+        )
+    return record.to_dict()
+
+
+@app.post("/v1/prompts", include_in_schema=True)
+async def create_prompt(body: dict):
+    """Create or version a prompt.
+
+    Body::
+
+        {
+            "name": "system-prompt",
+            "content": "You are a helpful assistant...",
+            "description": "Main system prompt",  // optional
+            "version": "v2"                        // optional; default: SHA-256 hash of content
+        }
+    """
+    name = body.get("name")
+    content = body.get("content")
+    if not name or not content:
+        return JSONResponse({"error": "name and content are required"}, status_code=400)
+    description = body.get("description", "")
+    version = body.get("version") or None
+    try:
+        record = _prompts_mod.create_prompt(name, content, description=description, version=version)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return JSONResponse(record.to_dict(), status_code=201)
+
+
+@app.put("/v1/prompts/{name}", include_in_schema=True)
+async def update_prompt(name: str, body: dict):
+    """Update a prompt by creating a new version.
+
+    Body::
+
+        {
+            "content": "New prompt text...",
+            "description": "Updated description",  // optional
+            "version": "v3"                         // optional; default: SHA-256 hash
+        }
+    """
+    content = body.get("content")
+    if not content:
+        return JSONResponse({"error": "content is required"}, status_code=400)
+    description = body.get("description", None)
+    version = body.get("version") or None
+    try:
+        record = _prompts_mod.update_prompt(name, content, description=description, version=version)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return record.to_dict()
+
+
+@app.delete("/v1/prompts/{name}", include_in_schema=True)
+async def delete_prompt(name: str):
+    """Delete all versions of a named prompt."""
+    deleted = _prompts_mod.delete_prompt(name)
+    if deleted == 0:
+        return JSONResponse({"error": f"Prompt '{name}' not found"}, status_code=404)
+    return {"ok": True, "deleted": deleted, "name": name}
+
+
 @app.post("/hooks/span", include_in_schema=True)
 async def hooks_span(body: dict):
     """Receive a single span from Claude Code hooks (e.g., SubagentStop).
@@ -524,6 +660,72 @@ async def hooks_batch(body: dict):
         spans_created += 1
 
     return {"ok": True, "spans_created": spans_created}
+
+
+@app.get("/v1/models", include_in_schema=True, response_model=None)
+async def list_models(request: Request) -> JSONResponse:
+    """Passthrough for GET /v1/models.
+
+    Claude Code CLI calls this endpoint on startup to validate the model name.
+    The path ``v1/models`` is also used by OpenAI-compatible clients. We detect
+    which upstream to forward to by inspecting the auth headers:
+
+    * ``x-api-key`` header (Anthropic SDK style) → Anthropic models API
+    * ``authorization: Bearer sk-ant-*`` → Anthropic models API
+    * Otherwise → OpenAI models API
+
+    This ensures Claude Code CLI launched with
+    ``ANTHROPIC_BASE_URL=http://<proxy>/v1`` sees the full Anthropic model
+    list and can validate model names successfully.
+    """
+    if (denied := _check_auth(request)) is not None:
+        return denied
+
+    query_string = request.url.query
+
+    forward_headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in _SKIP_HEADERS_ALWAYS
+    }
+    if _PROXY_TOKEN:
+        forward_headers.pop("authorization", None)
+
+    # Detect provider from auth headers: Anthropic uses x-api-key or Bearer sk-ant-*
+    x_api_key = forward_headers.get("x-api-key", "")
+    auth_header = forward_headers.get("authorization", "")
+    is_anthropic_caller = bool(
+        x_api_key
+        or auth_header.startswith("Bearer sk-ant-")
+        or auth_header.startswith("Bearer sk-oat-")
+        or (_ANTHROPIC_INJECT_KEY and not forward_headers.get("authorization", "").startswith("Bearer sk-"))
+    )
+
+    if is_anthropic_caller:
+        query_string = _inject_anthropic_key(forward_headers, query_string)
+        upstream_url = f"{_ANTHROPIC_BASE}/v1/models"
+    else:
+        if _OPENAI_INJECT_KEY:
+            forward_headers["authorization"] = f"Bearer {_OPENAI_INJECT_KEY}"
+        upstream_url = f"{_OPENAI_BASE}/v1/models"
+
+    if query_string:
+        upstream_url += f"?{query_string}"
+
+    logger.debug("→ GET %s (models passthrough, anthropic=%s)", upstream_url, is_anthropic_caller)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(upstream_url, headers=forward_headers)
+        try:
+            content = resp.json()
+        except (ValueError, UnicodeDecodeError):
+            content = {"error": {"type": "upstream_error", "message": resp.text}}
+        return JSONResponse(content=content, status_code=resp.status_code)
+    except Exception as exc:
+        logger.error("models passthrough error: %s", exc)
+        return JSONResponse(
+            {"error": {"type": "proxy_error", "message": str(exc)}},
+            status_code=502,
+        )
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], response_model=None)
@@ -608,22 +810,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     # Inject proxy-configured API keys, overriding whatever the caller sent
     # (including placeholder values like ANTHROPIC_API_KEY=dummy).
     if provider == "anthropic" and _ANTHROPIC_INJECT_KEY:
-        if _ANTHROPIC_INJECT_KEY.startswith("sk-ant-oat"):
-            # OAuth tokens must use Bearer auth + oauth beta header + ?beta=true query
-            forward_headers["authorization"] = f"Bearer {_ANTHROPIC_INJECT_KEY}"
-            forward_headers.pop("x-api-key", None)
-            existing_beta = forward_headers.get("anthropic-beta", "")
-            oauth_beta = "oauth-2025-04-20"
-            claude_code_beta = "claude-code-20250219"
-            betas_to_add = [b for b in [oauth_beta, claude_code_beta] if b not in existing_beta]
-            if betas_to_add:
-                new_beta = ",".join(filter(None, [existing_beta] + betas_to_add))
-                forward_headers["anthropic-beta"] = new_beta
-            # Append ?beta=true — required for OAuth tokens to access non-Haiku models
-            if "beta=true" not in query_string:
-                query_string = f"{query_string}&beta=true" if query_string else "beta=true"
-        else:
-            forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
+        query_string = _inject_anthropic_key(forward_headers, query_string)
     elif provider == "openai" and _OPENAI_INJECT_KEY:
         forward_headers["authorization"] = f"Bearer {_OPENAI_INJECT_KEY}"
     elif provider == "google" and _GOOGLE_INJECT_KEY:
@@ -661,23 +848,30 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         traceparent=traceparent,
     )
 
-    if is_stream:
-        media = "application/json" if provider == "google" else "text/event-stream"
-        # Peek at upstream status before committing to a 200 StreamingResponse.
-        # If upstream returned an error (4xx/5xx), return the error body with the
-        # correct status code so callers see the real error instead of an empty
-        # SSE stream that looks like a timeout.
-        preflight = await _stream_preflight(
-            method=kwargs["method"],
-            upstream_url=kwargs["upstream_url"],
-            headers=kwargs["headers"],
-            body_bytes=kwargs["body_bytes"],
+    try:
+        if is_stream:
+            media = "application/json" if provider == "google" else "text/event-stream"
+            # Peek at upstream status before committing to a 200 StreamingResponse.
+            # If upstream returned an error (4xx/5xx), return the error body with the
+            # correct status code so callers see the real error instead of an empty
+            # SSE stream that looks like a timeout.
+            preflight = await _stream_preflight(
+                method=kwargs["method"],
+                upstream_url=kwargs["upstream_url"],
+                headers=kwargs["headers"],
+                body_bytes=kwargs["body_bytes"],
+            )
+            if preflight is not None:
+                logger.warning("← upstream error status=%d (short-circuit)", preflight.status_code)
+                return preflight
+            return StreamingResponse(_stream_and_trace(**kwargs), media_type=media)
+        return await _request_and_trace(**kwargs)
+    except PIIBlockedError as exc:
+        logger.warning("PII blocked: %s", exc)
+        return JSONResponse(
+            {"error": {"type": "pii_blocked", "message": str(exc)}},
+            status_code=400,
         )
-        if preflight is not None:
-            logger.warning("← upstream error status=%d (short-circuit)", preflight.status_code)
-            return preflight
-        return StreamingResponse(_stream_and_trace(**kwargs), media_type=media)
-    return await _request_and_trace(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -1177,9 +1371,39 @@ def _openai_response_text(data: dict) -> str:
         return ""
 
 
+def _set_pii_attrs(span: Any, matches: list) -> None:
+    """Attach PII detection attributes to *span*.
+
+    Sets:
+      - ``prov.security.pii_detected`` = "true"
+      - ``prov.security.pii_kinds``    = comma-separated unique kinds, e.g. "EMAIL,PHONE"
+      - ``prov.security.pii_mode``     = active mode, e.g. "flag" | "redact"
+    """
+    span.set_attribute(schema.SECURITY_PII_DETECTED, "true")
+    kinds = sorted({m.kind for m in matches})
+    span.set_attribute(schema.SECURITY_PII_KINDS, ",".join(kinds))
+    span.set_attribute(schema.SECURITY_PII_MODE, PIIMode.from_env())
+
+
 def _maybe_set_response_preview(span: Any, text: str) -> None:
-    if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes") and text:
-        span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, text[:512])
+    pii_mode = PIIMode.from_env()
+    # Cap input to PII scanner to avoid scanning unbounded LLM responses
+    scan_text_cap = text[:4096] if text else ""
+    if pii_mode != PIIMode.OFF and scan_text_cap:
+        try:
+            result = _pii_scan(scan_text_cap, mode=pii_mode)
+            if result.is_detected:
+                _set_pii_attrs(span, result.matches)
+            scan_text_cap = result.cleaned  # may be redacted
+        except PIIBlockedError:
+            raise  # let upstream handler deal with it
+        except Exception:
+            logger.debug("PII scan error in response preview", exc_info=True)
+
+    _capture_prompts = os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes")
+    preview = scan_text_cap if pii_mode != PIIMode.OFF else text
+    if _capture_prompts and preview:
+        span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, preview[:512])
 
 
 # ---------------------------------------------------------------------------
@@ -1241,7 +1465,10 @@ def _set_request_attrs(
         if cfg and cfg.agent_id:
             span.set_attribute(schema.PROV_AGENT_ID, cfg.agent_id)
 
-    if os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() not in ("1", "true", "yes"):
+    # PII scanning on prompt (runs regardless of AGENTWEAVE_CAPTURE_PROMPTS)
+    pii_mode = PIIMode.from_env()
+    _capture_prompts = os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes")
+    if pii_mode == PIIMode.OFF and not _capture_prompts:
         return
     try:
         if provider == "google":
@@ -1254,10 +1481,19 @@ def _set_request_attrs(
             if isinstance(content, list):
                 content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
             preview = str(content)[:512]
-        if preview:
+
+        if pii_mode != PIIMode.OFF and preview:
+            result = _pii_scan(preview, mode=pii_mode)
+            if result.is_detected:
+                _set_pii_attrs(span, result.matches)
+            preview = result.cleaned  # may be redacted
+
+        if _capture_prompts and preview:
             span.set_attribute(schema.PROV_LLM_PROMPT_PREVIEW, preview)
+    except PIIBlockedError:
+        raise  # propagate so the route handler can return 400
     except Exception:
-        pass
+        logger.debug("PII scan error in request attrs", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

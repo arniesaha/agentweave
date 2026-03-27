@@ -149,6 +149,14 @@ TOKENS_CACHE_WRITE = "tokens.cache_write"
 CACHE_HIT_RATE = "cache.hit_rate"
 
 # ---------------------------------------------------------------------------
+# Prompt versioning — enriched on spans via PromptHandle (issue #111)
+# ---------------------------------------------------------------------------
+
+PROV_PROMPT_ID = "prov.prompt.id"          # numeric DB row ID (stable across versions)
+PROV_PROMPT_NAME = "prov.prompt.name"      # registry key / human-readable name
+PROV_PROMPT_VERSION = "prov.prompt.version"  # content-hash (or user-supplied semver)
+
+# ---------------------------------------------------------------------------
 # Turn counter — tracks how many LLM calls a single agent session makes
 # ---------------------------------------------------------------------------
 
@@ -156,3 +164,16 @@ CACHE_HIT_RATE = "cache.hit_rate"
 # Scoped per async task / thread via contextvars.ContextVar so parallel
 # agent sessions never interfere with each other.
 AGENT_TURN_COUNT = "agent.turn_count"
+
+# ---------------------------------------------------------------------------
+# PII detection attributes (issue #112)
+# ---------------------------------------------------------------------------
+
+# Set to "true" (string) when PII is detected in this span's request/response
+SECURITY_PII_DETECTED = "prov.security.pii_detected"
+
+# Comma-separated list of PII kinds found, e.g. "EMAIL,PHONE"
+SECURITY_PII_KINDS = "prov.security.pii_kinds"
+
+# PII mode active during this span: "off" | "flag" | "redact" | "block"
+SECURITY_PII_MODE = "prov.security.pii_mode"
