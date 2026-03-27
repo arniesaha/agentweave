@@ -772,6 +772,119 @@ class TestTraceparentPassthrough:
         """traceparent must NOT be in _SKIP_HEADERS_ALWAYS — it should be forwarded."""
         assert "traceparent" not in _SKIP_HEADERS_ALWAYS
 
+    def test_env_var_fallback_used_when_no_header(self, monkeypatch):
+        """AGENTWEAVE_TRACEPARENT env var is used when no traceparent header is present (issue #133)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import httpx
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        from agentweave.config import AgentWeaveConfig
+
+        tp = "00-aabbccddeeff00112233445566778899-0011223344556677-01"
+        monkeypatch.setenv("AGENTWEAVE_TRACEPARENT", tp)
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+
+        captured: list = []
+        original_set_request_attrs = proxy_module._set_request_attrs
+
+        def _capturing_set_request_attrs(span, **kwargs):
+            captured.append(kwargs.get("traceparent"))
+            return original_set_request_attrs(span, **kwargs)
+
+        # Provide a minimal valid Anthropic non-streaming response
+        fake_data = {
+            "id": "msg1",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "model": "claude-3-haiku-20240307",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        fake_resp = MagicMock(spec=httpx.Response)
+        fake_resp.status_code = 200
+        fake_resp.headers = {}
+        fake_resp.json.return_value = fake_data
+
+        client_instance = AsyncMock()
+        client_instance.request = AsyncMock(return_value=fake_resp)
+
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client_instance)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm), \
+             patch.object(proxy_module, "_set_request_attrs", side_effect=_capturing_set_request_attrs):
+            client = TestClient(app)
+            client.post(
+                "/v1/messages",
+                json={"model": "claude-3-haiku-20240307", "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
+                headers={"x-api-key": "sk-ant-test-key"},
+                # No traceparent header — env var should be the fallback
+            )
+
+        assert len(captured) >= 1, "Expected _set_request_attrs to be called"
+        assert captured[0] == tp, (
+            f"Expected traceparent from AGENTWEAVE_TRACEPARENT env var, got {captured[0]!r}"
+        )
+
+    def test_header_takes_precedence_over_env_var(self, monkeypatch):
+        """traceparent header takes precedence over AGENTWEAVE_TRACEPARENT env var (issue #133)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import httpx
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        from agentweave.config import AgentWeaveConfig
+
+        env_tp = "00-aabbccddeeff00112233445566778899-0011223344556677-01"
+        header_tp = "00-00112233445566778899aabbccddeeff-aabbccddaabbccdd-01"
+        monkeypatch.setenv("AGENTWEAVE_TRACEPARENT", env_tp)
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+
+        captured: list = []
+        original_set_request_attrs = proxy_module._set_request_attrs
+
+        def _capturing_set_request_attrs(span, **kwargs):
+            captured.append(kwargs.get("traceparent"))
+            return original_set_request_attrs(span, **kwargs)
+
+        fake_data = {
+            "id": "msg2",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "model": "claude-3-haiku-20240307",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        fake_resp = MagicMock(spec=httpx.Response)
+        fake_resp.status_code = 200
+        fake_resp.headers = {}
+        fake_resp.json.return_value = fake_data
+
+        client_instance = AsyncMock()
+        client_instance.request = AsyncMock(return_value=fake_resp)
+
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client_instance)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm), \
+             patch.object(proxy_module, "_set_request_attrs", side_effect=_capturing_set_request_attrs):
+            client = TestClient(app)
+            client.post(
+                "/v1/messages",
+                json={"model": "claude-3-haiku-20240307", "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
+                headers={"x-api-key": "sk-ant-test-key", "traceparent": header_tp},
+            )
+
+        assert len(captured) >= 1, "Expected _set_request_attrs to be called"
+        assert captured[0] == header_tp, (
+            f"Expected header traceparent to win, got {captured[0]!r}"
+        )
+
 
 class TestSessionEndpoint:
     """POST /session stores context, GET /session returns it, env-var fallback works."""
