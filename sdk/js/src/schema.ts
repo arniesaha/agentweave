@@ -84,3 +84,19 @@ export const ENTITY_TEXT = 'text';
 export const SPAN_PREFIX_TOOL = 'tool';
 export const SPAN_PREFIX_AGENT = 'agent';
 export const SPAN_PREFIX_LLM = 'llm';
+
+// --- Auto-instrumentation ---
+export const AUTO_INSTRUMENTED = 'agentweave.auto_instrumented';
+
+// --- OTel gen_ai.* semantic conventions ---
+export const GEN_AI_OPERATION_NAME = 'gen_ai.operation.name';
+export const GEN_AI_SYSTEM = 'gen_ai.system';
+export const GEN_AI_REQUEST_MODEL = 'gen_ai.request.model';
+export const GEN_AI_USAGE_INPUT_TOKENS = 'gen_ai.usage.input_tokens';
+export const GEN_AI_USAGE_OUTPUT_TOKENS = 'gen_ai.usage.output_tokens';
+export const GEN_AI_RESPONSE_FINISH_REASONS = 'gen_ai.response.finish_reasons';
+export const GEN_AI_AGENT_NAME = 'gen_ai.agent.name';
+
+// gen_ai.operation.name values
+export const GEN_AI_OP_CHAT = 'chat';
+export const GEN_AI_OP_INVOKE_AGENT = 'invoke_agent';

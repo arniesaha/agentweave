@@ -2,6 +2,8 @@ export { AgentWeaveConfig } from './config';
 export { getTracer, withSpan, shutdownHandler } from './tracer';
 export { traceTool, traceAgent, traceLlm } from './decorators';
 export type { TraceAgentOptions } from './decorators';
+export { autoInstrument, uninstrument } from './instrument';
+export type { AutoInstrumentOptions } from './instrument';
 export * from './schema';
 
 // ── Graceful shutdown: register Node.js signal handlers ──────────────────────
