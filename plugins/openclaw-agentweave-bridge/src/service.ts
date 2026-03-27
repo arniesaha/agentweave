@@ -2,7 +2,7 @@ import { trace, context, propagation, type Span, type Context, SpanStatusCode } 
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto"
 import { NodeSDK } from "@opentelemetry/sdk-node"
 import { resourceFromAttributes } from "@opentelemetry/resources"
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base"
+import { BatchSpanProcessor, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base"
 
 interface ActiveTurn {
   span: Span
@@ -29,7 +29,7 @@ function initSdk(config: BridgeConfig): void {
     "prov.agent.id": config.agentId ?? "nix-v1",
     ...(config.project ? { "prov.project": config.project } : {}),
   })
-  sdk = new NodeSDK({ resource, spanProcessors: [new BatchSpanProcessor(exporter)] })
+  sdk = new NodeSDK({ resource, spanProcessors: [new SimpleSpanProcessor(exporter)] })
   sdk.start()
   console.log("[agentweave-bridge] OTel SDK started, exporting to:", `${config.otlpEndpoint}/v1/traces`)
 }
@@ -106,7 +106,7 @@ export function createAgentWeaveBridgeService() {
           switch (e.type) {
             case "message.queued": {
               const sessionKey = e.sessionKey ?? ""
-              const sessionId = e.sessionId ?? ""
+              const sessionId = e.sessionId || e.sessionKey || ""
               if (!sessionKey) break
 
               const tracer = trace.getTracer("openclaw-agentweave-bridge")
