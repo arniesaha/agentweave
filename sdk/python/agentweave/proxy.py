@@ -1455,9 +1455,22 @@ def _set_request_attrs(
     span.set_attribute(schema.GEN_AI_REQUEST_MODEL, agent_model)
     span.set_attribute(schema.GEN_AI_AGENT_NAME, agent_id)
 
-    # Apply global session context (env-var defaults overrideable via POST /session)
+    # Apply global session context (env-var defaults) — but don't overwrite
+    # per-request values that were already set explicitly above.
+    _explicit_session_attrs: set[str] = set()
+    if session_id is not None:
+        _explicit_session_attrs.update({schema.SESSION_ID, schema.PROV_SESSION_ID})
+    if project is not None:
+        _explicit_session_attrs.add(schema.PROV_PROJECT)
+    if turn is not None:
+        _explicit_session_attrs.add(schema.PROV_SESSION_TURN)
+    if parent_session_id is not None:
+        _explicit_session_attrs.add(schema.PROV_PARENT_SESSION_ID)
+    if agent_type is not None:
+        _explicit_session_attrs.add(schema.PROV_AGENT_TYPE)
     for k, v in _session_context.items():
-        span.set_attribute(k, v)
+        if k not in _explicit_session_attrs:
+            span.set_attribute(k, v)
 
     # Only fall back to cfg.agent_id if no per-request agent_id was provided via header
     if not agent_id:

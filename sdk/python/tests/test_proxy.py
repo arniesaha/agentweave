@@ -625,6 +625,9 @@ class TestSessionContext:
     def _call(self, monkeypatch, session_id=None, project=None, turn=None):
         from agentweave.config import AgentWeaveConfig
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        # Isolate from environment — clear global session context so env vars
+        # (e.g. AGENTWEAVE_SESSION_ID set in the test runner shell) don't bleed in.
+        monkeypatch.setattr(proxy_module, "_session_context", {})
         span = _FakeSpan()
         _set_request_attrs(
             span, model="test-model", provider="anthropic",
@@ -669,6 +672,23 @@ class TestSessionContext:
         assert "session.id" not in span.attrs
         assert "prov.session.id" not in span.attrs
 
+    def test_per_request_session_overrides_global(self, monkeypatch):
+        """Per-request session_id takes precedence over _session_context globals."""
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        monkeypatch.setattr(proxy_module, "_session_context", {
+            "prov.session.id": "global-sess",
+            "session.id": "global-sess",
+        })
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+            session_id="per-request-sess",
+        )
+        assert span.attrs["prov.session.id"] == "per-request-sess"
+        assert span.attrs["session.id"] == "per-request-sess"
 
 
 # ---------------------------------------------------------------------------
