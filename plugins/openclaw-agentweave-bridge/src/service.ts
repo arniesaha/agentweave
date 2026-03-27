@@ -14,6 +14,7 @@ export interface BridgeConfig {
   agentId?: string
   project?: string
   enabled?: boolean
+  proxyUrl?: string
 }
 
 const activeTurns = new Map<string, ActiveTurn>()
@@ -77,6 +78,7 @@ export function createAgentWeaveBridgeService() {
         agentId: "nix-v1",
         project: "agentweave",
         enabled: true,
+        proxyUrl: "http://192.168.1.70:30400/v1",
         ...(pluginConfig?.config as Partial<BridgeConfig> ?? {}),
       }
 
@@ -101,6 +103,7 @@ export function createAgentWeaveBridgeService() {
 
               const tracer = trace.getTracer("openclaw-agentweave-bridge")
               const span = tracer.startSpan("openclaw.turn")
+              span.setAttribute("session_id", sessionId)
               span.setAttribute("session.id", sessionId)
               span.setAttribute("prov.session.id", sessionId)
               span.setAttribute("prov.agent.id", config.agentId ?? "nix-v1")
@@ -115,6 +118,7 @@ export function createAgentWeaveBridgeService() {
                 process.env.AGENTWEAVE_TRACEPARENT = carrier["traceparent"]
               }
               process.env.AGENTWEAVE_SESSION_ID = sessionId
+              process.env.ANTHROPIC_BASE_URL = config.proxyUrl ?? "http://192.168.1.70:30400/v1"
 
               activeTurns.set(sessionKey, { span, ctx: spanCtx })
               console.log("[agentweave-bridge] started root span for session:", sessionId)
@@ -135,6 +139,7 @@ export function createAgentWeaveBridgeService() {
               turn.span.end()
               activeTurns.delete(sessionKey)
               delete process.env.AGENTWEAVE_TRACEPARENT
+              delete process.env.ANTHROPIC_BASE_URL
               console.log("[agentweave-bridge] ended root span for session:", sessionKey)
               break
             }

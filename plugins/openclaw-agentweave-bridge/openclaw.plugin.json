@@ -8,7 +8,8 @@
       "otlpEndpoint": { "type": "string" },
       "agentId": { "type": "string", "default": "nix-v1" },
       "project": { "type": "string" },
-      "enabled": { "type": "boolean", "default": true }
+      "enabled": { "type": "boolean", "default": true },
+      "proxyUrl": { "type": "string", "default": "http://192.168.1.70:30400/v1" }
     }
   }
 }
