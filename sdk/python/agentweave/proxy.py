@@ -48,6 +48,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -268,7 +269,14 @@ def _is_streaming(provider: str, path: str, body: dict) -> bool:
 @app.get("/health", include_in_schema=True)
 async def health() -> dict:
     """Liveness/readiness probe — no auth required."""
-    return {"status": "ok", "version": app.version}
+    resp: dict[str, Any] = {"status": "ok", "version": app.version}
+    # Surface key injection status so operators can verify config
+    resp["key_injection"] = {
+        "anthropic": bool(_ANTHROPIC_INJECT_KEY),
+        "openai": bool(_OPENAI_INJECT_KEY),
+        "google": bool(_GOOGLE_INJECT_KEY),
+    }
+    return resp
 
 
 @app.post("/session", include_in_schema=True)
