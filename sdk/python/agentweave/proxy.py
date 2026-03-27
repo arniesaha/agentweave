@@ -747,7 +747,8 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     query_string = request.url.query
 
     agent_id = (
-        request.headers.get("x-agentweave-agent-id")
+        os.getenv("AGENTWEAVE_AGENT_ID")
+        or request.headers.get("x-agentweave-agent-id")
         or _config_value("agent_id")
         or "unattributed"
     )
@@ -757,7 +758,12 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         or model
     )
 
-    session_id = request.headers.get("x-agentweave-session-id")
+    # Prefer env var (set dynamically per-turn by the bridge plugin) over
+    # the static header from the Anthropic provider config.
+    session_id = (
+        os.getenv("AGENTWEAVE_SESSION_ID")
+        or request.headers.get("x-agentweave-session-id")
+    )
     # Only use explicitly set project — do NOT infer from agent_id prefix.
     # Use AGENTWEAVE_PROJECT env var or X-AgentWeave-Project header.
     project = request.headers.get("x-agentweave-project") or os.getenv("AGENTWEAVE_PROJECT") or None
