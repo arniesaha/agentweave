@@ -10,7 +10,7 @@
 
 import React, { useMemo, useState } from 'react'
 import { Tag, ChevronDown, X } from 'lucide-react'
-import { TraceRow } from '../lib/queries'
+import { TraceRow, TempoSpan } from '../lib/queries'
 
 interface Props {
   traces: TraceRow[]
@@ -74,13 +74,13 @@ export function PromptVersionFilter({ traces, selectedPromptVersion, onSelectPro
   const uniqueVersionKeys = summaries.map((s) => `${s.promptName}@${s.version}`)
 
   return (
-    <div className="rounded-xl border border-slate-700/60 bg-slate-800/40 p-4 space-y-3">
+    <div className="rounded-xl border border-edge bg-surface-raised p-4 space-y-3">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Tag className="w-3.5 h-3.5 text-violet-400" />
-          <span className="text-xs font-semibold text-slate-300">Prompt Versions</span>
-          <span className="text-xs text-slate-500 font-mono">
+          <Tag className="w-3.5 h-3.5 text-[#B88CFF]" />
+          <span className="text-xs font-semibold text-ink">Prompt Versions</span>
+          <span className="text-xs text-ink-muted mono">
             {summaries.length} version{summaries.length !== 1 ? 's' : ''}
           </span>
         </div>
@@ -88,7 +88,7 @@ export function PromptVersionFilter({ traces, selectedPromptVersion, onSelectPro
           {selectedPromptVersion && (
             <button
               onClick={() => onSelectPromptVersion(null)}
-              className="flex items-center gap-1 text-xs text-violet-400 hover:text-violet-300 transition-colors"
+              className="flex items-center gap-1 text-xs text-[#B88CFF] hover:text-[#B88CFF]/80 transition-colors"
             >
               <X className="w-3 h-3" />
               clear filter
@@ -96,7 +96,7 @@ export function PromptVersionFilter({ traces, selectedPromptVersion, onSelectPro
           )}
           <button
             onClick={() => setExpanded((e) => !e)}
-            className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-300 transition-colors"
+            className="flex items-center gap-1 text-xs text-ink-muted hover:text-ink transition-colors"
           >
             {expanded ? 'hide' : 'show'} breakdown
             <ChevronDown className={`w-3 h-3 transition-transform ${expanded ? 'rotate-180' : ''}`} />
@@ -114,16 +114,16 @@ export function PromptVersionFilter({ traces, selectedPromptVersion, onSelectPro
               key={key}
               onClick={() => onSelectPromptVersion(active ? null : key)}
               className={`
-                inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-mono transition-all
+                inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs mono transition-all
                 ${active
-                  ? 'bg-violet-500/30 border border-violet-500/50 text-violet-200'
-                  : 'bg-slate-700/50 border border-slate-600/50 text-slate-400 hover:border-violet-500/40 hover:text-slate-300'}
+                  ? 'bg-accent/12 border border-accent/25 text-accent'
+                  : 'bg-surface border border-edge text-ink-muted hover:border-edge-hover hover:text-ink'}
               `}
             >
-              <span className="text-slate-500">{s.promptName}</span>
-              <span className="text-slate-400">/</span>
+              <span className="text-ink-muted">{s.promptName}</span>
+              <span className="text-ink-faint">/</span>
               <span>{s.version}</span>
-              <span className={`ml-0.5 ${active ? 'text-violet-300' : 'text-slate-500'}`}>
+              <span className={`ml-0.5 ${active ? 'text-accent' : 'text-ink-muted'}`}>
                 ×{s.count}
               </span>
             </button>
@@ -136,7 +136,7 @@ export function PromptVersionFilter({ traces, selectedPromptVersion, onSelectPro
         <div className="mt-2 overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-slate-500 border-b border-slate-700/50">
+              <tr className="text-ink-muted border-b border-edge">
                 <th className="text-left py-1.5 pr-3 font-medium">Prompt</th>
                 <th className="text-left py-1.5 pr-3 font-medium">Version</th>
                 <th className="text-right py-1.5 pr-3 font-medium">Calls</th>
@@ -155,30 +155,30 @@ export function PromptVersionFilter({ traces, selectedPromptVersion, onSelectPro
                     key={key}
                     onClick={() => onSelectPromptVersion(active ? null : key)}
                     className={`
-                      cursor-pointer border-b border-slate-700/30 transition-colors
-                      ${active ? 'bg-violet-500/10' : 'hover:bg-slate-700/20'}
+                      cursor-pointer border-b border-edge/30 transition-colors
+                      ${active ? 'bg-accent/8' : 'hover:bg-surface-overlay'}
                     `}
                   >
-                    <td className="py-1.5 pr-3 text-slate-300 font-mono">{s.promptName}</td>
-                    <td className="py-1.5 pr-3 font-mono">
-                      <span className={`px-1.5 py-0.5 rounded text-xs ${active ? 'bg-violet-500/20 text-violet-300' : 'bg-slate-700/50 text-slate-400'}`}>
+                    <td className="py-1.5 pr-3 text-ink mono">{s.promptName}</td>
+                    <td className="py-1.5 pr-3 mono">
+                      <span className={`px-1.5 py-0.5 rounded text-xs ${active ? 'bg-accent/12 text-accent' : 'bg-surface-overlay text-ink-muted'}`}>
                         {s.version}
                       </span>
                     </td>
-                    <td className="py-1.5 pr-3 text-right text-slate-300 tabular-nums">{s.count}</td>
-                    <td className="py-1.5 pr-3 text-right text-slate-300 tabular-nums">
+                    <td className="py-1.5 pr-3 text-right text-ink mono">{s.count}</td>
+                    <td className="py-1.5 pr-3 text-right text-ink mono">
                       {s.avgLatencyMs >= 1000
                         ? `${(s.avgLatencyMs / 1000).toFixed(1)}s`
                         : `${Math.round(s.avgLatencyMs)}ms`}
                     </td>
-                    <td className="py-1.5 pr-3 text-right text-slate-400 tabular-nums">
+                    <td className="py-1.5 pr-3 text-right text-ink-muted mono">
                       {Math.round(s.avgTokensIn).toLocaleString()}
                     </td>
-                    <td className="py-1.5 pr-3 text-right text-slate-400 tabular-nums">
+                    <td className="py-1.5 pr-3 text-right text-ink-muted mono">
                       {Math.round(s.avgTokensOut).toLocaleString()}
                     </td>
-                    <td className="py-1.5 text-right tabular-nums">
-                      <span className={s.totalCostUsd > 0 ? 'text-amber-400' : 'text-slate-500'}>
+                    <td className="py-1.5 text-right mono">
+                      <span className={s.totalCostUsd > 0 ? 'text-signal-amber' : 'text-ink-muted'}>
                         ${s.totalCostUsd.toFixed(4)}
                       </span>
                     </td>
@@ -206,4 +206,21 @@ export function filterByPromptVersion(traces: TraceRow[], selectedKey: string | 
       t.attributes?.['prov.prompt.name'] === name &&
       t.attributes?.['prov.prompt.version'] === version,
   )
+}
+
+/**
+ * Filter a list of TempoSpans by a selected prompt version key (name@version).
+ * Works with raw Tempo responses where attributes are nested arrays.
+ */
+export function filterTempoSpansByPromptVersion(traces: TempoSpan[], selectedKey: string | null): TempoSpan[] {
+  if (!selectedKey) return traces
+  const atIdx = selectedKey.lastIndexOf('@')
+  const name = atIdx >= 0 ? selectedKey.slice(0, atIdx) : selectedKey
+  const version = atIdx >= 0 ? selectedKey.slice(atIdx + 1) : ''
+  return traces.filter((t) => {
+    const attrs = t.spanSets?.[0]?.spans?.[0]?.attributes ?? t.spanSet?.spans?.[0]?.attributes ?? []
+    const pName = attrs.find((a) => a.key === 'prov.prompt.name')?.value?.stringValue
+    const pVersion = attrs.find((a) => a.key === 'prov.prompt.version')?.value?.stringValue
+    return pName === name && pVersion === version
+  })
 }

@@ -22,8 +22,8 @@ import { AlertTriangle, DollarSign } from 'lucide-react'
 import { TraceRow, TimeRange, getStepForRange } from '../lib/queries'
 
 const COLORS = [
-  '#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444',
-  '#ec4899', '#84cc16', '#f97316', '#3b82f6',
+  '#00E5CC', '#5BA4F5', '#FFBF47', '#7DDB80', '#B88CFF',
+  '#FF8C94', '#5CECC6', '#FFD166', '#88A4F8', '#FF6B6B',
 ]
 
 interface BudgetStatus {
@@ -119,13 +119,13 @@ function MiniSparkline({ series, budgetLimit, budgetSpent }: MiniSparklineProps)
   const isExceeded = pct !== null && pct >= 100
 
   const barColor = isExceeded
-    ? 'bg-red-500'
+    ? 'bg-signal-coral'
     : isNearLimit
-      ? 'bg-amber-500'
-      : 'bg-indigo-500'
+      ? 'bg-signal-amber'
+      : 'bg-signal-lime'
 
   return (
-    <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50">
+    <div className="card glow-hover p-3">
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
@@ -133,17 +133,17 @@ function MiniSparkline({ series, budgetLimit, budgetSpent }: MiniSparklineProps)
             className="inline-block w-2 h-2 rounded-full"
             style={{ backgroundColor: series.color }}
           />
-          <span className="text-xs font-medium text-gray-300 truncate max-w-[120px]" title={series.agentId}>
+          <span className="text-xs font-medium text-ink-muted truncate max-w-[120px]" title={series.agentId}>
             {series.agentId}
           </span>
           {isExceeded && (
-            <span title="Budget exceeded"><AlertTriangle className="w-3 h-3 text-red-400 shrink-0" /></span>
+            <span title="Budget exceeded"><AlertTriangle className="w-3 h-3 text-signal-coral shrink-0" /></span>
           )}
           {isNearLimit && !isExceeded && (
-            <span title="Near budget limit"><AlertTriangle className="w-3 h-3 text-amber-400 shrink-0" /></span>
+            <span title="Near budget limit"><AlertTriangle className="w-3 h-3 text-signal-amber shrink-0" /></span>
           )}
         </div>
-        <span className="text-xs font-mono text-gray-400">
+        <span className="text-xs mono text-ink-muted">
           ${series.totalSpend.toFixed(4)}
         </span>
       </div>
@@ -162,11 +162,11 @@ function MiniSparkline({ series, budgetLimit, budgetSpent }: MiniSparklineProps)
             <YAxis hide />
             <Tooltip
               contentStyle={{
-                background: '#1e293b',
-                border: '1px solid #334155',
+                background: '#131720',
+                border: '1px solid #1E2433',
                 borderRadius: '6px',
                 fontSize: '11px',
-                color: '#e2e8f0',
+                color: '#E8ECF4',
               }}
               formatter={(v: number) => [`$${v.toFixed(5)}`, 'Cost']}
               labelFormatter={() => ''}
@@ -187,16 +187,16 @@ function MiniSparkline({ series, budgetLimit, budgetSpent }: MiniSparklineProps)
       {/* Budget progress bar (only shown when a limit is configured) */}
       {pct !== null && budgetLimit != null && (
         <div className="mt-2">
-          <div className="flex justify-between text-[10px] text-gray-500 mb-1">
+          <div className="flex justify-between text-[10px] text-ink-faint mb-1">
             <span>Daily budget</span>
             <span>
-              ${budgetSpent.toFixed(4)} / ${budgetLimit.toFixed(2)}
+              <span className="mono">${budgetSpent.toFixed(4)}</span> / <span className="mono">${budgetLimit.toFixed(2)}</span>
               {isExceeded && (
-                <span className="ml-1 text-red-400 font-semibold">EXCEEDED</span>
+                <span className="ml-1 text-signal-coral font-semibold">EXCEEDED</span>
               )}
             </span>
           </div>
-          <div className="w-full bg-slate-700 rounded-full h-1.5">
+          <div className="w-full bg-surface-overlay rounded-full h-1.5">
             <div
               className={`h-1.5 rounded-full transition-all duration-300 ${barColor}`}
               style={{ width: `${pct}%` }}
@@ -214,14 +214,14 @@ export function CostSparklines({ traces, timeRange, loading }: CostSparklinesPro
 
   if (loading) {
     return (
-      <div className="bg-slate-900/50 rounded-xl p-4 border border-slate-700/50">
+      <div className="card p-4">
         <div className="flex items-center gap-2 mb-4">
-          <DollarSign className="w-4 h-4 text-emerald-400" />
-          <h3 className="text-sm font-semibold text-gray-200">Cost per Agent</h3>
+          <DollarSign className="w-4 h-4 text-accent" />
+          <h3 className="text-sm font-semibold text-ink">Cost per Agent</h3>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="bg-slate-800/50 rounded-lg p-3 h-28 animate-pulse" />
+            <div key={i} className="bg-surface-raised rounded-lg p-3 h-28 animate-pulse" />
           ))}
         </div>
       </div>
@@ -230,26 +230,26 @@ export function CostSparklines({ traces, timeRange, loading }: CostSparklinesPro
 
   if (!series.length) {
     return (
-      <div className="bg-slate-900/50 rounded-xl p-4 border border-slate-700/50">
+      <div className="card p-4">
         <div className="flex items-center gap-2 mb-2">
-          <DollarSign className="w-4 h-4 text-emerald-400" />
-          <h3 className="text-sm font-semibold text-gray-200">Cost per Agent</h3>
+          <DollarSign className="w-4 h-4 text-accent" />
+          <h3 className="text-sm font-semibold text-ink">Cost per Agent</h3>
         </div>
-        <p className="text-xs text-gray-500">No cost data in selected time range.</p>
+        <p className="text-xs text-ink-faint">No cost data in selected time range.</p>
       </div>
     )
   }
 
   return (
-    <div className="bg-slate-900/50 rounded-xl p-4 border border-slate-700/50">
+    <div className="card p-4">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <DollarSign className="w-4 h-4 text-emerald-400" />
-          <h3 className="text-sm font-semibold text-gray-200">Cost per Agent</h3>
-          <span className="text-xs text-gray-500">(sparklines + daily budget progress)</span>
+          <DollarSign className="w-4 h-4 text-accent" />
+          <h3 className="text-sm font-semibold text-ink">Cost per Agent</h3>
+          <span className="text-xs text-ink-faint">(sparklines + daily budget progress)</span>
         </div>
         {budgetStatus == null && (
-          <span className="text-[10px] text-gray-600 italic">Budget limits: not configured</span>
+          <span className="text-[10px] text-ink-faint italic">Budget limits: not configured</span>
         )}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">

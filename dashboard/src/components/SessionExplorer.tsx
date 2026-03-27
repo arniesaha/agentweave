@@ -64,13 +64,13 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
       {/* Section header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-slate-200">Session Explorer</h2>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <h2 className="text-sm font-semibold text-ink">Session Explorer</h2>
+          <p className="text-xs text-ink-muted mt-0.5">
             Agent sessions, parent–child relationships, and cost per task
           </p>
         </div>
         {nodes.length > 0 && (
-          <span className="text-xs text-slate-600 font-mono">
+          <span className="text-xs text-ink-faint mono">
             {nodes.length} session{nodes.length !== 1 ? 's' : ''}
           </span>
         )}
@@ -84,12 +84,12 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
           onChange={(e) => setReplaySessionId(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') openSessionReplay() }}
           placeholder="Click a session node or paste ID to replay in Tempo…"
-          className="flex-1 bg-[#111118] border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+          className="flex-1 bg-surface border border-edge rounded-lg px-3 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none focus:border-accent/60"
         />
         <button
           onClick={openSessionReplay}
           disabled={!replaySessionId.trim()}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent/12 text-accent border border-accent/25 hover:bg-accent/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           <ExternalLink size={12} />
           Open in Grafana
@@ -101,10 +101,10 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
 
       {/* Fullscreen overlay */}
       {fullscreenPanel !== null && (
-        <div className="fixed inset-0 z-50 bg-[#0a0a0f] p-4 flex flex-col">
+        <div className="fixed inset-0 z-50 bg-void p-4 flex flex-col">
           <button
             onClick={() => setFullscreenPanel(null)}
-            className="absolute top-4 right-4 z-10 p-1.5 rounded-lg bg-slate-800/80 text-slate-400 hover:text-slate-100 hover:bg-slate-700 transition-colors"
+            className="absolute top-4 right-4 z-10 p-1.5 rounded-lg bg-surface-overlay text-ink-muted hover:text-ink hover:bg-surface-raised transition-colors"
             aria-label="Close fullscreen"
           >
             <X size={18} />
@@ -126,7 +126,7 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
 
       {/* Graph panels — Agents + Sessions side by side on desktop, stacked on mobile */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-[#111118] border border-slate-800 rounded-xl p-4">
+        <div className="card p-4">
           <SessionGraph
             nodes={nodes}
             edges={edges}
@@ -139,7 +139,7 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
             onFullscreen={() => setFullscreenPanel(0)}
           />
         </div>
-        <div className="bg-[#111118] border border-slate-800 rounded-xl p-4">
+        <div className="card p-4">
           <SessionGraph
             nodes={nodes}
             edges={edges}
@@ -156,47 +156,47 @@ export function SessionExplorer({ nodes, edges, rawTraces, loading, error }: Pro
 
       {/* Session list (sorted by cost desc — gives Obsidian "file list" feel) */}
       {nodes.length > 0 && (
-        <div className="bg-[#111118] border border-slate-800 rounded-xl overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-slate-800 text-xs text-slate-500 uppercase tracking-wide">
+        <div className="card overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-edge text-xs text-ink-muted uppercase tracking-wide">
             Sessions — sorted by cost
           </div>
-          <div className="divide-y divide-slate-800/50 max-h-52 overflow-y-auto">
+          <div className="divide-y divide-edge/50 max-h-52 overflow-y-auto">
             {[...nodes].sort((a, b) => b.totalCost - a.totalCost).map((node) => {
               const isSelected = node.sessionId === selectedId
               return (
                 <button
                   key={node.sessionId}
                   onClick={() => handleSelect(node.sessionId)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-800/40 ${
-                    isSelected ? 'bg-indigo-500/10' : ''
+                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-surface-overlay ${
+                    isSelected ? 'bg-accent/8' : ''
                   }`}
                 >
                   {/* Type indicator */}
                   <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                    node.hasError ? 'bg-red-400' :
-                    !node.parentSessionId ? 'bg-indigo-400' :
-                    node.agentType === 'subagent' ? 'bg-sky-400' : 'bg-teal-400'
+                    node.hasError ? 'bg-signal-coral' :
+                    !node.parentSessionId ? 'bg-accent' :
+                    node.agentType === 'subagent' ? 'bg-signal-sky' : 'bg-signal-lime'
                   }`} />
 
                   {/* Session ID + task */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-xs text-slate-400 truncate">
+                      <span className="mono text-xs text-ink-muted truncate">
                         {node.sessionId.slice(0, 16)}{node.sessionId.length > 16 ? '…' : ''}
                       </span>
                       {node.taskLabel && (
-                        <span className="text-xs text-indigo-300 truncate max-w-[180px]">
+                        <span className="text-xs text-accent truncate max-w-[180px]">
                           {node.taskLabel}
                         </span>
                       )}
                     </div>
-                    <div className="text-[10px] text-slate-600 mt-0.5">
+                    <div className="text-[10px] text-ink-faint mt-0.5">
                       {node.agentId} · {node.callCount} call{node.callCount !== 1 ? 's' : ''}
                     </div>
                   </div>
 
                   {/* Cost */}
-                  <span className={`text-xs tabular-nums flex-shrink-0 ${node.totalCost > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
+                  <span className={`text-xs mono flex-shrink-0 ${node.totalCost > 0 ? 'text-signal-lime' : 'text-ink-faint'}`}>
                     {node.totalCost > 0
                       ? `$${node.totalCost < 0.01 ? node.totalCost.toFixed(4) : node.totalCost.toFixed(2)}`
                       : '$0'}

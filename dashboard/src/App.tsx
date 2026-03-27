@@ -9,7 +9,7 @@ import { AgentAttribution } from './components/AgentAttribution'
 import { CostSparklines } from './components/CostSparklines'
 import { AgentHealthBadges } from './components/AgentHealthBadges'
 import { SessionExplorer } from './components/SessionExplorer'
-import { PromptVersionFilter, filterByPromptVersion } from './components/PromptVersionFilter'
+import { PromptVersionFilter, filterByPromptVersion, filterTempoSpansByPromptVersion } from './components/PromptVersionFilter'
 import { SessionReplay } from './components/SessionReplay'
 import {
   TimeRange,
@@ -37,6 +37,12 @@ type ActiveTab = 'overview' | 'sessions' | 'replay'
 
 const REFRESH_INTERVAL_MS = 60_000 // 60s
 
+const TAB_CONFIG: { key: ActiveTab; label: string; icon: React.ElementType }[] = [
+  { key: 'overview', label: 'Overview', icon: BarChart2 },
+  { key: 'sessions', label: 'Sessions', icon: GitBranch },
+  { key: 'replay', label: 'Replay', icon: PlayCircle },
+]
+
 export default function App() {
   const [timeRange, setTimeRange] = useState<TimeRange>('6h')
   const [refreshKey, setRefreshKey] = useState(0)
@@ -52,7 +58,6 @@ export default function App() {
     setSelectedAgent((prev) => (prev === agentId ? null : agentId))
   }, [])
 
-  // Auto-refresh every 60s
   useEffect(() => {
     const id = setInterval(() => {
       setRefreshKey((k) => k + 1)
@@ -72,14 +77,11 @@ export default function App() {
     setLastUpdated(new Date())
   }, [])
 
-  // Set initial lastUpdated
   useEffect(() => {
     setLastUpdated(new Date())
   }, [])
 
-  // ─── Trace data (drives table + stat card aggregations) ──────────────────
-
-  // Fetch up to 1000 traces with span attributes (used for table AND stat aggregation)
+  // ─── Trace data ──────────────────────────────────────────────────────────
   const { traces: rawTraces, loading: tracesLoading, error: tracesError } =
     useTempoSearch(tempoSearchQuery(selectedProject ?? undefined), timeRange, refreshKey)
 
@@ -89,19 +91,14 @@ export default function App() {
     ? traceRows.filter((t) => t.agentId === selectedAgent)
     : traceRows
 
-  // ─── Stat Card Data ───────────────────────────────────────────────────────
-
-  // 1. Total LLM Calls (separate high-limit query for accurate count)
+  // ─── Stat Card Data ────────────────────────────────────────────────────
   const { count: llmCallCount, loading: llmCallLoading, error: llmCallError } =
     useTempoSearchCount(tempoSearchQuery(selectedProject ?? undefined), timeRange, refreshKey)
 
-  // 2. Total Cost — summed from trace attributes
-  // Filter out -1.0 sentinel (unknown model pricing) before summing
   const costValue = tracesLoading ? null : traceRows
     .filter((t) => t.costUsd >= 0)
     .reduce((s, t) => s + t.costUsd, 0)
 
-  // 3. Avg Cache Hit Rate — averaged across traces that have the attribute
   const tracesWithCache = traceRows.filter((t) => t.cacheHitRate > 0)
   const cacheValue = tracesLoading
     ? null
@@ -109,43 +106,34 @@ export default function App() {
       ? tracesWithCache.reduce((s, t) => s + t.cacheHitRate, 0) / tracesWithCache.length
       : null
 
-  // 4. Avg Latency — computed from trace durations
   const avgLatencyValue = tracesLoading
     ? null
     : traceRows.length > 0
       ? traceRows.reduce((s, t) => s + t.latencyMs, 0) / traceRows.length
       : null
 
-  // ─── Time Series Data ─────────────────────────────────────────────────────
-
-  // 5. LLM Calls over Time (Prometheus spanmetrics, grouped by model)
+  // ─── Time Series Data ─────────────────────────────────────────────────
   const { series: callsSeries, loading: callsSeriesLoading, error: callsSeriesError } =
     usePromQueryRange(promLLMCallsRateQuery(), timeRange, refreshKey, 'prov_llm_model')
 
-  // 6. Cost over Time — traceqlmetrics time series (accurate across all spans)
   const { result: costMetricResult, loading: costMetricLoading, error: costMetricError } =
     useTempoMetrics(tempoCostTimeSeriesQuery(), timeRange, refreshKey)
 
   const costMetricSeries = transformTempoCostSeries(costMetricResult)
-  // Fall back to trace-derived series when traceqlmetrics returns empty (known issue with long windows)
   const costChartSeries = costMetricSeries.length > 0
     ? costMetricSeries
     : buildCostTimeSeries(traceRows, timeRange)
   const costChartSubtitle = costMetricSeries.length > 0
     ? 'Cost per time bucket (all spans)'
-    : 'Cost per time bucket (based on loaded traces only)'
+    : 'Cost per time bucket (loaded traces)'
 
-  // ─── Bar Chart Data ───────────────────────────────────────────────────────
-
-  // 7. Calls by Model
+  // ─── Bar Chart Data ───────────────────────────────────────────────────
   const { bars: callsByModel, loading: callsByModelLoading, error: callsByModelError } =
     usePromQueryInstant(promCallsByModelQuery(timeRange), timeRange, refreshKey, 'prov_llm_model')
 
-  // 8. P95 Latency by Model — computed client-side from loaded traces (spanmetrics latency_bucket not available)
   const { bars: latencyByModel, loading: latencyByModelLoading, error: latencyByModelError } = useMemo(() => {
     if (tracesLoading) return { bars: [], loading: true, error: null }
     if (!traceRows.length) return { bars: [], loading: false, error: null }
-    // Group latencies by model, compute p95 per group
     const byModel: Record<string, number[]> = {}
     for (const t of traceRows) {
       if (!t.model || t.model === 'unknown') continue
@@ -160,42 +148,33 @@ export default function App() {
     return { bars, loading: false, error: null }
   }, [traceRows, tracesLoading])
 
-  // 9. Calls by Agent (Prometheus spanmetrics)
   const { bars: callsByAgent, loading: callsByAgentLoading, error: callsByAgentError } =
     usePromQueryInstant(promCallsByAgentQuery(timeRange), timeRange, refreshKey, 'prov_agent_id')
 
-  // 10. Cost by Agent — derived from trace rows (no extra fetch needed)
   const costByAgent = buildCostByAgent(traceRows)
 
-  // 10b. Agent health scores — derived from trace rows (issue #116)
   const agentHealthScores = useMemo(
     () => computeAgentHealthScores(traceRows),
     [traceRows]
   )
 
-  // ─── Agent Attribution Data ─────────────────────────────────────────────────
-
-  // 11. Agent attribution traces (prov.agent.type, prov.parent.session.id, etc.)
+  // ─── Agent Attribution Data ──────────────────────────────────────────
   const { traces: rawAttribution, loading: attrLoading, error: attrError } =
     useTempoSearch(tempoAgentAttributionQuery(), timeRange, refreshKey)
-
   const attributionRows = transformAgentAttributionTraces(rawAttribution)
 
-  // 12. Sub-agent only traces
   const { traces: rawSubagent, loading: subagentLoading, error: subagentError } =
     useTempoSearch(tempoSubagentSearchQuery(), timeRange, refreshKey)
-
   const subagentRows = transformSubagentTraces(rawSubagent)
 
-  // 13. Session graph data (Session Explorer tab)
+  // ─── Session graph data ──────────────────────────────────────────────
   const { nodes: sessionNodes, edges: sessionEdges, rawTraces: sessionRawTraces, loading: sessionLoading, error: sessionError } =
     useSessionGraph(timeRange, refreshKey)
 
-  // Tempo error flag — only true when the core trace search fails
   const tempoError = !!(llmCallError || tracesError)
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f] overflow-x-hidden">
+    <div className="min-h-screen bg-void bg-dot-grid overflow-x-hidden">
       <Header
         timeRange={timeRange}
         onTimeRangeChange={handleTimeRangeChange}
@@ -208,53 +187,34 @@ export default function App() {
       />
 
       {/* Tab navigation */}
-      <div className="border-b border-slate-800 bg-[#0d0d14]">
-        <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 flex gap-1">
-          <button
-            onClick={() => setActiveTab('overview')}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'overview'
-                ? 'border-indigo-500 text-indigo-300'
-                : 'border-transparent text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            <BarChart2 className="w-4 h-4" />
-            Overview
-          </button>
-          <button
-            onClick={() => setActiveTab('sessions')}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'sessions'
-                ? 'border-indigo-500 text-indigo-300'
-                : 'border-transparent text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            <GitBranch className="w-4 h-4" />
-            Session Explorer
-            {sessionNodes.length > 0 && (
-              <span className="ml-1 text-xs bg-indigo-500/20 text-indigo-400 rounded-full px-1.5 py-0.5">
-                {sessionNodes.length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('replay')}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'replay'
-                ? 'border-indigo-500 text-indigo-300'
-                : 'border-transparent text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            <PlayCircle className="w-4 h-4" />
-            Session Replay
-          </button>
+      <div className="border-b border-edge bg-void/80 backdrop-blur-sm">
+        <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 flex gap-0.5">
+          {TAB_CONFIG.map(({ key, label, icon: TabIcon }) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`flex items-center gap-2 px-4 py-3 text-xs font-medium border-b-2 transition-all duration-200 ${
+                activeTab === key
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-ink-faint hover:text-ink-muted'
+              }`}
+            >
+              <TabIcon className="w-3.5 h-3.5" strokeWidth={1.5} />
+              {label}
+              {key === 'sessions' && sessionNodes.length > 0 && (
+                <span className="ml-1 text-[10px] bg-accent/10 text-accent rounded-full px-1.5 py-0.5 mono">
+                  {sessionNodes.length}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
       </div>
 
-      <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+      <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 py-6 space-y-5">
         {/* Session Explorer tab */}
         {activeTab === 'sessions' && (
-          <div className="space-y-4">
+          <div className="space-y-4 animate-fade-in">
             <PromptVersionFilter
               traces={traceRows}
               selectedPromptVersion={selectedPromptVersion}
@@ -263,7 +223,7 @@ export default function App() {
             <SessionExplorer
               nodes={sessionNodes}
               edges={sessionEdges}
-              rawTraces={sessionRawTraces}
+              rawTraces={filterTempoSpansByPromptVersion(sessionRawTraces, selectedPromptVersion)}
               loading={sessionLoading}
               error={sessionError}
             />
@@ -272,47 +232,49 @@ export default function App() {
 
         {/* Session Replay tab */}
         {activeTab === 'replay' && (
-          <SessionReplay
-            timeRange={timeRange}
-            refreshKey={refreshKey}
-          />
+          <div className="animate-fade-in">
+            <SessionReplay
+              timeRange={timeRange}
+              refreshKey={refreshKey}
+            />
+          </div>
         )}
 
-        {/* Overview tab — all existing content */}
+        {/* Overview tab */}
         {activeTab === 'overview' && (<>
         {/* Row 1: Stat Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 stagger-children">
           <StatCard
             icon={Activity}
-            iconColor="text-indigo-400"
-            iconBg="bg-indigo-500/10"
-            label="Total LLM Calls"
+            iconColor="text-accent"
+            iconBg="bg-accent/8"
+            label="LLM Calls"
             value={llmCallCount !== null ? llmCallCount.toLocaleString() : null}
             loading={llmCallLoading}
             error={llmCallError}
           />
           <StatCard
             icon={DollarSign}
-            iconColor="text-emerald-400"
-            iconBg="bg-emerald-500/10"
-            label="Total Cost (USD)"
+            iconColor="text-signal-lime"
+            iconBg="bg-signal-lime/8"
+            label="Total Cost"
             value={costValue !== null ? `$${costValue.toFixed(4)}` : null}
             loading={tracesLoading}
             error={tracesError}
           />
           <StatCard
             icon={Zap}
-            iconColor="text-amber-400"
-            iconBg="bg-amber-500/10"
-            label="Avg Cache Hit Rate"
+            iconColor="text-signal-amber"
+            iconBg="bg-signal-amber/8"
+            label="Cache Hit Rate"
             value={cacheValue !== null ? `${(cacheValue * 100).toFixed(1)}%` : null}
             loading={tracesLoading}
             error={tracesError}
           />
           <StatCard
             icon={RefreshCw}
-            iconColor="text-cyan-400"
-            iconBg="bg-cyan-500/10"
+            iconColor="text-signal-sky"
+            iconBg="bg-signal-sky/8"
             label="Avg Latency"
             value={avgLatencyValue !== null ? `${(avgLatencyValue / 1000).toFixed(1)}s` : null}
             loading={tracesLoading}
@@ -332,7 +294,7 @@ export default function App() {
             valueFormatter={(v) => v.toFixed(0)}
           />
           <TimeSeriesChart
-            title="Cost over Time (USD)"
+            title="Cost over Time"
             subtitle={costChartSubtitle}
             series={costChartSeries}
             loading={costMetricLoading && tracesLoading}
@@ -342,7 +304,7 @@ export default function App() {
           />
         </div>
 
-        {/* Row 3: Bar Charts — Model breakdown */}
+        {/* Row 3: Model breakdown */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <BarChartPanel
             title="Calls by Model"
@@ -354,7 +316,7 @@ export default function App() {
           />
           <BarChartPanel
             title="P95 Latency by Model"
-            subtitle="95th percentile latency in ms (from loaded traces)"
+            subtitle="95th percentile latency (ms)"
             data={latencyByModel}
             loading={latencyByModelLoading}
             error={latencyByModelError}
@@ -366,7 +328,7 @@ export default function App() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <BarChartPanel
             title="Calls by Agent"
-            subtitle="Total LLM calls per agent in time range — click a bar to filter traces"
+            subtitle="Click a bar to filter traces"
             data={callsByAgent}
             loading={callsByAgentLoading}
             error={callsByAgentError}
@@ -375,8 +337,8 @@ export default function App() {
             selectedLabel={selectedAgent}
           />
           <BarChartPanel
-            title="Cost by Agent (USD)"
-            subtitle="Estimated total cost per agent in time range"
+            title="Cost by Agent"
+            subtitle="Estimated total cost per agent"
             data={costByAgent}
             loading={tracesLoading}
             error={null}
@@ -384,20 +346,21 @@ export default function App() {
           />
         </div>
 
-        {/* Cost Sparklines per Agent + Budget Progress */}
+        {/* Cost Sparklines + Budget */}
         <CostSparklines
           traces={traceRows}
           timeRange={timeRange}
           loading={tracesLoading}
         />
 
-        {/* Agent Health Badges (issue #116) */}
+        {/* Agent Health */}
         <AgentHealthBadges
           scores={agentHealthScores}
           loading={tracesLoading}
           error={tracesError}
         />
-        {/* Agent Attribution Section */}
+
+        {/* Agent Attribution */}
         <AgentAttribution
           attributionRows={attributionRows}
           attributionLoading={attrLoading}
@@ -407,23 +370,25 @@ export default function App() {
           subagentError={subagentError}
         />
 
-        {/* Row 5: Trace Table */}
+        {/* Trace filter badge */}
         {selectedAgent && (
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400">Showing traces for:</span>
-            <span className="flex items-center gap-1.5 text-xs font-medium text-indigo-300 bg-slate-700 px-2.5 py-1 rounded-full">
+            <span className="text-xs text-ink-faint">Filtered:</span>
+            <span className="flex items-center gap-1.5 text-xs font-medium text-accent bg-accent/8 px-2.5 py-1 rounded-full border border-accent/20">
               {selectedAgent}
               <button
                 onClick={() => setSelectedAgent(null)}
-                className="ml-0.5 text-indigo-400 hover:text-white transition-colors"
+                className="ml-0.5 text-accent/60 hover:text-accent transition-colors"
                 aria-label="Clear agent filter"
               >
                 <X className="w-3 h-3" />
               </button>
             </span>
-            <span className="text-xs text-gray-600">({filteredTraceRows.length} traces)</span>
+            <span className="text-xs text-ink-faint mono">({filteredTraceRows.length})</span>
           </div>
         )}
+
+        {/* Trace Table */}
         <TraceTable
           traces={filteredTraceRows}
           loading={tracesLoading}

@@ -62,8 +62,8 @@ export function SessionDetail({
 
   if (!node) {
     return (
-      <div className="flex flex-col items-center justify-center h-40 text-slate-500 text-sm gap-2">
-        <svg className="w-8 h-8 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div className="flex flex-col items-center justify-center h-40 text-ink-muted text-sm gap-2">
+        <svg className="w-8 h-8 text-ink-faint" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
             d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
@@ -76,28 +76,28 @@ export function SessionDetail({
   const sessionEnd = node.lastSeen ? new Date(node.lastSeen).toLocaleTimeString() : '—'
 
   return (
-    <div className="bg-[#111118] border border-slate-800 rounded-xl overflow-hidden">
+    <div className="card overflow-hidden">
       {/* Header */}
-      <div className="flex items-start justify-between px-4 py-3 border-b border-slate-800">
+      <div className="flex items-start justify-between px-4 py-3 border-b border-edge">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
               node.agentType === 'subagent'
-                ? 'bg-sky-500/10 text-sky-300 border border-sky-500/20'
-                : 'bg-indigo-500/10 text-indigo-300 border border-indigo-500/20'
+                ? 'bg-signal-sky/10 text-signal-sky border border-signal-sky/20'
+                : 'bg-accent/8 text-accent border border-accent/20'
             }`}>
               {node.agentType}
             </span>
-            <span className="text-xs text-slate-500 font-mono truncate">{node.agentId}</span>
+            <span className="text-xs text-ink-muted mono truncate">{node.agentId}</span>
           </div>
-          <div className="mt-1 font-mono text-xs text-slate-400 truncate">{node.sessionId}</div>
+          <div className="mt-1 mono text-xs text-ink-muted truncate">{node.sessionId}</div>
           {node.taskLabel && (
-            <div className="mt-1 text-sm text-indigo-300">📋 {node.taskLabel}</div>
+            <div className="mt-1 text-sm text-accent">📋 {node.taskLabel}</div>
           )}
         </div>
         <button
           onClick={onClose}
-          className="ml-3 flex-shrink-0 text-slate-500 hover:text-slate-300 transition-colors p-1"
+          className="ml-3 flex-shrink-0 text-ink-muted hover:text-ink transition-colors p-1"
           aria-label="Close"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -107,30 +107,30 @@ export function SessionDetail({
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-slate-800">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-edge">
         {[
           { label: 'LLM Calls', value: String(node.callCount) },
           { label: 'Total Cost', value: formatCost(node.totalCost) },
           { label: 'Tokens In', value: node.tokensIn.toLocaleString() },
           { label: 'Tokens Out', value: node.tokensOut.toLocaleString() },
         ].map(({ label, value }) => (
-          <div key={label} className="bg-[#111118] px-4 py-2.5">
-            <div className="text-[10px] text-slate-500 uppercase tracking-wide">{label}</div>
-            <div className="text-sm font-semibold text-slate-200 mt-0.5">{value}</div>
+          <div key={label} className="bg-surface px-4 py-2.5">
+            <div className="text-[10px] text-ink-muted uppercase tracking-wide">{label}</div>
+            <div className="text-sm font-semibold text-ink mt-0.5">{value}</div>
           </div>
         ))}
       </div>
 
       {/* Time range */}
-      <div className="flex items-center gap-4 px-4 py-2 text-xs text-slate-500 border-b border-slate-800">
-        <span>Start: <span className="text-slate-400">{sessionStart}</span></span>
-        <span>End: <span className="text-slate-400">{sessionEnd}</span></span>
-        <span>Duration: <span className="text-slate-400">{formatDuration(node.durationMs)}</span></span>
+      <div className="flex items-center gap-4 px-4 py-2 text-xs text-ink-muted border-b border-edge">
+        <span>Start: <span className="text-ink-muted">{sessionStart}</span></span>
+        <span>End: <span className="text-ink-muted">{sessionEnd}</span></span>
+        <span>Duration: <span className="text-ink-muted">{formatDuration(node.durationMs)}</span></span>
         {node.parentSessionId && (
           <span>
             Parent:{' '}
             <button
-              className="text-sky-400 hover:text-sky-300 font-mono underline underline-offset-2"
+              className="text-signal-sky hover:text-signal-sky/80 mono underline underline-offset-2"
               onClick={() => onSelectSession(node.parentSessionId)}
             >
               {node.parentSessionId.slice(0, 12)}…
@@ -141,8 +141,8 @@ export function SessionDetail({
 
       {/* Child sessions */}
       {children.length > 0 && (
-        <div className="px-4 py-3 border-b border-slate-800">
-          <div className="text-xs text-slate-500 mb-2 uppercase tracking-wide">
+        <div className="px-4 py-3 border-b border-edge">
+          <div className="text-xs text-ink-muted mb-2 uppercase tracking-wide">
             Child Sessions ({children.length})
           </div>
           <div className="flex flex-wrap gap-2">
@@ -150,14 +150,14 @@ export function SessionDetail({
               <button
                 key={child.sessionId}
                 onClick={() => onSelectSession(child.sessionId)}
-                className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-300 transition-colors"
+                className="flex items-center gap-1.5 text-xs bg-surface-raised hover:bg-surface-overlay border border-edge rounded-lg px-2.5 py-1.5 text-ink transition-colors"
               >
-                <span className="w-2 h-2 rounded-full bg-sky-400 flex-shrink-0" />
-                <span className="font-mono">{child.sessionId.slice(0, 10)}…</span>
+                <span className="w-2 h-2 rounded-full bg-signal-sky flex-shrink-0" />
+                <span className="mono">{child.sessionId.slice(0, 10)}…</span>
                 {child.taskLabel && (
-                  <span className="text-slate-500 truncate max-w-[120px]">{child.taskLabel}</span>
+                  <span className="text-ink-muted truncate max-w-[120px]">{child.taskLabel}</span>
                 )}
-                <span className="text-emerald-400 ml-1">{formatCost(child.totalCost)}</span>
+                <span className="text-signal-lime ml-1">{formatCost(child.totalCost)}</span>
               </button>
             ))}
           </div>
@@ -166,19 +166,19 @@ export function SessionDetail({
 
       {/* Call timeline */}
       <div className="px-4 py-3">
-        <div className="text-xs text-slate-500 mb-3 uppercase tracking-wide">
+        <div className="text-xs text-ink-muted mb-3 uppercase tracking-wide">
           LLM Call Timeline ({calls.length} calls)
         </div>
 
         {calls.length === 0 ? (
-          <div className="text-xs text-slate-600 py-4 text-center">
+          <div className="text-xs text-ink-faint py-4 text-center">
             No calls found for this session in the current time range.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="text-slate-500 border-b border-slate-800">
+                <tr className="text-ink-muted border-b border-edge">
                   <th className="text-left py-1.5 pr-3 font-medium w-20">Time</th>
                   <th className="text-left py-1.5 pr-3 font-medium">Model</th>
                   <th className="text-right py-1.5 pr-3 font-medium">In</th>
@@ -187,25 +187,25 @@ export function SessionDetail({
                   <th className="text-right py-1.5 font-medium">Latency</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/50">
+              <tbody className="divide-y divide-edge/50">
                 {calls.map((call, i) => (
-                  <tr key={call.traceId || i} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-1.5 pr-3 text-slate-500 font-mono tabular-nums">
+                  <tr key={call.traceId || i} className="hover:bg-surface-overlay transition-colors">
+                    <td className="py-1.5 pr-3 text-ink-muted mono">
                       {formatTime(call.time)}
                     </td>
-                    <td className="py-1.5 pr-3 text-slate-300 font-mono truncate max-w-[140px]">
+                    <td className="py-1.5 pr-3 text-ink mono truncate max-w-[140px]">
                       {shortModel(call.model)}
                     </td>
-                    <td className="py-1.5 pr-3 text-right text-slate-400 tabular-nums">
+                    <td className="py-1.5 pr-3 text-right text-ink-muted mono">
                       {call.tokensIn > 0 ? call.tokensIn.toLocaleString() : '—'}
                     </td>
-                    <td className="py-1.5 pr-3 text-right text-slate-400 tabular-nums">
+                    <td className="py-1.5 pr-3 text-right text-ink-muted mono">
                       {call.tokensOut > 0 ? call.tokensOut.toLocaleString() : '—'}
                     </td>
-                    <td className="py-1.5 pr-3 text-right text-emerald-400 tabular-nums">
+                    <td className="py-1.5 pr-3 text-right text-signal-lime mono">
                       {call.costUsd > 0 ? formatCost(call.costUsd) : '—'}
                     </td>
-                    <td className="py-1.5 text-right text-slate-400 tabular-nums">
+                    <td className="py-1.5 text-right text-ink-muted mono">
                       {call.latencyMs ? formatDuration(call.latencyMs) : '—'}
                     </td>
                   </tr>
@@ -231,32 +231,32 @@ export function DailySummaryBanner({ nodes, loading }: DailySummaryBannerProps) 
 
   if (loading) {
     return (
-      <div className="h-12 bg-[#111118] border border-slate-800 rounded-xl animate-pulse" />
+      <div className="h-12 bg-surface border border-edge rounded-xl animate-pulse" />
     )
   }
 
   if (nodes.length === 0) return null
 
   return (
-    <div className="bg-[#111118] border border-slate-800 rounded-xl px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-      <span className="text-slate-500 text-xs uppercase tracking-wide font-medium">Session Summary</span>
-      <span className="text-slate-300">
-        <span className="font-semibold text-indigo-400">{summary.topLevelSessions}</span>
-        <span className="text-slate-500 ml-1">top-level</span>
+    <div className="card px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+      <span className="text-ink-muted text-xs uppercase tracking-wide font-medium">Session Summary</span>
+      <span className="text-ink">
+        <span className="font-semibold text-accent">{summary.topLevelSessions}</span>
+        <span className="text-ink-muted ml-1">top-level</span>
       </span>
-      <span className="text-slate-300">
-        <span className="font-semibold text-sky-400">{summary.subAgentSessions}</span>
-        <span className="text-slate-500 ml-1">sub-agents</span>
+      <span className="text-ink">
+        <span className="font-semibold text-signal-sky">{summary.subAgentSessions}</span>
+        <span className="text-ink-muted ml-1">sub-agents</span>
       </span>
-      <span className="text-slate-300">
-        <span className="font-semibold text-slate-200">{summary.totalCalls.toLocaleString()}</span>
-        <span className="text-slate-500 ml-1">total calls</span>
+      <span className="text-ink">
+        <span className="font-semibold text-ink">{summary.totalCalls.toLocaleString()}</span>
+        <span className="text-ink-muted ml-1">total calls</span>
       </span>
-      <span className="text-slate-300">
-        <span className="font-semibold text-emerald-400">
+      <span className="text-ink">
+        <span className="font-semibold text-signal-lime">
           ${summary.totalCost < 0.01 ? summary.totalCost.toFixed(4) : summary.totalCost.toFixed(2)}
         </span>
-        <span className="text-slate-500 ml-1">total cost</span>
+        <span className="text-ink-muted ml-1">total cost</span>
       </span>
     </div>
   )

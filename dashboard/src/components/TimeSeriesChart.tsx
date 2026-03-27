@@ -35,19 +35,15 @@ interface TimeSeriesChartProps {
 }
 
 const COLORS = [
-  '#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444',
-  '#ec4899', '#84cc16', '#f97316', '#3b82f6',
+  '#00E5CC', '#5BA4F5', '#FFBF47', '#7DDB80', '#FF6B6B',
+  '#B88CFF', '#FF8C94', '#5CECC6', '#FFD166', '#88A4F8',
 ]
 
-// Merge multiple series into a single array by time
 function mergeSeries(series: Series[]): Record<string, number | string>[] {
   if (!series.length) return []
-
-  // collect all timestamps
   const times = new Set<number>()
   series.forEach((s) => s.points.forEach((p) => times.add(p.time)))
   const sortedTimes = Array.from(times).sort((a, b) => a - b)
-
   return sortedTimes.map((t) => {
     const row: Record<string, number | string> = { time: t }
     series.forEach((s) => {
@@ -71,13 +67,15 @@ const CustomTooltip = ({
 }) => {
   if (!active || !payload?.length) return null
   return (
-    <div className="bg-[#111118] border border-[#1e1e2e] rounded-lg p-3 shadow-xl">
-      <p className="text-gray-400 text-xs mb-2">{label ? format(label, 'MMM d HH:mm') : ''}</p>
+    <div className="bg-surface-overlay border border-edge rounded-lg p-3 shadow-xl backdrop-blur-sm">
+      <p className="text-ink-faint text-[10px] uppercase tracking-wider mb-2 mono">
+        {label ? format(label, 'MMM d HH:mm') : ''}
+      </p>
       {payload.map((p) => (
-        <div key={p.name} className="flex items-center gap-2 text-xs">
-          <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
-          <span className="text-gray-400">{p.name}:</span>
-          <span className="text-white font-medium">{valueFormatter ? valueFormatter(p.value) : p.value.toFixed(2)}</span>
+        <div key={p.name} className="flex items-center gap-2 text-xs py-0.5">
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
+          <span className="text-ink-muted">{p.name}</span>
+          <span className="text-ink font-medium mono ml-auto">{valueFormatter ? valueFormatter(p.value) : p.value.toFixed(2)}</span>
         </div>
       ))}
     </div>
@@ -87,11 +85,11 @@ const CustomTooltip = ({
 function SkeletonChart() {
   return (
     <div className="h-48 flex items-end gap-1 px-4">
-      {Array.from({ length: 20 }).map((_, i) => (
+      {Array.from({ length: 24 }).map((_, i) => (
         <div
           key={i}
           className="flex-1 skeleton rounded-t"
-          style={{ height: `${20 + Math.random() * 60}%` }}
+          style={{ height: `${15 + Math.random() * 55}%`, animationDelay: `${i * 40}ms` }}
         />
       ))}
     </div>
@@ -110,20 +108,20 @@ export function TimeSeriesChart({
   const data = mergeSeries(series)
 
   return (
-    <div className="bg-[#111118] border border-[#1e1e2e] rounded-xl p-5 flex flex-col gap-4">
+    <div className="card glow-hover p-5 flex flex-col gap-4">
       <div>
-        <h3 className="text-white font-semibold text-sm">{title}</h3>
-        {subtitle && <p className="text-gray-500 text-xs mt-0.5">{subtitle}</p>}
+        <h3 className="text-ink text-sm font-medium">{title}</h3>
+        {subtitle && <p className="text-ink-faint text-xs mt-0.5">{subtitle}</p>}
       </div>
 
       {loading ? (
         <SkeletonChart />
       ) : error ? (
-        <div className="h-48 flex items-center justify-center text-gray-600 text-sm">
+        <div className="h-48 flex items-center justify-center text-ink-faint text-sm">
           Data unavailable
         </div>
       ) : !data.length || series.every((s) => s.points.length === 0) ? (
-        <div className="h-48 flex items-center justify-center text-gray-600 text-sm">
+        <div className="h-48 flex items-center justify-center text-ink-faint text-sm">
           No data for this period
         </div>
       ) : (
@@ -133,27 +131,27 @@ export function TimeSeriesChart({
               <defs>
                 {series.map((s, i) => (
                   <linearGradient key={s.label} id={`grad-${i}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={COLORS[i % COLORS.length]} stopOpacity={0.3} />
+                    <stop offset="5%" stopColor={COLORS[i % COLORS.length]} stopOpacity={0.25} />
                     <stop offset="95%" stopColor={COLORS[i % COLORS.length]} stopOpacity={0} />
                   </linearGradient>
                 ))}
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
               <XAxis
                 dataKey="time"
                 tickFormatter={(v) => format(v, 'HH:mm')}
-                tick={{ fill: '#6b7280', fontSize: 11 }}
+                tick={{ fill: '#4A5568', fontSize: 10, fontFamily: 'JetBrains Mono' }}
                 axisLine={false}
                 tickLine={false}
               />
               <YAxis
-                tick={{ fill: '#6b7280', fontSize: 11 }}
+                tick={{ fill: '#4A5568', fontSize: 10, fontFamily: 'JetBrains Mono' }}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={valueFormatter}
               />
               <Tooltip content={<CustomTooltip valueFormatter={valueFormatter} />} />
-              {series.length > 1 && <Legend />}
+              {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11, color: '#8892A6' }} />}
               {series.map((s, i) => (
                 <Area
                   key={s.label}
@@ -161,39 +159,39 @@ export function TimeSeriesChart({
                   dataKey={s.label}
                   stroke={COLORS[i % COLORS.length]}
                   fill={`url(#grad-${i})`}
-                  strokeWidth={2}
+                  strokeWidth={1.5}
                   dot={false}
-                  activeDot={{ r: 4 }}
+                  activeDot={{ r: 3, strokeWidth: 0, fill: COLORS[i % COLORS.length] }}
                 />
               ))}
             </AreaChart>
           ) : (
             <LineChart data={data} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#1E2433" vertical={false} />
               <XAxis
                 dataKey="time"
                 tickFormatter={(v) => format(v, 'HH:mm')}
-                tick={{ fill: '#6b7280', fontSize: 11 }}
+                tick={{ fill: '#4A5568', fontSize: 10, fontFamily: 'JetBrains Mono' }}
                 axisLine={false}
                 tickLine={false}
               />
               <YAxis
-                tick={{ fill: '#6b7280', fontSize: 11 }}
+                tick={{ fill: '#4A5568', fontSize: 10, fontFamily: 'JetBrains Mono' }}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={valueFormatter}
               />
               <Tooltip content={<CustomTooltip valueFormatter={valueFormatter} />} />
-              {series.length > 1 && <Legend />}
+              {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11, color: '#8892A6' }} />}
               {series.map((s, i) => (
                 <Line
                   key={s.label}
                   type="monotone"
                   dataKey={s.label}
                   stroke={COLORS[i % COLORS.length]}
-                  strokeWidth={2}
+                  strokeWidth={1.5}
                   dot={false}
-                  activeDot={{ r: 4 }}
+                  activeDot={{ r: 3, strokeWidth: 0, fill: COLORS[i % COLORS.length] }}
                 />
               ))}
             </LineChart>

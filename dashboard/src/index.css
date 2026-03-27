@@ -7,30 +7,78 @@
     box-sizing: border-box;
   }
   body {
-    background-color: #0a0a0f;
-    color: #ffffff;
-    font-family: 'Inter', system-ui, sans-serif;
+    background-color: #07090E;
+    color: #E8ECF4;
+    font-family: 'DM Sans', system-ui, sans-serif;
     margin: 0;
     padding: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+
+  /* Scrollbar */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
   }
   ::-webkit-scrollbar-track {
-    background: #0a0a0f;
+    background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: #1e1e2e;
-    border-radius: 3px;
+    background: #1E2433;
+    border-radius: 100px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #2e2e4e;
+    background: #2A3246;
+  }
+
+  /* Selection */
+  ::selection {
+    background: rgba(0, 229, 204, 0.2);
+    color: #E8ECF4;
+  }
+}
+
+@layer components {
+  /* Card base */
+  .card {
+    @apply bg-surface border border-edge rounded-xl;
+  }
+  .card-raised {
+    @apply bg-surface-raised border border-edge rounded-xl shadow-card;
+  }
+
+  /* Mono numbers */
+  .mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
   }
 }
 
 @layer utilities {
   .skeleton {
-    @apply bg-[#1e1e2e] animate-pulse rounded;
+    @apply bg-edge animate-pulse rounded;
+  }
+
+  /* Stagger children animations */
+  .stagger-children > * {
+    @apply opacity-0 animate-slide-up;
+  }
+  .stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+  .stagger-children > *:nth-child(2) { animation-delay: 60ms; }
+  .stagger-children > *:nth-child(3) { animation-delay: 120ms; }
+  .stagger-children > *:nth-child(4) { animation-delay: 180ms; }
+  .stagger-children > *:nth-child(5) { animation-delay: 240ms; }
+  .stagger-children > *:nth-child(6) { animation-delay: 300ms; }
+  .stagger-children > *:nth-child(7) { animation-delay: 360ms; }
+  .stagger-children > *:nth-child(8) { animation-delay: 420ms; }
+
+  /* Accent glow border on hover */
+  .glow-hover {
+    @apply transition-all duration-300;
+  }
+  .glow-hover:hover {
+    border-color: rgba(0, 229, 204, 0.25);
+    box-shadow: 0 0 20px -4px rgba(0, 229, 204, 0.1);
   }
 }

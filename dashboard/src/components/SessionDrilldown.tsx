@@ -55,7 +55,7 @@ export function SessionDrilldown({ sessionId }: SessionDrilldownProps) {
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-gray-500 text-xs py-3 px-4">
+      <div className="flex items-center gap-2 text-ink-muted text-xs py-3 px-4">
         <Loader2 className="w-3 h-3 animate-spin" />
         Loading session…
       </div>
@@ -64,7 +64,7 @@ export function SessionDrilldown({ sessionId }: SessionDrilldownProps) {
 
   if (error) {
     return (
-      <div className="flex items-center gap-2 text-red-400 text-xs py-3 px-4">
+      <div className="flex items-center gap-2 text-signal-coral text-xs py-3 px-4">
         <AlertTriangle className="w-3 h-3" />
         {error}
       </div>
@@ -73,7 +73,7 @@ export function SessionDrilldown({ sessionId }: SessionDrilldownProps) {
 
   if (!traces.length) {
     return (
-      <div className="text-gray-600 text-xs py-3 px-4 italic">
+      <div className="text-ink-faint text-xs py-3 px-4 italic">
         No calls found for this session.
       </div>
     )
@@ -90,16 +90,16 @@ export function SessionDrilldown({ sessionId }: SessionDrilldownProps) {
   const sorted = [...traces].sort((a, b) => a.time - b.time)
 
   return (
-    <div className="bg-[#0d0d16] border border-[#2a2a3e] rounded-lg overflow-hidden">
+    <div className="bg-surface border border-edge rounded-lg overflow-hidden">
       {/* Session summary */}
-      <div className="px-4 py-3 border-b border-[#1e1e2e] flex flex-wrap gap-4">
+      <div className="px-4 py-3 border-b border-edge flex flex-wrap gap-4">
         <div className="text-xs">
-          <span className="text-gray-500">Session </span>
-          <span className="text-violet-300 font-mono">{sessionId}</span>
+          <span className="text-ink-muted">Session </span>
+          <span className="text-[#B88CFF] mono">{sessionId}</span>
         </div>
         <div className="flex flex-wrap gap-4 ml-auto">
           <Stat label="Calls" value={totalCalls.toLocaleString()} />
-          <Stat label="Total Cost" value={`$${totalCost.toFixed(4)}`} color="text-emerald-400" />
+          <Stat label="Total Cost" value={`$${totalCost.toFixed(4)}`} color="text-signal-lime" />
           <Stat label="Tokens In" value={totalTokensIn.toLocaleString()} />
           <Stat label="Tokens Out" value={totalTokensOut.toLocaleString()} />
           <Stat label="Avg Latency" value={`${(avgLatencyMs / 1000).toFixed(2)}s`} />
@@ -110,47 +110,47 @@ export function SessionDrilldown({ sessionId }: SessionDrilldownProps) {
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
-            <tr className="bg-[#0a0a0f]/70">
-              <th className="px-3 py-2 text-left text-gray-500 font-medium whitespace-nowrap">Time</th>
-              <th className="px-3 py-2 text-left text-gray-500 font-medium">Model</th>
-              <th className="px-3 py-2 text-left text-gray-500 font-medium">Agent</th>
-              <th className="px-3 py-2 text-right text-gray-500 font-medium whitespace-nowrap">Tokens In</th>
-              <th className="px-3 py-2 text-right text-gray-500 font-medium whitespace-nowrap">Tokens Out</th>
-              <th className="px-3 py-2 text-right text-gray-500 font-medium">Cost</th>
-              <th className="px-3 py-2 text-right text-gray-500 font-medium">Latency</th>
+            <tr className="bg-void/70">
+              <th className="px-3 py-2 text-left text-ink-muted font-medium whitespace-nowrap">Time</th>
+              <th className="px-3 py-2 text-left text-ink-muted font-medium">Model</th>
+              <th className="px-3 py-2 text-left text-ink-muted font-medium">Agent</th>
+              <th className="px-3 py-2 text-right text-ink-muted font-medium whitespace-nowrap">Tokens In</th>
+              <th className="px-3 py-2 text-right text-ink-muted font-medium whitespace-nowrap">Tokens Out</th>
+              <th className="px-3 py-2 text-right text-ink-muted font-medium">Cost</th>
+              <th className="px-3 py-2 text-right text-ink-muted font-medium">Latency</th>
             </tr>
           </thead>
           <tbody>
             {sorted.map((row, i) => (
               <tr
                 key={row.traceId + i}
-                className="border-t border-[#1e1e2e]/60 hover:bg-[#1e1e2e]/20 transition-colors"
+                className="border-t border-edge/60 hover:bg-surface-overlay transition-colors"
               >
-                <td className="px-3 py-2 text-gray-400 whitespace-nowrap tabular-nums">
+                <td className="px-3 py-2 text-ink-muted whitespace-nowrap mono">
                   {format(row.time, 'HH:mm:ss')}
                 </td>
                 <td className="px-3 py-2">
-                  <span className="text-gray-300 bg-[#1e1e2e] px-1.5 py-0.5 rounded-full">
+                  <span className="text-ink bg-surface-overlay px-1.5 py-0.5 rounded-full">
                     {row.model || '—'}
                   </span>
                 </td>
                 <td className="px-3 py-2">
-                  <span className="text-violet-400 bg-violet-950/40 px-1.5 py-0.5 rounded-full">
+                  <span className="text-[#B88CFF] bg-[#B88CFF]/10 px-1.5 py-0.5 rounded-full">
                     {row.agentId || '—'}
                   </span>
                 </td>
-                <td className="px-3 py-2 text-right text-gray-400 tabular-nums">
+                <td className="px-3 py-2 text-right text-ink-muted mono">
                   {row.tokensIn > 0 ? row.tokensIn.toLocaleString() : '—'}
                 </td>
-                <td className="px-3 py-2 text-right text-gray-400 tabular-nums">
+                <td className="px-3 py-2 text-right text-ink-muted mono">
                   {row.tokensOut > 0 ? row.tokensOut.toLocaleString() : '—'}
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums">
-                  <span className={row.costUsd > 0 ? 'text-emerald-400' : 'text-gray-600'}>
+                <td className="px-3 py-2 text-right mono">
+                  <span className={row.costUsd > 0 ? 'text-signal-lime' : 'text-ink-faint'}>
                     {row.costUsd > 0 ? `$${row.costUsd.toFixed(4)}` : '—'}
                   </span>
                 </td>
-                <td className="px-3 py-2 text-right text-gray-400 tabular-nums whitespace-nowrap">
+                <td className="px-3 py-2 text-right text-ink-muted mono whitespace-nowrap">
                   {row.latencyMs > 0 ? `${row.latencyMs.toFixed(0)} ms` : '—'}
                 </td>
               </tr>
@@ -165,7 +165,7 @@ export function SessionDrilldown({ sessionId }: SessionDrilldownProps) {
 function Stat({
   label,
   value,
-  color = 'text-gray-200',
+  color = 'text-ink',
 }: {
   label: string
   value: string
@@ -173,7 +173,7 @@ function Stat({
 }) {
   return (
     <div className="text-xs">
-      <span className="text-gray-500">{label} </span>
+      <span className="text-ink-muted">{label} </span>
       <span className={color}>{value}</span>
     </div>
   )

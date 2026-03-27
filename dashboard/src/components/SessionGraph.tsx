@@ -43,10 +43,10 @@ function formatDuration(ms: number): string {
 }
 
 function nodeColor(node: SessionNode): { fill: string; stroke: string; text: string } {
-  if (node.hasError) return { fill: '#7f1d1d', stroke: '#ef4444', text: '#fca5a5' }
-  if (node.agentType === 'subagent') return { fill: '#0c4a6e', stroke: '#38bdf8', text: '#bae6fd' }
-  if (!node.parentSessionId) return { fill: '#1e1b4b', stroke: '#818cf8', text: '#c7d2fe' }
-  return { fill: '#134e4a', stroke: '#2dd4bf', text: '#99f6e4' }
+  if (node.hasError) return { fill: '#2A1215', stroke: '#FF6B6B', text: '#FF6B6B' }
+  if (node.agentType === 'subagent') return { fill: '#0D1B2A', stroke: '#5BA4F5', text: '#5BA4F5' }
+  if (!node.parentSessionId) return { fill: '#0A1A1A', stroke: '#00E5CC', text: '#00E5CC' }
+  return { fill: '#0D1F0D', stroke: '#7DDB80', text: '#7DDB80' }
 }
 
 /** Compute a simple top-down tree layout. Returns nodes with x/y coordinates. */
@@ -246,8 +246,8 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-48 text-slate-500 text-sm">
-        <svg className="animate-spin w-5 h-5 mr-2 text-indigo-400" fill="none" viewBox="0 0 24 24">
+      <div className="flex items-center justify-center h-48 text-ink-muted text-sm">
+        <svg className="animate-spin w-5 h-5 mr-2 text-accent" fill="none" viewBox="0 0 24 24">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
         </svg>
@@ -258,7 +258,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-32 text-red-400 text-sm">
+      <div className="flex items-center justify-center h-32 text-signal-coral text-sm">
         ⚠ {error}
       </div>
     )
@@ -266,13 +266,13 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
 
   if (nodes.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-48 text-slate-500 text-sm gap-2">
-        <svg className="w-10 h-10 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div className="flex flex-col items-center justify-center h-48 text-ink-muted text-sm gap-2">
+        <svg className="w-10 h-10 text-ink-faint" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
             d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
         </svg>
         <span>No session data yet.</span>
-        <span className="text-xs text-slate-600">Sessions appear once agents route calls through the proxy with session IDs set.</span>
+        <span className="text-xs text-ink-faint">Sessions appear once agents route calls through the proxy with session IDs set.</span>
       </div>
     )
   }
@@ -285,12 +285,12 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
       {/* Header: title (fixed mode) or toggle */}
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
         {/* Legend */}
-        <div className="flex items-center gap-3 text-xs text-slate-500">
-          {title && <span className="text-slate-300 font-medium text-sm mr-1">{title}</span>}
+        <div className="flex items-center gap-3 text-xs text-ink-muted">
+          {title && <span className="text-ink font-medium text-sm mr-1">{title}</span>}
           {onFullscreen && (
             <button
               onClick={onFullscreen}
-              className="p-1 rounded-md bg-slate-700/60 text-slate-400 hover:bg-slate-600 hover:text-white transition-colors"
+              className="p-1 rounded-md bg-surface-overlay text-ink-muted hover:bg-surface-raised hover:text-ink transition-colors"
               aria-label="Expand to fullscreen"
               title="Expand"
             >
@@ -298,11 +298,11 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
             </button>
           )}
           <span className="flex items-center gap-1">
-            <svg width="24" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#334155" strokeWidth="2" strokeDasharray="4 3"/><polygon points="20,2 20,8 24,5" fill="#334155"/></svg>
+            <svg width="24" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#1E2433" strokeWidth="2" strokeDasharray="4 3"/><polygon points="20,2 20,8 24,5" fill="#1E2433"/></svg>
             delegates to
           </span>
           <span className="flex items-center gap-1">
-            <svg width="24" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.7"/><polygon points="20,2 20,8 24,5" fill="#f59e0b" opacity="0.7"/></svg>
+            <svg width="24" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#FFBF47" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.7"/><polygon points="20,2 20,8 24,5" fill="#FFBF47" opacity="0.7"/></svg>
             delegates back
           </span>
         </div>
@@ -311,11 +311,11 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           <div className="flex gap-1">
             <button
               onClick={() => setMode('agent')}
-              className={`px-2 py-1 text-xs rounded ${mode === 'agent' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+              className={`px-2 py-1 text-xs rounded ${mode === 'agent' ? 'bg-accent/12 text-accent border border-accent/25' : 'bg-surface-overlay text-ink-muted hover:bg-surface-raised'}`}
             >Agents</button>
             <button
               onClick={() => setMode('session')}
-              className={`px-2 py-1 text-xs rounded ${mode === 'session' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+              className={`px-2 py-1 text-xs rounded ${mode === 'session' ? 'bg-accent/12 text-accent border border-accent/25' : 'bg-surface-overlay text-ink-muted hover:bg-surface-raised'}`}
             >Sessions</button>
           </div>
         )}
@@ -328,7 +328,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         className="block"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Forward edges — dashed gray */}
+        {/* Forward edges — dashed edge color */}
         {displayEdges.map((edge) => {
           const from = nodeMap.get(edge.from)
           const to = nodeMap.get(edge.to)
@@ -342,7 +342,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           const path = `M ${from.x} ${from.y + fromR} C ${from.x} ${midY}, ${ex} ${midY}, ${ex} ${ey}`
           return (
             <path key={`fwd-${edge.from}->${edge.to}`}
-              d={path} fill="none" stroke="#334155" strokeWidth="2" strokeDasharray="4 3" />
+              d={path} fill="none" stroke="#1E2433" strokeWidth="2" strokeDasharray="4 3" />
           )
         })}
 
@@ -362,7 +362,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           const path = `M ${fx} ${fy} C ${rightEdge} ${fy}, ${rightEdge} ${ty}, ${tx} ${ty}`
           return (
             <path key={`back-${edge.from}->${edge.to}`}
-              d={path} fill="none" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.8" />
+              d={path} fill="none" stroke="#FFBF47" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.8" />
           )
         })}
 
@@ -380,7 +380,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
             return (
               <polygon key={`ah-fwd-${edge.from}->${edge.to}`}
                 points={`${ex - 5},${ey - 8} ${ex + 5},${ey - 8} ${ex},${ey}`}
-                fill="#475569" />
+                fill="#2A3246" />
             )
           } else {
             // Back-edge: leftward arrowhead landing on target's right side
@@ -389,7 +389,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
             return (
               <polygon key={`ah-back-${edge.from}->${edge.to}`}
                 points={`${tx + 10},${ty - 5} ${tx + 10},${ty + 5} ${tx},${ty}`}
-                fill="#f59e0b" />
+                fill="#FFBF47" />
             )
           }
         })}
@@ -454,7 +454,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
                 y={radius + 14}
                 textAnchor="middle"
                 fontSize="9"
-                fill="#94a3b8"
+                fill="#8892A6"
                 fontFamily="monospace"
               >
                 {mode === 'agent'
@@ -467,7 +467,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
                   y={radius + 25}
                   textAnchor="middle"
                   fontSize="9"
-                  fill="#64748b"
+                  fill="#4A5568"
                 >
                   {formatCost(node.totalCost)}
                 </text>
@@ -481,14 +481,14 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
                     width={node.project.length * 6 + 12}
                     height={14}
                     rx={7}
-                    fill="#4338ca"
-                    opacity={0.6}
+                    fill="#00E5CC"
+                    opacity={0.15}
                   />
                   <text
                     textAnchor="middle"
                     dominantBaseline="middle"
                     fontSize="8"
-                    fill="#c7d2fe"
+                    fill="#00E5CC"
                     fontFamily="monospace"
                   >
                     {node.project}
@@ -506,54 +506,54 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           className="absolute z-20 pointer-events-none"
           style={{ left: tooltip.x + 16, top: tooltip.y - 10 }}
         >
-          <div className="bg-[#0f0f1a] border border-slate-700 rounded-lg p-3 shadow-xl text-xs min-w-[200px] max-w-[280px]">
-            <div className="font-semibold text-slate-200 mb-1 truncate font-mono">
+          <div className="bg-surface border border-edge rounded-lg p-3 shadow-xl text-xs min-w-[200px] max-w-[280px]">
+            <div className="font-semibold text-ink mb-1 truncate mono">
               {mode === 'session' ? tooltip.node.sessionId : tooltip.node.agentId}
             </div>
             {mode === 'session' && tooltip.node.taskLabel && (
-              <div className="text-indigo-300 mb-1 truncate">📋 {tooltip.node.taskLabel}</div>
+              <div className="text-accent mb-1 truncate">📋 {tooltip.node.taskLabel}</div>
             )}
-            <div className="space-y-0.5 text-slate-400">
+            <div className="space-y-0.5 text-ink-muted">
               {mode === 'session' && (
-                <div>Agent: <span className="text-slate-300">{tooltip.node.agentId}</span></div>
+                <div>Agent: <span className="text-ink">{tooltip.node.agentId}</span></div>
               )}
-              <div>Type: <span className="text-slate-300">{tooltip.node.agentType}</span></div>
-              <div>Calls: <span className="text-slate-300">{tooltip.node.callCount}</span></div>
-              <div>Cost: <span className="text-emerald-400">{formatCost(tooltip.node.totalCost)}</span></div>
+              <div>Type: <span className="text-ink">{tooltip.node.agentType}</span></div>
+              <div>Calls: <span className="text-ink">{tooltip.node.callCount}</span></div>
+              <div>Cost: <span className="text-signal-lime">{formatCost(tooltip.node.totalCost)}</span></div>
               {tooltip.node.durationMs > 0 && (
-                <div>Duration: <span className="text-slate-300">{formatDuration(tooltip.node.durationMs)}</span></div>
+                <div>Duration: <span className="text-ink">{formatDuration(tooltip.node.durationMs)}</span></div>
               )}
               {mode === 'session' && tooltip.node.parentSessionId && (
-                <div className="truncate">Parent: <span className="text-sky-400 font-mono">{shortId(tooltip.node.parentSessionId, mode)}</span></div>
+                <div className="truncate">Parent: <span className="text-signal-sky mono">{shortId(tooltip.node.parentSessionId, mode)}</span></div>
               )}
               {tooltip.node.piiDetected && (
-                <div className="mt-1 text-amber-400">⚠️ PII detected{tooltip.node.piiKinds ? `: ${tooltip.node.piiKinds}` : ''}</div>
+                <div className="mt-1 text-signal-amber">⚠️ PII detected{tooltip.node.piiKinds ? `: ${tooltip.node.piiKinds}` : ''}</div>
               )}
             </div>
-            <div className="mt-2 text-slate-600 text-[10px]">Click to view details →</div>
+            <div className="mt-2 text-ink-faint text-[10px]">Click to view details →</div>
           </div>
         </div>
       )}
 
       {/* Legend */}
-      <div className="flex items-center gap-4 mt-3 px-2 text-xs text-slate-500 flex-wrap">
+      <div className="flex items-center gap-4 mt-3 px-2 text-xs text-ink-muted flex-wrap">
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-indigo-900 border border-indigo-400 inline-block" />
+          <span className="w-3 h-3 rounded-full bg-[#0A1A1A] border border-[#00E5CC] inline-block" />
           {mode === 'agent' ? 'Main agent' : 'Main session'}
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-sky-900 border border-sky-400 inline-block" />
+          <span className="w-3 h-3 rounded-full bg-[#0D1B2A] border border-[#5BA4F5] inline-block" />
           Sub-agent
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-teal-900 border border-teal-400 inline-block" />
+          <span className="w-3 h-3 rounded-full bg-[#0D1F0D] border border-[#7DDB80] inline-block" />
           Child session
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-red-900 border border-red-400 inline-block" />
+          <span className="w-3 h-3 rounded-full bg-[#2A1215] border border-[#FF6B6B] inline-block" />
           Error
         </span>
-        <span className="text-slate-600 ml-auto">Node size = call count · Click = details</span>
+        <span className="text-ink-faint ml-auto">Node size = call count · Click = details</span>
       </div>
     </div>
   )
