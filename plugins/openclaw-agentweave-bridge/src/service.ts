@@ -232,6 +232,52 @@ export function createAgentWeaveBridgeService() {
               break
             }
 
+            case "session.state": {
+              const sessionKey = e.sessionKey ?? ""
+              const state = (e as any).state as string | undefined
+              // Detect OpenClaw native sub-agent sessions (agent:*:subagent:*)
+              // These don't emit message.queued, only session.state transitions
+              if (sessionKey.includes(":subagent:") && !activeTurns.has(sessionKey)) {
+                if (state === "processing") {
+                  const subagentId = config.subagentId ?? `${config.agentId ?? "nix"}-subagent-v1`
+                  const sessionId = (e as any).sessionId || sessionKey
+                  const tracer = trace.getTracer("openclaw-agentweave-bridge")
+                  const span = tracer.startSpan("openclaw.subagent")
+                  span.setAttribute("session_id", sessionId)
+                  span.setAttribute("session.id", sessionId)
+                  span.setAttribute("prov.session.id", sessionId)
+                  span.setAttribute("prov.agent.id", subagentId)
+                  span.setAttribute("prov.agent.type", "subagent")
+                  span.setAttribute("prov.activity.type", "agent_turn")
+                  if (config.project) span.setAttribute("prov.project", config.project)
+                  // Link to active main session as parent
+                  const mainKey = Array.from(activeTurns.keys()).find(k =>
+                    k.startsWith("agent:main:") && !k.includes(":subagent:"))
+                  if (mainKey) {
+                    const mainTurn = activeTurns.get(mainKey)
+                    if (mainTurn) {
+                      const mainSessionId = (mainTurn.span as any)._attributes?.["session.id"] || mainKey
+                      span.setAttribute("prov.parent.session.id", mainSessionId)
+                    }
+                  }
+                  const spanCtx = trace.setSpan(context.active(), span)
+                  activeTurns.set(sessionKey, { span, ctx: spanCtx })
+                  console.log(`[agentweave-bridge] started subagent span: ${sessionKey} agent: ${subagentId}`)
+                }
+              }
+              // End subagent span when session goes idle
+              if (sessionKey.includes(":subagent:") && activeTurns.has(sessionKey)) {
+                if (state === "idle") {
+                  const turn = activeTurns.get(sessionKey)!
+                  turn.span.setAttribute("outcome", "completed")
+                  turn.span.end()
+                  activeTurns.delete(sessionKey)
+                  console.log(`[agentweave-bridge] ended subagent span: ${sessionKey}`)
+                }
+              }
+              break
+            }
+
             case "model.usage": {
               const sessionKey = e.sessionKey ?? ""
               const turn = activeTurns.get(sessionKey)
