@@ -3,11 +3,16 @@
 The AgentWeave proxy is a transparent HTTP server that sits between your agents and the Anthropic API. Every LLM call gets an OTel span — no SDK changes required.
 
 ```
-Claude Code  ─┐
-OpenClaw/Nix ─┤──→ agentweave-proxy :4000 ──→ api.anthropic.com
-Max / pi-mono─┘         │
-                   OTel spans → Tempo / Langfuse
+Claude Code (Mac Mini) ──┐
+Claude Code (NAS)     ──┤
+OpenClaw/Nix          ──┤──→ agentweave-proxy :4000 ──→ api.anthropic.com
+Max / pi-agent        ──┤         │
+Nix A2A Server        ──┤    OTel spans → Tempo
+Max A2A Server        ──┘
 ```
+
+All clients share a single proxy instance (k8s NodePort 30400). Per-request
+`X-AgentWeave-Agent-Id` headers handle attribution.
 
 ## Prerequisites
 
@@ -58,7 +63,7 @@ systemctl --user enable --now agentweave-proxy
 
 ## Wire up your agents
 
-### OpenClaw / Nix
+### OpenClaw / Nix (NAS)
 
 Add to `~/.openclaw/openclaw.json`:
 
@@ -67,7 +72,7 @@ Add to `~/.openclaw/openclaw.json`:
   "models": {
     "providers": {
       "anthropic": {
-        "baseUrl": "http://localhost:4000",
+        "baseUrl": "http://192.168.1.70:30400",
         "headers": {
           "X-AgentWeave-Agent-Id": "nix-v1",
           "X-AgentWeave-Agent-Type": "main"
@@ -79,24 +84,33 @@ Add to `~/.openclaw/openclaw.json`:
 }
 ```
 
-Then reload OpenClaw config.
+Then reload: `openclaw gateway restart`
 
-### Claude Code
+### Claude Code (Mac Mini or NAS)
 
-```bash
-export ANTHROPIC_BASE_URL=http://localhost:4000
-claude  # all calls now traced
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://192.168.1.70:30400",
+    "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-mac\nX-AgentWeave-Session-Id: claude-code-main\nX-AgentWeave-Project: claude-code"
+  }
+}
 ```
 
-### Max / pi-mono (remote agent)
+New Claude Code sessions will route through the proxy. See [claude-code-proxy.md](claude-code-proxy.md) for full details.
 
-Point at the NAS proxy from the Mac Mini:
+### Max / pi-agent (Mac Mini)
+
+Set in `~/max/projects/agent-max/.env`:
 
 ```bash
-export ANTHROPIC_BASE_URL=http://192.168.1.70:4000
+ANTHROPIC_BASE_URL=http://192.168.1.70:30400
 ```
 
-Or set in pi-mono's environment config to persist across restarts.
+The AgentWeave JS SDK handles per-request attribution headers automatically.
+Restart: `launchctl stop com.arnab.agent-max && launchctl start com.arnab.agent-max`
 
 ### Any Python agent (Anthropic SDK)
 
@@ -110,14 +124,16 @@ client = anthropic.Anthropic(
 
 ### Tag calls by agent
 
-Add the `X-AgentWeave-Agent-Id` header to attribute spans to specific agents when multiple agents share the same proxy:
+With the single-proxy architecture, the `X-AgentWeave-Agent-Id` header is how every client identifies itself. Add it to attribute spans to specific agents:
 
 ```python
 client = anthropic.Anthropic(
-    base_url="http://localhost:4000",
-    default_headers={"X-AgentWeave-Agent-Id": "max-v1"},
+    base_url="http://192.168.1.70:30400",
+    default_headers={"X-AgentWeave-Agent-Id": "my-agent-v1"},
 )
 ```
+
+If no `X-AgentWeave-Agent-Id` header is sent, spans are attributed to `unattributed`.
 
 ## What each span captures
 

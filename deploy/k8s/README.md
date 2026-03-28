@@ -3,12 +3,13 @@
 ## Architecture
 
 ```
-LAN agents (Mac Mini/pi-mono)
-        │
-        ▼ NodePort :30400 (Bearer token auth)
+All clients (Nix, Max, Claude Code, A2A servers)
+        │  (per-request X-AgentWeave-* headers for attribution)
+        ▼ NodePort :30400
 ┌───────────────────────────────┐
 │  agentweave-proxy pod         │
 │  namespace: agentweave        │
+│  (single instance)            │
 │                               │
 │  ClusterIP :4000 ◄── in-cluster agents
 └───────────────────────────────┘
@@ -19,6 +20,8 @@ LAN agents (Mac Mini/pi-mono)
         ▼
    api.anthropic.com (upstream)
 ```
+
+> **Note:** Previously there were 3 proxy instances (30400, 30401, 30402). These have been consolidated into a single proxy. The `nix-subagent-proxy` and `proxy-max` manifests have been removed.
 
 ## Deploy
 
@@ -96,17 +99,16 @@ ANTHROPIC_BASE_URL=http://agentweave-proxy.agentweave.svc.cluster.local:4000
 
 No auth header needed if the agent is inside the same cluster (firewall boundary is sufficient). Or add token for defence-in-depth.
 
-### LAN agents — Mac Mini / pi-mono (NodePort)
+### LAN agents (NodePort :30400)
+
+All clients point at the single proxy. Attribution is via per-request headers.
 
 ```bash
-# In your agent env or pi-mono config:
+# All agents use the same proxy:
 ANTHROPIC_BASE_URL=http://192.168.1.70:30400
-
-# Auth token required — set the same token from secret.yaml
-AGENTWEAVE_PROXY_TOKEN=<your-token>
 ```
 
-For the Anthropic SDK, pass the token as a custom header (NOT as the API key):
+For the Anthropic SDK, add the agent ID header for attribution:
 
 ```python
 import anthropic
@@ -114,20 +116,22 @@ import anthropic
 client = anthropic.Anthropic(
     base_url="http://192.168.1.70:30400",
     default_headers={
-        "Authorization": f"Bearer {proxy_token}",
-        "X-AgentWeave-Agent-Id": "max-v1",
+        "X-AgentWeave-Agent-Id": "my-agent-v1",
     },
 )
 ```
 
 ### Claude Code
 
-```bash
-export ANTHROPIC_BASE_URL=http://192.168.1.70:30400
-# Claude Code doesn't natively support custom auth headers to the base URL,
-# so for Claude Code keep it on localhost (ClusterIP via port-forward or local service).
-kubectl port-forward -n agentweave svc/agentweave-proxy 4000:4000
-export ANTHROPIC_BASE_URL=http://localhost:4000
+Claude Code uses `ANTHROPIC_CUSTOM_HEADERS` for attribution headers. See [claude-code-proxy.md](../../docs/claude-code-proxy.md) for full setup on both Mac Mini and NAS.
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://192.168.1.70:30400",
+    "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-mac\nX-AgentWeave-Session-Id: claude-code-main"
+  }
+}
 ```
 
 ## Security model
@@ -135,35 +139,12 @@ export ANTHROPIC_BASE_URL=http://localhost:4000
 | Exposure | Auth | Notes |
 |---|---|---|
 | ClusterIP | Optional token | Firewall boundary = cluster network |
-| NodePort (LAN) | **Required token** | Protects your Anthropic API key |
+| NodePort (LAN) | Passthrough | Proxy forwards caller's auth headers to Anthropic untouched |
 | Public ingress | **Not recommended** | Don't expose publicly |
 
-The proxy never stores API keys — it forwards `x-api-key` from the calling agent to Anthropic unchanged. The `Authorization: Bearer` header is the proxy access token only and is stripped before forwarding.
+The proxy runs in **passthrough mode** — it forwards the caller's `Authorization` / `x-api-key` headers to Anthropic unchanged. Each client's SDK handles its own authentication (OAuth or API key). Key injection only fires when the client sends no real key.
 
-## Sub-agent Proxy (Nix)
-
-Nix (the NAS Claude Code agent) uses two proxy instances to separate main session traces from sub-agent traces:
-
-| Proxy | NodePort | AGENTWEAVE_AGENT_ID | Purpose |
-|---|---|---|---|
-| agentweave-proxy-nodeport | 30400 | nix-v1 | Main session |
-| agentweave-proxy-nix-subagent-nodeport | 30402 | nix-subagent-v1 | Sub-agents (worktree agents) |
-
-When spawning Claude Code sub-agents, set:
-
-```bash
-export ANTHROPIC_BASE_URL=http://192.168.1.70:30402/v1
-```
-
-This ensures sub-agent traces are tagged with `nix-subagent-v1` and can be filtered separately in the dashboard.
-
-### Deploy sub-agent proxy
-
-```bash
-kubectl apply -f deploy/k8s/nix-subagent-proxy-configmap.yaml
-kubectl apply -f deploy/k8s/nix-subagent-proxy-deployment.yaml
-kubectl apply -f deploy/k8s/nix-subagent-proxy-service.yaml
-```
+> **OAuth tokens (`sk-ant-oat*`) MUST NOT be stored in k8s secrets** for key injection. They expire and require the SDK-level auth flow. Only standard API keys (`sk-ant-api03-*`) should be used if key injection is needed.
 
 ## Update configmap
 

@@ -1,6 +1,6 @@
 # AgentWeave — Deployment Runbook
 
-*Everything not obvious from the repo. Last updated Mar 20, 2026.*
+*Everything not obvious from the repo. Last updated Mar 28, 2026.*
 
 ---
 
@@ -9,9 +9,9 @@
 AgentWeave is a **transparent LLM observability layer**. It sits between your AI agents and the LLM APIs, recording every call as an OpenTelemetry span in Tempo, then visualizing them on a React dashboard backed by Prometheus spanmetrics.
 
 ```
-Your Agent Code
+Your Agent Code (with per-request X-AgentWeave-* headers)
     ↓
-AgentWeave Proxy (port 30400/30401/30402)
+AgentWeave Proxy (single instance, port 30400)
     ├── forwards request to Anthropic/OpenAI/Gemini
     ├── writes OTel span → Tempo (:30418 OTLP)
     └── Tempo → Prometheus remote_write → Grafana
@@ -45,10 +45,10 @@ Tempo is the exception: it uses the official `grafana/tempo` image (public), so 
 ### Namespace: `agentweave`
 | Deployment | NodePort | Purpose |
 |------------|----------|---------|
-| `agentweave-proxy` | 30400 | Nix main session proxy (`nix-v1`) |
-| `agentweave-proxy-max` | 30401 | Max's proxy (`max-v1`) |
-| `agentweave-proxy-nix-subagent` | 30402 | Claude Code sub-agents (`nix-subagent-v1`) |
-| `agentweave-dashboard` | 30896 | React SPA dashboard |
+| `agentweave-proxy` | 30400 | Single shared proxy — all clients use per-request headers for attribution |
+| `agentweave-dashboard` | 30896 | React SPA dashboard (also at `agentweave.arnabsaha.com`) |
+
+> **Consolidated (Mar 2026):** Previously there were 3 proxy instances (`agentweave-proxy` :30400, `agentweave-proxy-max` :30401, `agentweave-proxy-nix-subagent` :30402). These were consolidated into a single proxy. Agent attribution is now done via per-request `X-AgentWeave-Agent-Id` headers instead of separate deployments.
 
 ### Namespace: `monitoring`
 | Deployment | Purpose |
@@ -63,13 +63,18 @@ Tempo is the exception: it uses the official `grafana/tempo` image (public), so 
 
 All proxies run in **passthrough mode** — no `AGENTWEAVE_PROXY_TOKEN`, no `AGENTWEAVE_ANTHROPIC_API_KEY`. Each caller's SDK handles authentication natively, and the proxy forwards headers untouched to Anthropic.
 
-### How each agent authenticates
+### How each client authenticates
 
-| Agent | Proxy | SDK | Auth method |
-|-------|-------|-----|-------------|
-| **Nix** (OpenClaw) | 30400 | OpenClaw embedded (Node.js `@anthropic-ai/sdk`) | OAuth token (`sk-ant-oat01-*`) via `Authorization: Bearer` |
-| **Max** (pi-mono) | 30401 | `@anthropic-ai/sdk` v0.73.0 with `authToken` | OAuth token (`sk-ant-oat01-*`) via `Authorization: Bearer` |
-| **Sub-agents** | 30402 | Claude Code CLI | OAuth token via SDK |
+All clients point at the single proxy at `http://192.168.1.70:30400` and use per-request headers for attribution.
+
+| Client | SDK | Auth method | Attribution header |
+|--------|-----|-------------|--------------------|
+| **Nix/OpenClaw** (NAS) | OpenClaw embedded (Node.js `@anthropic-ai/sdk`) | OAuth token (`sk-ant-oat01-*`) via `Authorization: Bearer` | Static headers in `openclaw.json` |
+| **Max/pi-agent** (Mac Mini) | `@anthropic-ai/sdk` with AgentWeave JS SDK | OAuth token via SDK | JS SDK sets headers per-request |
+| **Claude Code** (Mac Mini) | Claude Code CLI | OAuth token via SDK | `ANTHROPIC_CUSTOM_HEADERS` in `settings.json` + hooks |
+| **Claude Code** (NAS) | Claude Code CLI | OAuth token via SDK | `ANTHROPIC_CUSTOM_HEADERS` in `settings.json` |
+| **Nix A2A Server** (NAS :8771) | Express server | Trace context propagation | Headers in general handler |
+| **Max A2A Server** (Mac Mini :8770) | Express server | Trace context extraction | Proxy session API |
 
 ### Why passthrough mode is required for OAuth
 
@@ -166,10 +171,9 @@ X-AgentWeave-Task-Label: "fix issue #99"
 
 The session graph in the dashboard draws edges from `parent_session_id` → `session_id`. For the graph to show nesting, sub-agents MUST set `parent_session_id` pointing to their parent's session.
 
-**Dogfooding sessions:**
-- Nix main: `AGENTWEAVE_BASE_URL=http://192.168.1.70:30400`
-- Max main: `AGENTWEAVE_BASE_URL=http://192.168.1.70:30401`
-- Sub-agents (Claude Code): `ANTHROPIC_BASE_URL=http://192.168.1.70:30402/v1`
+**All clients use the single proxy:**
+- All agents: `http://192.168.1.70:30400`
+- Attribution is done via per-request `X-AgentWeave-Agent-Id` headers, not separate proxy instances
 
 ---
 
@@ -206,9 +210,9 @@ Things you need to know that aren't documented elsewhere:
 
 1. **The NAS registry at `localhost:5000`** is not a k8s service — it's a Docker container running directly on the NAS host. Check with `docker ps | grep registry` if images fail to push.
 
-2. **The `agentweave-proxy` secret has NO `anthropic-api-key`** — this is intentional. All proxies run in passthrough mode. The caller's SDK handles auth. See "Proxy Auth Model" above.
+2. **The `agentweave-proxy` secret has NO `anthropic-api-key`** — this is intentional. The proxy runs in passthrough mode. The caller's SDK handles auth. See "Proxy Auth Model" above.
 
-3. **Max's proxy (`agentweave-proxy-max`) uses `localhost:5000`** — so it must stay on the NAS node too. Any attempt to schedule it on Mac Mini will result in ImagePullBackOff.
+3. **There is only one proxy deployment now** — `agentweave-proxy` on port 30400. The old `agentweave-proxy-max` (:30401) and `agentweave-proxy-nix-subagent` (:30402) have been removed. All clients use per-request headers for attribution.
 
 4. **Tempo data is ephemeral.** Local-path PVCs on the Mac Mini node are stored in OrbStack's VM filesystem. If the VM is recreated or the PVC deleted, all trace history is lost. There is no backup. For production use, migrate to MinIO (config already exists as `tempo-config-minio`).
 
@@ -219,6 +223,144 @@ Things you need to know that aren't documented elsewhere:
 7. **OAuth tokens only work via the Node.js SDK.** Raw `curl`, Python `httpx`, or manual header construction will fail with 400 "Error" for Sonnet/Opus models. Anthropic validates TLS-level SDK fingerprinting for consumer OAuth tokens. If you need to test the proxy from the command line, use a standard API key (`sk-ant-api03-*`), not OAuth.
 
 8. **OpenClaw's `openclaw.json` must have `models.providers.anthropic.baseUrl`** set to the proxy URL (`http://192.168.1.70:30400`) for traces to flow through AgentWeave. Without it, OpenClaw calls Anthropic directly and bypasses tracing.
+
+---
+
+## Client Configuration
+
+All clients point at the single proxy (`http://192.168.1.70:30400`) and send per-request headers for attribution. `AGENTWEAVE_CAPTURE_PROMPTS=1` is enabled on the proxy, so prompt/response previews are captured in spans.
+
+The proxy is **pass-through** — clients with real API keys (OAuth or `sk-ant-api03-*`) pass through untouched. Key injection only fires when the client sends no real key (e.g., a placeholder like `"dummy"`).
+
+The health endpoint at `/health` shows `key_injection` status.
+
+| Client | Host | Config location | Key settings |
+|--------|------|-----------------|--------------|
+| **Nix/OpenClaw** | NAS (192.168.1.70) | `~/.openclaw/openclaw.json` | `models.providers.anthropic.baseUrl` = proxy URL; static `X-AgentWeave-*` headers |
+| **Max/pi-agent** | Mac Mini (192.168.1.149) | `~/max/projects/agent-max/.env` | `ANTHROPIC_BASE_URL` = proxy URL; JS SDK handles headers |
+| **Claude Code** | Mac Mini (192.168.1.149) | `~/.claude/settings.json` | `ANTHROPIC_BASE_URL` + `ANTHROPIC_CUSTOM_HEADERS` in `env` block; hooks (SubagentStop, Stop, PostToolUse) |
+| **Claude Code** | NAS (192.168.1.70) | `~/.claude/settings.json` | `ANTHROPIC_BASE_URL` + `ANTHROPIC_CUSTOM_HEADERS` in `env` block |
+| **Nix A2A Server** | NAS :8771 | Express server source | Trace context propagation in general handler |
+| **Max A2A Server** | Mac Mini :8770 | Express server source | Trace context extraction + proxy session API |
+
+> **OAuth tokens (`sk-ant-oat*`) MUST NOT be stored in k8s secrets** for proxy key injection. They expire and require the SDK-level auth flow to refresh. Only standard API keys (`sk-ant-api03-*`) should be used for key injection.
+
+---
+
+## Rollback Procedures
+
+If the proxy goes down or becomes unreachable, each client can be reverted to call the Anthropic API directly. This bypasses all tracing but restores LLM functionality.
+
+### Nix/OpenClaw (NAS)
+
+**Current working config:** `~/.openclaw/openclaw.json` has `models.providers.anthropic.baseUrl` set to `http://192.168.1.70:30400` with static `X-AgentWeave-*` headers.
+
+**Rollback to direct API:**
+
+```bash
+# On the NAS (192.168.1.70):
+# Edit ~/.openclaw/openclaw.json — change models.providers.anthropic.baseUrl:
+#   FROM: "http://192.168.1.70:30400"
+#   TO:   "https://api.anthropic.com"
+# Then restart the gateway:
+openclaw gateway restart
+```
+
+**Verify:** Run a prompt through OpenClaw and confirm it gets a response. Check that no new spans appear in the AgentWeave dashboard (since the proxy is bypassed).
+
+**Restore:** Change `baseUrl` back to `"http://192.168.1.70:30400"` and run `openclaw gateway restart`.
+
+### Max/pi-agent (Mac Mini)
+
+**Current working config:** `~/max/projects/agent-max/.env` has `ANTHROPIC_BASE_URL=http://192.168.1.70:30400`. The AgentWeave JS SDK handles per-request attribution headers. A2A server runs on port 8770.
+
+**Rollback to direct API:**
+
+```bash
+# SSH to Mac Mini:
+ssh arnabmac@arnabs-mac-mini.local
+
+# Edit ~/max/projects/agent-max/.env:
+#   Change ANTHROPIC_BASE_URL=http://192.168.1.70:30400
+#   To:    ANTHROPIC_BASE_URL=https://api.anthropic.com
+
+# Restart the service:
+launchctl stop com.arnab.agent-max && launchctl start com.arnab.agent-max
+```
+
+**Verify:** Trigger a Max agent action and confirm it completes. Check logs in `~/max/projects/agent-max/` for successful API responses.
+
+**Restore:** Set `ANTHROPIC_BASE_URL=http://192.168.1.70:30400` in `.env` and restart the service.
+
+### Claude Code (Mac Mini)
+
+**Current working config:** `~/.claude/settings.json` has an `env` block with `ANTHROPIC_BASE_URL` pointing to the proxy and `ANTHROPIC_CUSTOM_HEADERS` for attribution. Hooks (SubagentStop, Stop, PostToolUse) are configured for session tracking.
+
+**Rollback to direct API:**
+
+```bash
+# SSH to Mac Mini:
+ssh arnabmac@arnabs-mac-mini.local
+
+# Edit ~/.claude/settings.json:
+#   Option A: Remove the "env" block entirely
+#   Option B: Set "ANTHROPIC_BASE_URL": "https://api.anthropic.com" and remove ANTHROPIC_CUSTOM_HEADERS
+
+# No restart needed — the next Claude Code session will use the direct Anthropic API.
+```
+
+**Quick override (single session, no file edit):**
+
+```bash
+ANTHROPIC_BASE_URL="" claude
+```
+
+**Verify:** Start a new Claude Code session and confirm it responds. Check that the session does not appear in the AgentWeave dashboard.
+
+**Restore:** Re-add the `env` block with `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS` to `settings.json`.
+
+### Claude Code (NAS)
+
+**Current working config:** `~/.claude/settings.json` has an `env` block with `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS`.
+
+**Rollback to direct API:**
+
+```bash
+# On the NAS (192.168.1.70):
+# Edit ~/.claude/settings.json — remove the "env" block entirely.
+# The next Claude Code session will use the direct Anthropic API.
+```
+
+**Quick override (single session):**
+
+```bash
+ANTHROPIC_BASE_URL="" claude
+```
+
+**Verify:** Start a new Claude Code session and confirm it responds normally.
+
+**Restore:** Re-add the `env` block to `settings.json`.
+
+### Proxy-side recovery
+
+If the proxy pod itself needs recovery (not a client-side issue):
+
+```bash
+# Check proxy pod status
+kubectl get pods -n agentweave -l app=agentweave-proxy
+
+# Check proxy logs
+kubectl logs -n agentweave -l app=agentweave-proxy --tail=50
+
+# Restart the proxy pod
+kubectl delete pod -n agentweave -l app=agentweave-proxy
+
+# Check health endpoint
+curl -s http://192.168.1.70:30400/health | python3 -m json.tool
+
+# Nuclear option: redeploy
+kubectl rollout restart deployment agentweave-proxy -n agentweave
+```
 
 ---
 
