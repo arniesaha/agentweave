@@ -7,8 +7,9 @@ data:
   # OTLP HTTP endpoint for trace export
   AGENTWEAVE_OTLP_ENDPOINT: "http://tempo.monitoring.svc.cluster.local:4318"
 
-  # Agent ID tag applied to all spans from this proxy instance
-  AGENTWEAVE_AGENT_ID: "proxy"
+  # Fallback agent ID when request has no X-AgentWeave-Agent-Id header.
+  # Per-request headers take precedence (see proxy.py attribute resolution).
+  AGENTWEAVE_AGENT_ID: "unattributed"
 
   # Capture prompt/response previews in spans for session replay
   AGENTWEAVE_CAPTURE_PROMPTS: "1"
