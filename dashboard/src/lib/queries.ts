@@ -577,8 +577,9 @@ export interface SessionNode {
 
 /** An edge between two session nodes (parent → child). */
 export interface SessionEdge {
-  from: string  // parent sessionId
-  to: string    // child sessionId
+  from: string      // parent sessionId
+  to: string        // child sessionId
+  taskLabel?: string // delegation context (from child's prov.task.label)
 }
 
 /** A single LLM call within a session (for the detail timeline). */
@@ -643,6 +644,7 @@ export function buildSessionGraph(
 ): { nodes: SessionNode[]; edges: SessionEdge[] } {
   const nodeMap = new Map<string, SessionNode>()
   const edgeSet = new Set<string>()
+  const edgeTaskLabels = new Map<string, string>()
 
   for (const t of traces) {
     const row = spanRowFromTempoSpan(t)
@@ -695,6 +697,7 @@ export function buildSessionGraph(
       const edgeKey = `${row.parentSessionId}->${row.sessionId}`
       if (!edgeSet.has(edgeKey)) {
         edgeSet.add(edgeKey)
+        edgeTaskLabels.set(edgeKey, row.taskLabel || '')
       }
     }
   }
@@ -704,7 +707,7 @@ export function buildSessionGraph(
   for (const edgeKey of edgeSet) {
     const [from, to] = edgeKey.split('->')
     if (nodeMap.has(from) && nodeMap.has(to)) {
-      edges.push({ from, to })
+      edges.push({ from, to, taskLabel: edgeTaskLabels.get(edgeKey) || undefined })
     }
   }
 
