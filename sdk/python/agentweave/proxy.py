@@ -761,8 +761,8 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     query_string = request.url.query
 
     agent_id = (
-        os.getenv("AGENTWEAVE_AGENT_ID")
-        or request.headers.get("x-agentweave-agent-id")
+        request.headers.get("x-agentweave-agent-id")
+        or os.getenv("AGENTWEAVE_AGENT_ID")
         or _config_value("agent_id")
         or "unattributed"
     )
@@ -772,11 +772,9 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         or model
     )
 
-    # Prefer env var (set dynamically per-turn by the bridge plugin) over
-    # the static header from the Anthropic provider config.
     session_id = (
-        os.getenv("AGENTWEAVE_SESSION_ID")
-        or request.headers.get("x-agentweave-session-id")
+        request.headers.get("x-agentweave-session-id")
+        or os.getenv("AGENTWEAVE_SESSION_ID")
     )
     # Only use explicitly set project — do NOT infer from agent_id prefix.
     # Use AGENTWEAVE_PROJECT env var or X-AgentWeave-Project header.
@@ -811,8 +809,16 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     )
 
     # Sub-agent attribution headers (issue #15)
-    parent_session_id: str | None = request.headers.get("x-agentweave-parent-session-id")
-    agent_type: str | None = request.headers.get("x-agentweave-agent-type")
+    parent_session_id: str | None = (
+        request.headers.get("x-agentweave-parent-session-id")
+        or os.getenv("AGENTWEAVE_PARENT_SESSION_ID")
+        or None
+    )
+    agent_type: str | None = (
+        request.headers.get("x-agentweave-agent-type")
+        or os.getenv("AGENTWEAVE_AGENT_TYPE")
+        or None
+    )
     turn_depth: int | None = None
     turn_depth_raw = request.headers.get("x-agentweave-turn-depth")
     if turn_depth_raw is not None:

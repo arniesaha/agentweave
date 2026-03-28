@@ -1,6 +1,7 @@
 """Tests for the AgentWeave proxy — provider detection, parsers, auth, and header forwarding."""
 
 import logging
+import os
 
 import pytest
 
@@ -1312,6 +1313,63 @@ class TestInjectAnthropicKey:
         qs = _inject_anthropic_key(headers, "beta=true")
         assert "x-api-key" not in headers
         assert qs == "beta=true"
+
+
+# ---------------------------------------------------------------------------
+# Attribute resolution order: header > env > fallback
+# ---------------------------------------------------------------------------
+
+
+class TestAttributeResolution:
+    """Per-request headers MUST take precedence over env var defaults (#143)."""
+
+    def test_agent_id_from_header_over_env(self, monkeypatch):
+        monkeypatch.setenv("AGENTWEAVE_AGENT_ID", "env-agent")
+        headers = {"x-agentweave-agent-id": "header-agent"}
+        agent_id = (
+            headers.get("x-agentweave-agent-id")
+            or os.getenv("AGENTWEAVE_AGENT_ID")
+            or "unattributed"
+        )
+        assert agent_id == "header-agent"
+
+    def test_agent_id_falls_back_to_env(self, monkeypatch):
+        monkeypatch.setenv("AGENTWEAVE_AGENT_ID", "env-agent")
+        headers = {}
+        agent_id = (
+            headers.get("x-agentweave-agent-id")
+            or os.getenv("AGENTWEAVE_AGENT_ID")
+            or "unattributed"
+        )
+        assert agent_id == "env-agent"
+
+    def test_agent_id_falls_back_to_unattributed(self, monkeypatch):
+        monkeypatch.delenv("AGENTWEAVE_AGENT_ID", raising=False)
+        headers = {}
+        agent_id = (
+            headers.get("x-agentweave-agent-id")
+            or os.getenv("AGENTWEAVE_AGENT_ID")
+            or "unattributed"
+        )
+        assert agent_id == "unattributed"
+
+    def test_session_id_from_header_over_env(self, monkeypatch):
+        monkeypatch.setenv("AGENTWEAVE_SESSION_ID", "env-session")
+        headers = {"x-agentweave-session-id": "header-session"}
+        session_id = (
+            headers.get("x-agentweave-session-id")
+            or os.getenv("AGENTWEAVE_SESSION_ID")
+        )
+        assert session_id == "header-session"
+
+    def test_session_id_falls_back_to_env(self, monkeypatch):
+        monkeypatch.setenv("AGENTWEAVE_SESSION_ID", "env-session")
+        headers = {}
+        session_id = (
+            headers.get("x-agentweave-session-id")
+            or os.getenv("AGENTWEAVE_SESSION_ID")
+        )
+        assert session_id == "env-session"
 
 
 # ---------------------------------------------------------------------------
