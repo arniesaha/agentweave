@@ -281,18 +281,28 @@ async def health() -> dict:
     return resp
 
 
+# When True, _session_context overrides request headers (used during sub-agent windows)
+_session_context_force: bool = False
+
 @app.post("/session", include_in_schema=True)
 async def set_session_context(body: dict):
-    """Override the global session context for all subsequent spans."""
-    global _session_context
+    """Override the global session context for all subsequent spans.
+
+    When ``force: true`` is included, the session context takes precedence
+    over per-request headers.  This allows the bridge plugin to temporarily
+    switch attribution during a sub-agent window.
+    """
+    global _session_context, _session_context_force
     _session_context = {k: v for k, v in {
         "prov.session.id": body.get("session_id", ""),
         "prov.parent.session.id": body.get("parent_session_id", ""),
         "prov.task.label": body.get("task_label", ""),
         "prov.agent.type": body.get("agent_type", ""),
+        "prov.agent.id": body.get("agent_id", ""),
         "prov.project": body.get("project", ""),
     }.items() if v}
-    return {"ok": True, "context": _session_context}
+    _session_context_force = bool(body.get("force", False))
+    return {"ok": True, "context": _session_context, "force": _session_context_force}
 
 
 @app.get("/session", include_in_schema=True)
@@ -760,8 +770,16 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     is_stream = _is_streaming(provider, path, body)
     query_string = request.url.query
 
+    # When _session_context_force is True (set by POST /session with force:true),
+    # the session context overrides request headers. This is used by the bridge
+    # plugin to temporarily switch attribution during sub-agent windows.
+    _is_subagent_env = os.getenv("AGENTWEAVE_AGENT_TYPE", "").lower() == "subagent"
+    _force = _session_context_force
+
     agent_id = (
-        request.headers.get("x-agentweave-agent-id")
+        (_session_context.get("prov.agent.id") if _force else None)
+        or (os.getenv("AGENTWEAVE_AGENT_ID") if _is_subagent_env else None)
+        or request.headers.get("x-agentweave-agent-id")
         or os.getenv("AGENTWEAVE_AGENT_ID")
         or _config_value("agent_id")
         or "unattributed"
@@ -773,7 +791,9 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     )
 
     session_id = (
-        request.headers.get("x-agentweave-session-id")
+        (_session_context.get("prov.session.id") if _force else None)
+        or (os.getenv("AGENTWEAVE_SESSION_ID") if _is_subagent_env else None)
+        or request.headers.get("x-agentweave-session-id")
         or os.getenv("AGENTWEAVE_SESSION_ID")
     )
     # Only use explicitly set project — do NOT infer from agent_id prefix.
@@ -810,12 +830,16 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
 
     # Sub-agent attribution headers (issue #15)
     parent_session_id: str | None = (
-        request.headers.get("x-agentweave-parent-session-id")
+        (_session_context.get("prov.parent.session.id") if _force else None)
+        or (os.getenv("AGENTWEAVE_PARENT_SESSION_ID") if _is_subagent_env else None)
+        or request.headers.get("x-agentweave-parent-session-id")
         or os.getenv("AGENTWEAVE_PARENT_SESSION_ID")
         or None
     )
     agent_type: str | None = (
-        request.headers.get("x-agentweave-agent-type")
+        (_session_context.get("prov.agent.type") if _force else None)
+        or (os.getenv("AGENTWEAVE_AGENT_TYPE") if _is_subagent_env else None)
+        or request.headers.get("x-agentweave-agent-type")
         or os.getenv("AGENTWEAVE_AGENT_TYPE")
         or None
     )

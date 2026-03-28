@@ -262,16 +262,48 @@ export function createAgentWeaveBridgeService() {
                   }
                   const spanCtx = trace.setSpan(context.active(), span)
                   activeTurns.set(sessionKey, { span, ctx: spanCtx })
+
+                  // Force the proxy to attribute LLM calls to this sub-agent session
+                  const proxyUrl = config.proxyUrl?.replace(/\/v1\/?$/, "") || "http://192.168.1.70:30400"
+                  const mainSessionId = mainKey ? (activeTurns.get(mainKey)?.span as any)?._attributes?.["session.id"] || "nix-main" : "nix-main"
+                  fetch(`${proxyUrl}/session`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      session_id: sessionId,
+                      parent_session_id: mainSessionId,
+                      agent_id: subagentId,
+                      agent_type: "subagent",
+                      task_label: `subagent ${sessionKey.split(":")[1] || "unknown"}`,
+                      force: true,
+                    }),
+                  }).then(() => console.log(`[agentweave-bridge] proxy session forced to subagent: ${sessionId}`))
+                    .catch(err => console.warn(`[agentweave-bridge] proxy session set failed:`, err.message))
+
                   console.log(`[agentweave-bridge] started subagent span: ${sessionKey} agent: ${subagentId}`)
                 }
               }
-              // End subagent span when session goes idle
+              // End subagent span when session goes idle — restore main session on proxy
               if (sessionKey.includes(":subagent:") && activeTurns.has(sessionKey)) {
                 if (state === "idle") {
                   const turn = activeTurns.get(sessionKey)!
                   turn.span.setAttribute("outcome", "completed")
                   turn.span.end()
                   activeTurns.delete(sessionKey)
+
+                  // Restore proxy to main session (clear force)
+                  const proxyUrl = config.proxyUrl?.replace(/\/v1\/?$/, "") || "http://192.168.1.70:30400"
+                  fetch(`${proxyUrl}/session`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      session_id: "nix-main",
+                      agent_type: "main",
+                      force: false,
+                    }),
+                  }).then(() => console.log(`[agentweave-bridge] proxy session restored to nix-main`))
+                    .catch(err => console.warn(`[agentweave-bridge] proxy session restore failed:`, err.message))
+
                   console.log(`[agentweave-bridge] ended subagent span: ${sessionKey}`)
                 }
               }
