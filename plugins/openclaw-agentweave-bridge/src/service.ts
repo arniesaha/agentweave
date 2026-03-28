@@ -20,15 +20,37 @@ export interface BridgeConfig {
 
 /**
  * Resolve agent ID from OpenClaw session key format.
- * - "agent:main:*" → configured agentId (e.g. "nix-v1")
- * - "agent:isolated:*" → configured subagentId (e.g. "nix-subagent-v1")
- * - anything else → configured agentId
+ *
+ * Detection order:
+ * 1. Explicit subagent prefixes: agent:isolated:*, agent:main:subagent:*
+ * 2. Concurrent-turn heuristic: if another agent:main:* turn is already
+ *    active, this new turn is likely a spawned sub-agent (#146)
+ * 3. Default: main agent
  */
-function resolveAgentId(sessionKey: string, config: BridgeConfig): { agentId: string; agentType: string } {
+function resolveAgentId(
+  sessionKey: string,
+  config: BridgeConfig,
+  currentActiveTurns: Map<string, ActiveTurn>
+): { agentId: string; agentType: string; parentSessionKey?: string } {
+  const subagentId = config.subagentId ?? `${config.agentId ?? "nix"}-subagent-v1`
+
+  // 1. Explicit subagent session key prefixes
   if (sessionKey.startsWith("agent:isolated:") || sessionKey.startsWith("agent:main:subagent:")) {
-    return { agentId: config.subagentId ?? `${config.agentId ?? "nix"}-subagent-v1`, agentType: "subagent" }
+    return { agentId: subagentId, agentType: "subagent" }
   }
-  // "agent:main:*" (non-subagent) or any other format → main agent
+
+  // 2. Concurrent-turn heuristic: if a main turn is already active and this
+  //    is a DIFFERENT session key also under agent:main:*, it's a sub-agent
+  if (sessionKey.startsWith("agent:main:")) {
+    for (const [activeKey] of currentActiveTurns) {
+      if (activeKey !== sessionKey && activeKey.startsWith("agent:main:")) {
+        console.log(`[agentweave-bridge] concurrent-turn detected: ${sessionKey} while ${activeKey} is active → subagent`)
+        return { agentId: subagentId, agentType: "subagent", parentSessionKey: activeKey }
+      }
+    }
+  }
+
+  // 3. Default: main agent
   return { agentId: config.agentId ?? "nix-v1", agentType: "main" }
 }
 
@@ -124,7 +146,7 @@ export function createAgentWeaveBridgeService() {
               const sessionId = e.sessionId || e.sessionKey || ""
               if (!sessionKey) break
 
-              const { agentId, agentType } = resolveAgentId(sessionKey, config)
+              const { agentId, agentType, parentSessionKey } = resolveAgentId(sessionKey, config, activeTurns)
 
               const tracer = trace.getTracer("openclaw-agentweave-bridge")
               const span = tracer.startSpan("openclaw.turn")
@@ -137,28 +159,31 @@ export function createAgentWeaveBridgeService() {
               if (e.channel) span.setAttribute("channel", e.channel)
               if (config.project) span.setAttribute("prov.project", config.project)
 
+              // Link sub-agent to parent session
+              if (agentType === "subagent") {
+                // Use parentSessionKey from concurrent-turn heuristic, or find any active main turn
+                const parentKey = parentSessionKey
+                  ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:"))
+                if (parentKey) {
+                  const parentTurn = activeTurns.get(parentKey)
+                  if (parentTurn) {
+                    // Get the parent's session ID from its span attributes
+                    const parentSid = parentTurn.span.spanContext?.()
+                    span.setAttribute("prov.parent.session.id", parentKey)
+                    process.env.AGENTWEAVE_PARENT_SESSION_ID = parentKey
+                  }
+                }
+              }
+
               const spanCtx = trace.setSpan(context.active(), span)
               const carrier: Record<string, string> = {}
               propagation.inject(spanCtx, carrier)
               if (carrier["traceparent"]) {
                 process.env.AGENTWEAVE_TRACEPARENT = carrier["traceparent"]
               }
-              // Set env vars for sub-agents spawned during this turn
               process.env.AGENTWEAVE_SESSION_ID = sessionId
               process.env.AGENTWEAVE_AGENT_ID = agentId
               process.env.AGENTWEAVE_AGENT_TYPE = agentType
-              if (agentType === "subagent") {
-                // Link sub-agent back to the main session
-                const mainSession = Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:"))
-                if (mainSession) {
-                  const parentTurn = activeTurns.get(mainSession)
-                  if (parentTurn) {
-                    const parentSessionId = parentTurn.span.spanContext?.()
-                    span.setAttribute("prov.parent.session.id", mainSession)
-                    process.env.AGENTWEAVE_PARENT_SESSION_ID = mainSession
-                  }
-                }
-              }
               if (config.proxyUrl) {
                 process.env.ANTHROPIC_BASE_URL = config.proxyUrl
               }
