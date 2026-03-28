@@ -18,39 +18,56 @@ export interface BridgeConfig {
   proxyUrl?: string
 }
 
+/** Sources that indicate a spawned sub-agent (not a user-initiated message). */
+const SUBAGENT_SOURCES = new Set([
+  "sessions_spawn",
+  "subagent",
+  "spawn",
+  "delegated",
+])
+
 /**
- * Resolve agent ID from OpenClaw session key format.
+ * Resolve agent ID from OpenClaw diagnostic event context.
  *
  * Detection order:
- * 1. Explicit subagent prefixes: agent:isolated:*, agent:main:subagent:*
- * 2. Concurrent-turn heuristic: if another agent:main:* turn is already
- *    active, this new turn is likely a spawned sub-agent (#146)
- * 3. Default: main agent
+ * 1. Event source field: "sessions_spawn" etc. → subagent (reliable, from OpenClaw)
+ * 2. Explicit subagent session key prefixes: agent:isolated:*, agent:main:subagent:*
+ * 3. Concurrent-turn heuristic: another agent:main:* turn is already active (fallback)
+ * 4. Default: main agent
  */
 function resolveAgentId(
   sessionKey: string,
   config: BridgeConfig,
-  currentActiveTurns: Map<string, ActiveTurn>
+  currentActiveTurns: Map<string, ActiveTurn>,
+  source?: string
 ): { agentId: string; agentType: string; parentSessionKey?: string } {
   const subagentId = config.subagentId ?? `${config.agentId ?? "nix"}-subagent-v1`
 
-  // 1. Explicit subagent session key prefixes
+  // 1. Event source field (most reliable — directly from OpenClaw)
+  if (source && SUBAGENT_SOURCES.has(source)) {
+    console.log(`[agentweave-bridge] source="${source}" → subagent`)
+    // Find parent from active turns
+    const parentKey = Array.from(currentActiveTurns.keys())
+      .find(k => k.startsWith("agent:main:") && k !== sessionKey)
+    return { agentId: subagentId, agentType: "subagent", parentSessionKey: parentKey }
+  }
+
+  // 2. Explicit subagent session key prefixes
   if (sessionKey.startsWith("agent:isolated:") || sessionKey.startsWith("agent:main:subagent:")) {
     return { agentId: subagentId, agentType: "subagent" }
   }
 
-  // 2. Concurrent-turn heuristic: if a main turn is already active and this
-  //    is a DIFFERENT session key also under agent:main:*, it's a sub-agent
+  // 3. Concurrent-turn heuristic (fallback — less reliable)
   if (sessionKey.startsWith("agent:main:")) {
     for (const [activeKey] of currentActiveTurns) {
       if (activeKey !== sessionKey && activeKey.startsWith("agent:main:")) {
-        console.log(`[agentweave-bridge] concurrent-turn detected: ${sessionKey} while ${activeKey} is active → subagent`)
+        console.log(`[agentweave-bridge] concurrent-turn: ${sessionKey} while ${activeKey} active → subagent`)
         return { agentId: subagentId, agentType: "subagent", parentSessionKey: activeKey }
       }
     }
   }
 
-  // 3. Default: main agent
+  // 4. Default: main agent
   return { agentId: config.agentId ?? "nix-v1", agentType: "main" }
 }
 
@@ -137,8 +154,8 @@ export function createAgentWeaveBridgeService() {
       console.log("[agentweave-bridge] globalThis keys with openclaw:", Object.keys(g).filter(k => k.includes("openclaw")))
 
       unsubscribe = subscribeToDiagnosticEvents((evt: unknown) => {
-        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number }
-        console.log("[agentweave-bridge] event:", e.type)
+        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number }
+        console.log("[agentweave-bridge] event:", e.type, "sessionKey:", e.sessionKey, "source:", e.source)
         try {
           switch (e.type) {
             case "message.queued": {
@@ -146,7 +163,7 @@ export function createAgentWeaveBridgeService() {
               const sessionId = e.sessionId || e.sessionKey || ""
               if (!sessionKey) break
 
-              const { agentId, agentType, parentSessionKey } = resolveAgentId(sessionKey, config, activeTurns)
+              const { agentId, agentType, parentSessionKey } = resolveAgentId(sessionKey, config, activeTurns, e.source)
 
               const tracer = trace.getTracer("openclaw-agentweave-bridge")
               const span = tracer.startSpan("openclaw.turn")
