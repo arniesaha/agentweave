@@ -297,13 +297,13 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
               <Maximize2 size={13} />
             </button>
           )}
-          <span className="flex items-center gap-1">
-            <svg width="24" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#1E2433" strokeWidth="2" strokeDasharray="4 3"/><polygon points="20,2 20,8 24,5" fill="#1E2433"/></svg>
-            delegates to
+          <span className="flex items-center gap-1.5">
+            <svg width="28" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="#00E5CC" strokeWidth="1.5" strokeDasharray="6 4" opacity="0.6"/><polygon points="22,2 22,8 28,5" fill="#00E5CC" opacity="0.7"/></svg>
+            <span>delegates to</span>
           </span>
-          <span className="flex items-center gap-1">
-            <svg width="24" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#FFBF47" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.7"/><polygon points="20,2 20,8 24,5" fill="#FFBF47" opacity="0.7"/></svg>
-            delegates back
+          <span className="flex items-center gap-1.5">
+            <svg width="28" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="#FFBF47" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.7"/><polygon points="22,2 22,8 28,5" fill="#FFBF47" opacity="0.8"/></svg>
+            <span>callback</span>
           </span>
         </div>
         {/* Toggle only shown when not in fixed mode */}
@@ -328,7 +328,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         className="block"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Forward edges — dashed edge color */}
+        {/* Forward edges — teal dashed line with arrowhead */}
         {displayEdges.map((edge) => {
           const from = nodeMap.get(edge.from)
           const to = nodeMap.get(edge.to)
@@ -340,9 +340,21 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           const ex = to.x
           const ey = to.y - toR - 2
           const path = `M ${from.x} ${from.y + fromR} C ${from.x} ${midY}, ${ex} ${midY}, ${ex} ${ey}`
+          const midPtX = (from.x + ex) / 2
+          const midPtY = midY - 4
           return (
-            <path key={`fwd-${edge.from}->${edge.to}`}
-              d={path} fill="none" stroke="#1E2433" strokeWidth="2" strokeDasharray="4 3" />
+            <g key={`fwd-${edge.from}->${edge.to}`}>
+              <path d={path} fill="none" stroke="#00E5CC" strokeWidth="1.5" strokeDasharray="6 4" opacity="0.6" />
+              <polygon
+                points={`${ex - 4},${ey - 7} ${ex + 4},${ey - 7} ${ex},${ey}`}
+                fill="#00E5CC" opacity="0.7" />
+              {edge.taskLabel && (
+                <text x={midPtX} y={midPtY} textAnchor="middle" fontSize="8" fill="#00E5CC" opacity="0.8"
+                  fontFamily="'DM Sans', system-ui">
+                  {edge.taskLabel.length > 28 ? edge.taskLabel.slice(0, 27) + '...' : edge.taskLabel}
+                </text>
+              )}
+            </g>
           )
         })}
 
@@ -357,41 +369,25 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           const rightEdge = svgWidth - 28
           const fx = from.x + fromR
           const fy = from.y
-          const tx = to.x + toR + 10   // land 10px outside the target circle
+          const tx = to.x + toR + 10
           const ty = to.y
           const path = `M ${fx} ${fy} C ${rightEdge} ${fy}, ${rightEdge} ${ty}, ${tx} ${ty}`
+          const labelX = rightEdge - 20
+          const labelY = (fy + ty) / 2
           return (
-            <path key={`back-${edge.from}->${edge.to}`}
-              d={path} fill="none" stroke="#FFBF47" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.8" />
+            <g key={`back-${edge.from}->${edge.to}`}>
+              <path d={path} fill="none" stroke="#FFBF47" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.7" />
+              <polygon
+                points={`${tx + 8},${ty - 4} ${tx + 8},${ty + 4} ${tx},${ty}`}
+                fill="#FFBF47" opacity="0.8" />
+              {edge.taskLabel && (
+                <text x={labelX} y={labelY} textAnchor="end" fontSize="8" fill="#FFBF47" opacity="0.7"
+                  fontFamily="'DM Sans', system-ui">
+                  {edge.taskLabel.length > 24 ? edge.taskLabel.slice(0, 23) + '...' : edge.taskLabel}
+                </text>
+              )}
+            </g>
           )
-        })}
-
-        {/* Arrowheads drawn LAST so they appear on top of nodes */}
-        {displayEdges.map((edge) => {
-          const from = nodeMap.get(edge.from)
-          const to = nodeMap.get(edge.to)
-          if (!from || !to) return null
-          const toR = nodeRadius + Math.min(to.callCount * 1.5, 12)
-
-          if (to.depth > from.depth) {
-            // Forward edge: downward arrowhead just above target
-            const ex = to.x
-            const ey = to.y - toR - 2
-            return (
-              <polygon key={`ah-fwd-${edge.from}->${edge.to}`}
-                points={`${ex - 5},${ey - 8} ${ex + 5},${ey - 8} ${ex},${ey}`}
-                fill="#2A3246" />
-            )
-          } else {
-            // Back-edge: leftward arrowhead landing on target's right side
-            const tx = to.x + toR + 10
-            const ty = to.y
-            return (
-              <polygon key={`ah-back-${edge.from}->${edge.to}`}
-                points={`${tx + 10},${ty - 5} ${tx + 10},${ty + 5} ${tx},${ty}`}
-                fill="#FFBF47" />
-            )
-          }
         })}
 
         {/* Nodes */}
