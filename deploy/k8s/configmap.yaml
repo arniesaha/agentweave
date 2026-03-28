@@ -10,8 +10,8 @@ data:
   # Agent ID tag applied to all spans from this proxy instance
   AGENTWEAVE_AGENT_ID: "proxy"
 
-  # Set to "1" to capture prompt/response previews in spans (opt-in)
-  # AGENTWEAVE_CAPTURE_PROMPTS: "1"
+  # Capture prompt/response previews in spans for session replay
+  AGENTWEAVE_CAPTURE_PROMPTS: "1"
 
   # Proxy-side API key injection — enables callers to set ANTHROPIC_API_KEY=dummy.
   # These are secrets; inject via secretKeyRef in the Deployment, not here.
