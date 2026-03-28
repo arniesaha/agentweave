@@ -141,34 +141,36 @@ _PROXY_TOKEN: str | None = os.getenv("AGENTWEAVE_PROXY_TOKEN") or None
 
 # Proxy-side API key injection — allows callers to set ANTHROPIC_API_KEY=dummy
 # when the proxy host holds the real credentials.
-_ANTHROPIC_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_ANTHROPIC_API_KEY") or None
+# IMPORTANT: Only standard API keys (sk-ant-api03_*) can be injected.
+# OAuth tokens (sk-ant-oat*) MUST NOT be used — they expire and require
+# SDK-level auth flow with TLS fingerprinting.  See DEPLOYMENT-RUNBOOK.md.
+_raw_anthropic_key = os.getenv("AGENTWEAVE_ANTHROPIC_API_KEY", "").strip()
+if _raw_anthropic_key and _raw_anthropic_key.startswith("sk-ant-oat"):
+    logging.getLogger("agentweave.proxy").warning(
+        "AGENTWEAVE_ANTHROPIC_API_KEY contains an OAuth token (sk-ant-oat*) "
+        "which CANNOT be used for proxy injection — OAuth tokens expire and "
+        "require SDK-level auth.  Use a standard API key (sk-ant-api03_*) or "
+        "clear this env var to enable pass-through mode.  Ignoring."
+    )
+    _ANTHROPIC_INJECT_KEY: str | None = None
+else:
+    _ANTHROPIC_INJECT_KEY: str | None = _raw_anthropic_key or None
+
 _GOOGLE_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_GOOGLE_API_KEY") or None
 _OPENAI_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_OPENAI_API_KEY") or None
 
 
 def _inject_anthropic_key(forward_headers: dict[str, str], query_string: str) -> str:
-    """Inject the proxy-configured Anthropic API key into *forward_headers*.
+    """Inject a standard Anthropic API key into *forward_headers*.
 
-    Handles both standard ``sk-ant-api03_*`` keys (set as ``x-api-key``) and
-    OAuth tokens (``sk-ant-oat*``, set as ``Bearer`` + beta headers).
+    Only standard ``sk-ant-api03_*`` keys are supported.  OAuth tokens
+    are rejected at startup (see guard above).
 
     Returns the (possibly modified) *query_string*.
     """
     if not _ANTHROPIC_INJECT_KEY:
         return query_string
-    if _ANTHROPIC_INJECT_KEY.startswith("sk-ant-oat"):
-        forward_headers["authorization"] = f"Bearer {_ANTHROPIC_INJECT_KEY}"
-        forward_headers.pop("x-api-key", None)
-        existing_beta = forward_headers.get("anthropic-beta", "")
-        oauth_beta = "oauth-2025-04-20"
-        claude_code_beta = "claude-code-20250219"
-        betas_to_add = [b for b in [oauth_beta, claude_code_beta] if b not in existing_beta]
-        if betas_to_add:
-            forward_headers["anthropic-beta"] = ",".join(filter(None, [existing_beta] + betas_to_add))
-        if "beta=true" not in query_string:
-            query_string = f"{query_string}&beta=true" if query_string else "beta=true"
-    else:
-        forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
+    forward_headers["x-api-key"] = _ANTHROPIC_INJECT_KEY
     return query_string
 
 

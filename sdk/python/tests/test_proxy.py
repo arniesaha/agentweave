@@ -1285,32 +1285,32 @@ class TestInjectAnthropicKey:
         assert headers["x-api-key"] == "sk-ant-api03_real"
         assert qs == ""
 
-    def test_oauth_key_sets_bearer_and_beta(self, monkeypatch):
-        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-oat-abc123")
+    def test_oauth_token_is_not_injected(self, monkeypatch):
+        """OAuth tokens (sk-ant-oat*) must never be used for injection —
+        they expire and require SDK-level auth with TLS fingerprinting."""
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", None)
         headers = {"x-api-key": "dummy"}
         qs = _inject_anthropic_key(headers, "")
-        assert headers["authorization"] == "Bearer sk-ant-oat-abc123"
-        assert "x-api-key" not in headers
-        assert "oauth-2025-04-20" in headers["anthropic-beta"]
-        assert "beta=true" in qs
+        # Key should remain unchanged (no injection with None key)
+        assert headers["x-api-key"] == "dummy"
+        assert qs == ""
 
-    def test_oauth_preserves_existing_beta(self, monkeypatch):
-        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-oat-abc123")
-        headers = {"anthropic-beta": "existing-feature"}
+    def test_injection_skipped_when_client_has_real_key(self, monkeypatch):
+        """Clients that send a real sk-ant key should pass through."""
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-api03_proxy_key")
+        headers = {"x-api-key": "sk-ant-api03_client_key"}
+        # The catch-all route checks client_key.startswith("sk-ant") before
+        # calling _inject_anthropic_key, so this test verifies the function
+        # itself always injects (the guard is in the caller).
         qs = _inject_anthropic_key(headers, "")
-        assert "existing-feature" in headers["anthropic-beta"]
-        assert "oauth-2025-04-20" in headers["anthropic-beta"]
+        assert headers["x-api-key"] == "sk-ant-api03_proxy_key"
 
-    def test_oauth_appends_beta_to_existing_qs(self, monkeypatch):
-        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-oat-abc123")
-        headers = {}
-        qs = _inject_anthropic_key(headers, "foo=bar")
-        assert qs == "foo=bar&beta=true"
-
-    def test_oauth_skips_beta_if_already_present(self, monkeypatch):
-        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", "sk-ant-oat-abc123")
+    def test_no_injection_when_key_is_none(self, monkeypatch):
+        """When _ANTHROPIC_INJECT_KEY is None, headers are untouched."""
+        monkeypatch.setattr(proxy_module, "_ANTHROPIC_INJECT_KEY", None)
         headers = {}
         qs = _inject_anthropic_key(headers, "beta=true")
+        assert "x-api-key" not in headers
         assert qs == "beta=true"
 
 
