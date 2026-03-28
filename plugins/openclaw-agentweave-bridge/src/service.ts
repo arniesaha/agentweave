@@ -25,10 +25,10 @@ export interface BridgeConfig {
  * - anything else → configured agentId
  */
 function resolveAgentId(sessionKey: string, config: BridgeConfig): { agentId: string; agentType: string } {
-  if (sessionKey.startsWith("agent:isolated:")) {
+  if (sessionKey.startsWith("agent:isolated:") || sessionKey.startsWith("agent:main:subagent:")) {
     return { agentId: config.subagentId ?? `${config.agentId ?? "nix"}-subagent-v1`, agentType: "subagent" }
   }
-  // "agent:main:*" or any other format → main agent
+  // "agent:main:*" (non-subagent) or any other format → main agent
   return { agentId: config.agentId ?? "nix-v1", agentType: "main" }
 }
 
@@ -149,7 +149,7 @@ export function createAgentWeaveBridgeService() {
               process.env.AGENTWEAVE_AGENT_TYPE = agentType
               if (agentType === "subagent") {
                 // Link sub-agent back to the main session
-                const mainSession = Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:"))
+                const mainSession = Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:"))
                 if (mainSession) {
                   const parentTurn = activeTurns.get(mainSession)
                   if (parentTurn) {
