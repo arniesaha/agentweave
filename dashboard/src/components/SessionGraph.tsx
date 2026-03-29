@@ -340,8 +340,9 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           const ex = to.x
           const ey = to.y - toR - 2
           const path = `M ${from.x} ${from.y + fromR} C ${from.x} ${midY}, ${ex} ${midY}, ${ex} ${ey}`
-          const midPtX = (from.x + ex) / 2
-          const midPtY = midY - 4
+          // Position label at 60% along the edge (closer to target), offset left to avoid node overlap
+          const labelX = from.x + (ex - from.x) * 0.3 - 10
+          const labelY = from.y + fromR + (ey - from.y - fromR) * 0.45
           return (
             <g key={`fwd-${edge.from}->${edge.to}`}>
               <path d={path} fill="none" stroke="#00E5CC" strokeWidth="1.5" strokeDasharray="6 4" opacity="0.6" />
@@ -349,9 +350,9 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
                 points={`${ex - 4},${ey - 7} ${ex + 4},${ey - 7} ${ex},${ey}`}
                 fill="#00E5CC" opacity="0.7" />
               {edge.taskLabel && (
-                <text x={midPtX} y={midPtY} textAnchor="middle" fontSize="8" fill="#00E5CC" opacity="0.8"
+                <text x={labelX} y={labelY} textAnchor="end" fontSize="7.5" fill="#00E5CC" opacity="0.7"
                   fontFamily="'DM Sans', system-ui">
-                  {edge.taskLabel.length > 28 ? edge.taskLabel.slice(0, 27) + '...' : edge.taskLabel}
+                  {edge.taskLabel.length > 22 ? edge.taskLabel.slice(0, 21) + '...' : edge.taskLabel}
                 </text>
               )}
             </g>
