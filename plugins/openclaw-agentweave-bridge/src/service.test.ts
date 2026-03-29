@@ -120,7 +120,7 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("error.message", "context limit exceeded")
   })
 
-  it("adds model.usage event to active span with correct field names", () => {
+  it("adds model.usage event and span attributes to active span", () => {
     fire({ type: "message.queued", sessionKey: "sk-4", sessionId: "sess-d", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
     fire({
       type: "model.usage",
@@ -143,6 +143,14 @@ describe("createAgentWeaveBridgeService", () => {
       "model.usage.cache_read_tokens": 200,
       "model.usage.cache_write_tokens": 100,
     }))
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.provider", "anthropic")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "claude-sonnet-4-6")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("cost.usd", 0.015)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.prompt_tokens", 1000)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.completion_tokens", 500)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.cache_read_tokens", 200)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.cache_write_tokens", 100)
   })
 
   it("ignores model.usage for unknown sessionKey", () => {

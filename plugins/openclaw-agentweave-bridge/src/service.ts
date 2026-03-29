@@ -317,15 +317,34 @@ export function createAgentWeaveBridgeService() {
               const sessionKey = e.sessionKey ?? ""
               const turn = activeTurns.get(sessionKey)
               if (!turn) break
+
+              const provider = e.provider ?? ""
+              const model = e.model ?? ""
+              const costUsd = e.costUsd ?? 0
+              const inputTokens = e.usage?.input ?? 0
+              const outputTokens = e.usage?.output ?? 0
+              const cacheReadTokens = e.usage?.cacheRead ?? 0
+              const cacheWriteTokens = e.usage?.cacheWrite ?? 0
+
+              // Keep event emission for event-level timelines/debugging.
               turn.span.addEvent("model.usage", {
-                "model.provider": e.provider ?? "",
-                "model.name": e.model ?? "",
-                "model.cost_usd": e.costUsd ?? 0,
-                "model.usage.input_tokens": e.usage?.input ?? 0,
-                "model.usage.output_tokens": e.usage?.output ?? 0,
-                "model.usage.cache_read_tokens": e.usage?.cacheRead ?? 0,
-                "model.usage.cache_write_tokens": e.usage?.cacheWrite ?? 0,
+                "model.provider": provider,
+                "model.name": model,
+                "model.cost_usd": costUsd,
+                "model.usage.input_tokens": inputTokens,
+                "model.usage.output_tokens": outputTokens,
+                "model.usage.cache_read_tokens": cacheReadTokens,
+                "model.usage.cache_write_tokens": cacheWriteTokens,
               })
+
+              // Also write span attributes so TraceQL select() can read model/cost/usage.
+              turn.span.setAttribute("prov.llm.provider", provider)
+              turn.span.setAttribute("prov.llm.model", model)
+              turn.span.setAttribute("cost.usd", costUsd)
+              turn.span.setAttribute("prov.llm.prompt_tokens", inputTokens)
+              turn.span.setAttribute("prov.llm.completion_tokens", outputTokens)
+              turn.span.setAttribute("prov.llm.cache_read_tokens", cacheReadTokens)
+              turn.span.setAttribute("prov.llm.cache_write_tokens", cacheWriteTokens)
               break
             }
           }
