@@ -160,7 +160,10 @@ export function createAgentWeaveBridgeService() {
           switch (e.type) {
             case "message.queued": {
               const sessionKey = e.sessionKey ?? ""
-              const sessionId = e.sessionId || e.sessionKey || ""
+              // Use sessionKey (e.g. "agent:main:main") as the session ID, not
+              // sessionId (which is just "main" — the bare agent name).
+              // sessionKey is the fully qualified identifier across OpenClaw.
+              const sessionId = e.sessionKey || e.sessionId || ""
               if (!sessionKey) break
 
               const { agentId, agentType, parentSessionKey } = resolveAgentId(sessionKey, config, activeTurns, e.source)
