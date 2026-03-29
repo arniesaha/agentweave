@@ -254,12 +254,14 @@ export function tempoSessionQuery(sessionId: string): string {
 
 /** TraceQL search query for session replay — fetches all spans with full attributes. */
 export function tempoSessionReplayQuery(sessionId: string): string {
+  // Match direct session spans AND child/sub-agent spans (via prov.parent.session.id)
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}") }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}" || span.prov.parent.session.id = "${sessionId}") }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id,` +
     ` span.prov.session.turn, span.prov.activity.type, span.prov.llm.prompt_preview,` +
-    ` span.prov.llm.response_preview, span.prov.task.label, span.prov.project)`
+    ` span.prov.llm.response_preview, span.prov.task.label, span.prov.project,` +
+    ` span.session.id, span.prov.parent.session.id, span.prov.agent.type)`
   )
 }
 
@@ -281,9 +283,13 @@ export interface ReplayTurn {
   responsePreview: string
   taskLabel: string
   project: string
+  sessionId: string           // which session this turn belongs to
+  parentSessionId: string     // parent session (empty for root)
+  agentType: string           // 'main' | 'subagent' | 'delegated'
+  isChildSession: boolean     // true if this turn is from a child/sub-agent session
 }
 
-export function buildReplayTurns(traces: TempoSpan[]): ReplayTurn[] {
+export function buildReplayTurns(traces: TempoSpan[], searchedSessionId?: string): ReplayTurn[] {
   const rows: ReplayTurn[] = []
   for (const t of traces) {
     const spans = t.spanSets?.[0]?.spans ?? t.spanSet?.spans ?? []
@@ -305,6 +311,11 @@ export function buildReplayTurns(traces: TempoSpan[]): ReplayTurn[] {
     const turnStr = getSpanAttr(attrs, 'prov.session.turn')
     const turnNumber = parseInt(turnStr || '0') || 0
 
+    const sessionId = getSpanAttr(attrs, 'session.id') || getSpanAttr(attrs, 'prov.session.id') || ''
+    const parentSessionId = getSpanAttr(attrs, 'prov.parent.session.id') || ''
+    const agentType = getSpanAttr(attrs, 'prov.agent.type') || ''
+    const isChildSession = !!(searchedSessionId && sessionId && sessionId !== searchedSessionId)
+
     rows.push({
       turnNumber,
       traceId: t.traceID,
@@ -321,6 +332,10 @@ export function buildReplayTurns(traces: TempoSpan[]): ReplayTurn[] {
       responsePreview: getSpanAttr(attrs, 'prov.llm.response_preview'),
       taskLabel: getSpanAttr(attrs, 'prov.task.label'),
       project: getSpanAttr(attrs, 'prov.project'),
+      sessionId,
+      parentSessionId,
+      agentType,
+      isChildSession,
     })
   }
   // Sort by time ascending

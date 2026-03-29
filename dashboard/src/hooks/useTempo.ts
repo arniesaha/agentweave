@@ -221,7 +221,7 @@ export function useSessionReplay(sessionId: string, timeRange: TimeRange, refres
       const data = await resp.json()
       const traces: TempoSpan[] = data.traces ?? []
       setRawTraces(traces)
-      setTurns(buildReplayTurns(traces))
+      setTurns(buildReplayTurns(traces, sessionId))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Tempo unavailable')
       setTurns([])

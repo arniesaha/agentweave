@@ -72,8 +72,9 @@ function TurnRow({ turn, index, isExpanded, onToggle }: TurnRowProps) {
       <button
         onClick={onToggle}
         disabled={!hasContent}
-        className={`w-full flex items-start gap-3 px-4 py-3 text-left transition-colors ${
-          hasContent ? 'hover:bg-surface-overlay cursor-pointer' : 'cursor-default'
+        className={`w-full flex items-start gap-3 py-3 text-left transition-colors ${
+          turn.isChildSession ? 'pl-8 pr-4 border-l-2 border-signal-sky/30' : 'px-4'
+        } ${hasContent ? 'hover:bg-surface-overlay cursor-pointer' : 'cursor-default'
         } ${isExpanded ? 'bg-surface-overlay' : ''}`}
       >
         {/* Turn number + timeline dot */}
@@ -87,6 +88,12 @@ function TurnRow({ turn, index, isExpanded, onToggle }: TurnRowProps) {
         {/* Main content */}
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2 mb-1">
+            {/* Sub-agent badge */}
+            {turn.isChildSession && (
+              <span className="inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded border border-signal-sky/30 bg-signal-sky/8 text-signal-sky">
+                sub-agent
+              </span>
+            )}
             {/* Activity badge */}
             <span className={`inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded border ${activityColor(turn.activityType)}`}>
               {activityLabel(turn.activityType, turn.toolName)}
@@ -178,13 +185,14 @@ function ReplaySummary({ turns }: SummaryProps) {
   const totalLatencyMs = turns.reduce((s, t) => s + t.latencyMs, 0)
   const llmCalls = turns.filter((t) => t.activityType === 'llm_call').length
   const toolCalls = turns.filter((t) => t.activityType === 'tool_call').length
+  const childTurns = turns.filter((t) => t.isChildSession).length
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-edge rounded-xl overflow-hidden">
       {[
         { label: 'Total Turns', value: String(turns.length) },
         { label: 'LLM Calls', value: String(llmCalls) },
-        { label: 'Tool Calls', value: String(toolCalls) },
+        { label: 'Sub-agent', value: String(childTurns) },
         { label: 'Total Latency', value: formatDuration(totalLatencyMs) },
       ].map(({ label, value }) => (
         <div key={label} className="bg-surface px-4 py-3">
