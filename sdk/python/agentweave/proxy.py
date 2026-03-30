@@ -221,8 +221,8 @@ def _check_auth(request: Request) -> JSONResponse | None:
 # Provider detection
 # ---------------------------------------------------------------------------
 
-_OPENAI_PATHS = {"v1/chat/completions", "v1/completions", "v1/embeddings", "v1/responses"}
-_OPENAI_PREFIXES = ("v1/chat/", "v1/completions", "v1/embeddings", "v1/responses", "v1/models", "v1/files", "v1/fine_tuning", "v1/assistants", "v1/threads", "v1/images", "v1/audio")
+_OPENAI_PATHS = {"v1/chat/completions", "v1/completions", "v1/embeddings", "v1/responses", "codex/responses"}
+_OPENAI_PREFIXES = ("v1/chat/", "v1/completions", "v1/embeddings", "v1/responses", "v1/models", "v1/files", "v1/fine_tuning", "v1/assistants", "v1/threads", "v1/images", "v1/audio", "codex/")
 
 
 def _detect_provider(path: str) -> str:
