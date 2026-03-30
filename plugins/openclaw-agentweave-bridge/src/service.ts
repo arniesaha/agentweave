@@ -120,6 +120,47 @@ function subscribeToDiagnosticEvents(listener: (evt: unknown) => void): () => vo
   return () => { state.listeners.delete(listener) }
 }
 
+function getSpanSessionId(turn: ActiveTurn): string | undefined {
+  return (turn.span as any)?._attributes?.["session.id"] as string | undefined
+}
+
+function findTurnForModelUsage(sessionKey: string, sessionId: string): { key: string; turn: ActiveTurn; reason: string } | null {
+  const activeKeys = Array.from(activeTurns.keys())
+
+  if (sessionKey && activeTurns.has(sessionKey)) {
+    return { key: sessionKey, turn: activeTurns.get(sessionKey)!, reason: "sessionKey-exact" }
+  }
+
+  if (sessionId) {
+    const bySessionId = activeKeys.find(key => getSpanSessionId(activeTurns.get(key)!) === sessionId)
+    if (bySessionId) {
+      return { key: bySessionId, turn: activeTurns.get(bySessionId)!, reason: "sessionId-span-attr" }
+    }
+
+    if (activeTurns.has(sessionId)) {
+      return { key: sessionId, turn: activeTurns.get(sessionId)!, reason: "sessionId-as-key" }
+    }
+  }
+
+  const usageSubagentId = sessionKey.includes(":subagent:") ? sessionKey.split(":subagent:")[1] : ""
+  if (usageSubagentId) {
+    const bySubagentSuffix = activeKeys.find(key => key.includes(":subagent:") && key.endsWith(`:subagent:${usageSubagentId}`))
+    if (bySubagentSuffix) {
+      return { key: bySubagentSuffix, turn: activeTurns.get(bySubagentSuffix)!, reason: "subagent-suffix" }
+    }
+  }
+
+  if (sessionKey.startsWith("agent:main:")) {
+    const activeSubagents = activeKeys.filter(key => key.includes(":subagent:"))
+    if (activeSubagents.length > 0) {
+      const latestSubagent = activeSubagents[activeSubagents.length - 1]
+      return { key: latestSubagent, turn: activeTurns.get(latestSubagent)!, reason: "main-key-fallback-to-active-subagent" }
+    }
+  }
+
+  return null
+}
+
 export function createAgentWeaveBridgeService() {
   return {
     id: "agentweave-bridge",
@@ -315,13 +356,18 @@ export function createAgentWeaveBridgeService() {
 
             case "model.usage": {
               const sessionKey = e.sessionKey ?? ""
-              // model.usage events always use agent:main:main as sessionKey, even
-              // when the LLM call was made by a sub-agent. Route to the active
-              // sub-agent span if one exists, otherwise use the main span.
-              const activeSubagentKey = Array.from(activeTurns.keys()).find(k => k.includes(":subagent:"))
-              const targetKey = activeSubagentKey || sessionKey
-              const turn = activeTurns.get(targetKey)
-              if (!turn) break
+              const sessionId = e.sessionId ?? ""
+              const activeKeys = Array.from(activeTurns.keys())
+              console.log(`[agentweave-bridge] model.usage lookup incoming sessionKey=${sessionKey || "<empty>"} sessionId=${sessionId || "<empty>"} activeTurns=[${activeKeys.join(", ")}]`)
+
+              const match = findTurnForModelUsage(sessionKey, sessionId)
+              if (!match) {
+                console.log(`[agentweave-bridge] model.usage no active span found for sessionKey=${sessionKey || "<empty>"} sessionId=${sessionId || "<empty>"}`)
+                break
+              }
+
+              const { key: targetKey, turn, reason } = match
+              console.log(`[agentweave-bridge] model.usage matched active turn key=${targetKey} reason=${reason}`)
 
               const provider = e.provider ?? ""
               const model = e.model ?? ""
@@ -342,7 +388,8 @@ export function createAgentWeaveBridgeService() {
                 "model.usage.cache_write_tokens": cacheWriteTokens,
               })
 
-              // Also write span attributes so TraceQL select() can read model/cost/usage.
+              // Write provider/model/cost/tokens to the existing open span.
+              // model.usage can fire after span creation; setAttribute updates span state in-place.
               turn.span.setAttribute("prov.llm.provider", provider)
               turn.span.setAttribute("prov.llm.model", model)
               turn.span.setAttribute("cost.usd", costUsd)
@@ -350,10 +397,6 @@ export function createAgentWeaveBridgeService() {
               turn.span.setAttribute("prov.llm.completion_tokens", outputTokens)
               turn.span.setAttribute("prov.llm.cache_read_tokens", cacheReadTokens)
               turn.span.setAttribute("prov.llm.cache_write_tokens", cacheWriteTokens)
-
-              if (activeSubagentKey) {
-                console.log(`[agentweave-bridge] routed model.usage to subagent ${activeSubagentKey} (event key was ${sessionKey})`)
-              }
               break
             }
           }
