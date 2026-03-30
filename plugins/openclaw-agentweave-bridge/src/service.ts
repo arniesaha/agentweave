@@ -315,7 +315,12 @@ export function createAgentWeaveBridgeService() {
 
             case "model.usage": {
               const sessionKey = e.sessionKey ?? ""
-              const turn = activeTurns.get(sessionKey)
+              // model.usage events always use agent:main:main as sessionKey, even
+              // when the LLM call was made by a sub-agent. Route to the active
+              // sub-agent span if one exists, otherwise use the main span.
+              const activeSubagentKey = Array.from(activeTurns.keys()).find(k => k.includes(":subagent:"))
+              const targetKey = activeSubagentKey || sessionKey
+              const turn = activeTurns.get(targetKey)
               if (!turn) break
 
               const provider = e.provider ?? ""
@@ -345,6 +350,10 @@ export function createAgentWeaveBridgeService() {
               turn.span.setAttribute("prov.llm.completion_tokens", outputTokens)
               turn.span.setAttribute("prov.llm.cache_read_tokens", cacheReadTokens)
               turn.span.setAttribute("prov.llm.cache_write_tokens", cacheWriteTokens)
+
+              if (activeSubagentKey) {
+                console.log(`[agentweave-bridge] routed model.usage to subagent ${activeSubagentKey} (event key was ${sessionKey})`)
+              }
               break
             }
           }
