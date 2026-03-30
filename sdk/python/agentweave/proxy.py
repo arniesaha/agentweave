@@ -225,13 +225,19 @@ _OPENAI_PATHS = {"v1/chat/completions", "v1/completions", "v1/embeddings", "v1/r
 _OPENAI_PREFIXES = ("v1/chat/", "v1/completions", "v1/embeddings", "v1/responses", "v1/models", "v1/files", "v1/fine_tuning", "v1/assistants", "v1/threads", "v1/images", "v1/audio", "codex/")
 
 
+_CODEX_BASE = "https://chatgpt.com/backend-api"
+
+
 def _detect_provider(path: str) -> str:
-    """Return 'google', 'openai', or 'anthropic' based on the request path."""
+    """Return 'google', 'openai', 'codex', or 'anthropic' based on the request path."""
     # Google: v1beta/* or v1/models/{model}:action (colon-action syntax is Google-specific)
     if path.startswith("v1beta/") or (
         path.startswith("v1/") and "/models/" in path and ":" in path
     ):
         return "google"
+    # OpenAI Codex: chatgpt.com/backend-api/codex/* endpoint
+    if path.startswith("codex/"):
+        return "codex"
     # OpenAI: exact match (fast path) then prefix match for future/unknown endpoints
     if path in _OPENAI_PATHS or any(path.startswith(p) for p in _OPENAI_PREFIXES):
         return "openai"
@@ -241,6 +247,8 @@ def _detect_provider(path: str) -> str:
 def _upstream_url(provider: str, path: str, query_string: str) -> str:
     if provider == "google":
         base = _GOOGLE_BASE
+    elif provider == "codex":
+        base = _CODEX_BASE
     elif provider == "openai":
         base = _OPENAI_BASE
     else:
@@ -1105,7 +1113,7 @@ async def _stream_and_trace(
                                 cache_write = cw
                             if cr > cache_read:
                                 cache_read = cr
-                        elif provider == "openai":
+                        elif provider in ("openai", "codex"):
                             input_tokens, output_tokens, stop_reason = _parse_openai_sse(
                                 line, input_tokens, output_tokens, stop_reason
                             )
@@ -1145,7 +1153,7 @@ async def _stream_and_trace(
             ))
 
         # Warn when OpenAI streaming completes with no token usage data
-        if provider == "openai" and input_tokens == 0 and output_tokens == 0:
+        if provider in ("openai", "codex") and input_tokens == 0 and output_tokens == 0:
             logger.warning(
                 "OpenAI streaming response completed with 0 tokens. "
                 'Add stream_options={"include_usage": true} to your request '
@@ -1300,7 +1308,7 @@ def _extract_and_set_response(
 ) -> None:
     if provider == "google":
         _set_google_response_attrs(span, data, elapsed_ms, model=model)
-    elif provider == "openai":
+    elif provider in ("openai", "codex"):
         _set_openai_response_attrs(span, data, elapsed_ms, model=model)
     else:
         _set_anthropic_response_attrs(span, data, elapsed_ms, model=model)
