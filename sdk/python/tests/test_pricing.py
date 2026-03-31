@@ -132,6 +132,18 @@ class TestComputeCost:
         cost = compute_cost("openai/gpt-4o-mini", input_tokens=1_000_000, output_tokens=0)
         assert abs(cost - 0.15) < 1e-9
 
+    def test_openai_codex_prefix_model_is_priced(self):
+        from agentweave.pricing import compute_cost
+        cost = compute_cost("openai-codex/gpt-5.4", input_tokens=1_000_000, output_tokens=0)
+        assert abs(cost - 2.50) < 1e-9
+
+    def test_openai_codex_aliases_match_expected_price(self):
+        from agentweave.pricing import compute_cost
+        base = compute_cost("gpt-5.3", input_tokens=1_000_000, output_tokens=1_000_000)
+        codex = compute_cost("gpt-5.3-codex", input_tokens=1_000_000, output_tokens=1_000_000)
+        assert abs(base - 12.50) < 1e-9
+        assert abs(codex - base) < 1e-9
+
 
 class TestPricingEnvOverride:
     """Test AGENTWEAVE_PRICING_OVERRIDE env variable."""
