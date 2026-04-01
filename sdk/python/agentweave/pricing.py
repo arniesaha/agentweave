@@ -65,6 +65,11 @@ _DEFAULT_PRICING: dict[str, _PriceEntry] = {
     # ── OpenAI ───────────────────────────────────────────────────────────────
     "gpt-4o":                     (2.50, 10.00),
     "gpt-4o-mini":                (0.15,  0.60),
+
+    # OpenAI/Codex aliases used in AgentWeave/OpenClaw dogfood
+    "gpt-5.3":                    (2.50, 10.00),
+    "gpt-5.3-codex":              (2.50, 10.00),
+    "gpt-5.4":                    (2.50, 10.00),
 }
 
 # Sentinel value returned when model is not in the pricing table.
