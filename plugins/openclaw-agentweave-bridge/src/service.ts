@@ -75,6 +75,12 @@ const activeTurns = new Map<string, ActiveTurn>()
 let sdk: NodeSDK | null = null
 let unsubscribe: (() => void) | null = null
 
+
+function normalizeProxyBaseUrl(url?: string): string | undefined {
+  if (!url) return undefined
+  return url.replace(/\/v1\/?$/, "")
+}
+
 function initSdk(config: BridgeConfig): void {
   if (sdk) return
   const exporter = new OTLPTraceExporter({ url: `${config.otlpEndpoint.replace(/\/$/, "")}/v1/traces` })
@@ -245,8 +251,11 @@ export function createAgentWeaveBridgeService() {
               process.env.AGENTWEAVE_SESSION_ID = sessionId
               process.env.AGENTWEAVE_AGENT_ID = agentId
               process.env.AGENTWEAVE_AGENT_TYPE = agentType
-              if (config.proxyUrl) {
-                process.env.ANTHROPIC_BASE_URL = config.proxyUrl
+              const proxyBaseUrl = normalizeProxyBaseUrl(config.proxyUrl)
+              if (proxyBaseUrl) {
+                process.env.ANTHROPIC_BASE_URL = proxyBaseUrl
+                process.env.OPENAI_BASE_URL = proxyBaseUrl
+                process.env.OPENAI_API_BASE = proxyBaseUrl
               }
 
               activeTurns.set(sessionKey, { span, ctx: spanCtx })
@@ -269,6 +278,8 @@ export function createAgentWeaveBridgeService() {
               activeTurns.delete(sessionKey)
               delete process.env.AGENTWEAVE_TRACEPARENT
               delete process.env.ANTHROPIC_BASE_URL
+              delete process.env.OPENAI_BASE_URL
+              delete process.env.OPENAI_API_BASE
               delete process.env.AGENTWEAVE_AGENT_ID
               delete process.env.AGENTWEAVE_AGENT_TYPE
               delete process.env.AGENTWEAVE_PARENT_SESSION_ID
@@ -308,7 +319,7 @@ export function createAgentWeaveBridgeService() {
                   activeTurns.set(sessionKey, { span, ctx: spanCtx })
 
                   // Force the proxy to attribute LLM calls to this sub-agent session
-                  const proxyUrl = config.proxyUrl?.replace(/\/v1\/?$/, "") || "http://192.168.1.70:30400"
+                  const proxyUrl = normalizeProxyBaseUrl(config.proxyUrl) || "http://192.168.1.70:30400"
                   const mainSessionId = mainKey ? (activeTurns.get(mainKey)?.span as any)?._attributes?.["session.id"] || "nix-main" : "nix-main"
                   fetch(`${proxyUrl}/session`, {
                     method: "POST",
@@ -336,7 +347,7 @@ export function createAgentWeaveBridgeService() {
                   activeTurns.delete(sessionKey)
 
                   // Restore proxy to main session (clear force)
-                  const proxyUrl = config.proxyUrl?.replace(/\/v1\/?$/, "") || "http://192.168.1.70:30400"
+                  const proxyUrl = normalizeProxyBaseUrl(config.proxyUrl) || "http://192.168.1.70:30400"
                   fetch(`${proxyUrl}/session`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -414,6 +425,9 @@ export function createAgentWeaveBridgeService() {
         activeTurns.delete(key)
       }
       delete process.env.AGENTWEAVE_TRACEPARENT
+      delete process.env.ANTHROPIC_BASE_URL
+      delete process.env.OPENAI_BASE_URL
+      delete process.env.OPENAI_API_BASE
       if (sdk) { await sdk.shutdown(); sdk = null }
     },
   }
