@@ -36,7 +36,11 @@ function useSessionTraces(sessionId: string) {
       if (!resp.ok) throw new Error(`Tempo search failed: ${resp.status}`)
       const data = await resp.json()
       const raw: TempoSpan[] = data.traces ?? []
-      setTraces(transformTempoTraces(raw))
+      // tempoSessionQuery already filters to llm_call spans, but keep one extra
+      // client-side guard so agent_turn lifecycle spans never show up in the
+      // drilldown if the query broadens again later.
+      const llmOnly = raw.filter((t) => t.rootTraceName?.startsWith('llm.'))
+      setTraces(transformTempoTraces(llmOnly))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Tempo unavailable')
       setTraces([])

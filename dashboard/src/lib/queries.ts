@@ -245,8 +245,11 @@ export function extractLastTempoMetricValue(result: TempoMetricResult | null): n
 export function tempoSessionQuery(sessionId: string): string {
   // Search both session.id (main agents) and prov.session.id (sub-agents) so
   // clicking any node in the session graph finds its traces.
+  // Only include real LLM-call spans here; agent-turn lifecycle spans like
+  // openclaw.turn / openclaw.subagent leak model-ish attrs but do not carry
+  // reliable token/cost data.
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}") }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.activity.type = "llm_call" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}") }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id)`
   )
