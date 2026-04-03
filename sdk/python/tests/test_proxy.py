@@ -1,5 +1,6 @@
 """Tests for the AgentWeave proxy — provider detection, parsers, auth, and header forwarding."""
 
+import json
 import logging
 import os
 
@@ -171,6 +172,16 @@ class TestParseOpenaiSse:
         assert inp == 30
         assert out == 15
 
+    def test_responses_api_completed_event_usage(self):
+        """Responses API can emit usage under response.usage on response.completed."""
+        line = (
+            'data: {"type":"response.completed",'
+            '"response":{"usage":{"input_tokens":44,"output_tokens":11}}}'
+        )
+        inp, out, stop = _parse_openai_sse(line, 0, 0, None)
+        assert inp == 44
+        assert out == 11
+
     def test_non_data_line(self):
         line = "event: message"
         inp, out, stop = _parse_openai_sse(line, 1, 2, None)
@@ -190,6 +201,55 @@ class TestParseOpenaiSse:
         assert inp == 15
         assert out == 4
         assert stop == "stop"
+
+
+class TestOpenAIStreamOptionsInjection:
+    """Proxy should enforce stream_options.include_usage for Chat Completions streams only."""
+
+    def test_injects_include_usage_for_chat_completions(self, monkeypatch):
+        from fastapi.responses import JSONResponse
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+
+        captured: dict[str, str] = {}
+
+        async def fake_preflight(method, upstream_url, headers, body_bytes):
+            captured["body"] = body_bytes.decode("utf-8")
+            return JSONResponse(content={"ok": True}, status_code=200)
+
+        monkeypatch.setattr(proxy_module, "_stream_preflight", fake_preflight)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 200
+        body = json.loads(captured["body"])
+        assert body["stream_options"]["include_usage"] is True
+
+    def test_does_not_inject_stream_options_for_responses_api(self, monkeypatch):
+        """Responses API (/codex/responses, /v1/responses) does not support stream_options."""
+        from fastapi.responses import JSONResponse
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+
+        captured: dict[str, str] = {}
+
+        async def fake_preflight(method, upstream_url, headers, body_bytes):
+            captured["body"] = body_bytes.decode("utf-8")
+            return JSONResponse(content={"ok": True}, status_code=200)
+
+        monkeypatch.setattr(proxy_module, "_stream_preflight", fake_preflight)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/codex/responses",
+            json={"model": "gpt-5.3-codex", "stream": True, "input": "hi"},
+        )
+        assert resp.status_code == 200
+        body = json.loads(captured["body"])
+        assert "stream_options" not in body
 
 
 class TestOpenaiStreamingZeroTokensWarning:

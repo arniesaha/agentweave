@@ -778,6 +778,23 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     is_stream = _is_streaming(provider, path, body)
     query_string = request.url.query
 
+    # OpenAI Chat Completions streaming usage is only included when
+    # stream_options.include_usage=true. Enforce it at the proxy edge so
+    # callers (including native sub-agents) get token/cost accounting even
+    # when they omit this option.
+    # NOTE: The Responses API (/v1/responses, /codex/responses) does NOT
+    # support stream_options — usage arrives automatically in the
+    # response.completed SSE event (parsed by _parse_openai_sse).
+    _is_chat_completions = "chat/completions" in path
+    if is_stream and _is_chat_completions and provider in ("openai", "codex"):
+        stream_opts = body.get("stream_options")
+        if not isinstance(stream_opts, dict):
+            stream_opts = {}
+            body["stream_options"] = stream_opts
+        if stream_opts.get("include_usage") is not True:
+            stream_opts["include_usage"] = True
+            body_bytes = json.dumps(body).encode("utf-8")
+
     # When _session_context_force is True (set by POST /session with force:true),
     # the session context overrides request headers. This is used by the bridge
     # plugin to temporarily switch attribution during sub-agent windows.
@@ -1284,6 +1301,10 @@ def _parse_openai_sse(
         chunk = json.loads(payload)
         # Token usage from final chunk (when stream_options.include_usage=true)
         usage = chunk.get("usage")
+        # Responses API streams may emit usage under response.usage on
+        # response.completed events.
+        if not usage and isinstance(chunk.get("response"), dict):
+            usage = chunk.get("response", {}).get("usage")
         if usage:
             # Chat completions: prompt_tokens/completion_tokens
             # Responses API:    input_tokens/output_tokens
