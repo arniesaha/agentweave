@@ -308,6 +308,11 @@ export GOOGLE_GENAI_BASE_URL=http://localhost:4000
 export OPENAI_BASE_URL=http://localhost:4000
 ```
 
+**OpenAI/Codex streaming note:**
+- `/v1/chat/completions` needs `stream_options.include_usage=true` for token usage
+- `/v1/responses` and `/codex/responses` do **not** support `stream_options`; usage should arrive in the final `response.completed` event
+- AgentWeave handles this difference in the proxy so the traced spans still get tokens/cost when upstream provides them
+
 One port, all providers. Every LLM call gets a span automatically.
 
 > Docker / k8s setup: see [`deploy/docker/Dockerfile`](deploy/docker/Dockerfile)

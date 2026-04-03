@@ -1169,12 +1169,14 @@ async def _stream_and_trace(
                 cache_write_tokens=cache_write,
             ))
 
-        # Warn when OpenAI streaming completes with no token usage data
+        # Warn when OpenAI streaming completes with no token usage data.
+        # Chat Completions needs stream_options.include_usage=true; Responses API
+        # should emit usage via the final response.completed event.
         if provider in ("openai", "codex") and input_tokens == 0 and output_tokens == 0:
             logger.warning(
-                "OpenAI streaming response completed with 0 tokens. "
-                'Add stream_options={"include_usage": true} to your request '
-                "to enable token tracking."
+                "OpenAI/Codex streaming response completed with 0 tokens. "
+                "For /v1/chat/completions, set stream_options={\"include_usage\": true}. "
+                "For /v1/responses or /codex/responses, usage should arrive in the final response.completed event."
             )
 
         # OTel gen_ai.* dual-emit for streaming responses

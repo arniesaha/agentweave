@@ -135,6 +135,15 @@ client = anthropic.Anthropic(
 
 If no `X-AgentWeave-Agent-Id` header is sent, spans are attributed to `unattributed`.
 
+## OpenAI / Codex streaming note
+
+There are two different streaming behaviors to know about:
+
+- **Chat Completions** (`/v1/chat/completions`) only returns usage reliably when `stream_options.include_usage=true`
+- **Responses API** (`/v1/responses`, `/codex/responses`) does **not** support `stream_options`; usage should arrive in the final `response.completed` event
+
+AgentWeave now handles this split at the proxy layer so callers do not need to remember the difference, but if you are debugging raw upstream behavior this distinction matters.
+
 ## What each span captures
 
 ```
