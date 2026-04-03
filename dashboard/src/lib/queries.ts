@@ -40,7 +40,7 @@ export function tempoSearchQuery(project?: string): string {
   // select() fetches span attributes; used for both trace table and stat card aggregation
   const projectFilter = project ? ` && span.prov.project = "${project}"` : ''
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown"${projectFilter} }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.activity.type = "llm_call"${projectFilter} }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project,` +
     ` span.prov.security.pii_detected, span.prov.security.pii_kinds)`
@@ -245,8 +245,11 @@ export function extractLastTempoMetricValue(result: TempoMetricResult | null): n
 export function tempoSessionQuery(sessionId: string): string {
   // Search both session.id (main agents) and prov.session.id (sub-agents) so
   // clicking any node in the session graph finds its traces.
+  // Only include real LLM-call spans here; agent-turn lifecycle spans like
+  // openclaw.turn / openclaw.subagent leak model-ish attrs but do not carry
+  // reliable token/cost data.
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}") }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.activity.type = "llm_call" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}") }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id)`
   )
@@ -745,6 +748,13 @@ export function buildSessionCalls(
   for (const t of traces) {
     const row = spanRowFromTempoSpan(t)
     if (row.sessionId !== sessionId) continue
+
+    const spans = t.spanSets?.[0]?.spans ?? t.spanSet?.spans ?? []
+    const attrs = spans[0]?.attributes ?? []
+    const activityType = getSpanAttr(attrs, 'prov.activity.type') ||
+      (t.rootTraceName?.startsWith('llm.') ? 'llm_call' : '')
+    if (activityType !== 'llm_call') continue
+
     rows.push({
       traceId: t.traceID,
       time: row.time,
