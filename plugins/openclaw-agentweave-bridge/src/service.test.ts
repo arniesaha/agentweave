@@ -34,7 +34,7 @@ vi.mock("@opentelemetry/sdk-node", () => ({
 }))
 
 vi.mock("@opentelemetry/resources", () => ({ resourceFromAttributes: vi.fn(() => ({})) }))
-vi.mock("@opentelemetry/sdk-trace-base", () => ({ BatchSpanProcessor: vi.fn() }))
+vi.mock("@opentelemetry/sdk-trace-base", () => ({ BatchSpanProcessor: vi.fn(), SimpleSpanProcessor: vi.fn() }))
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -107,10 +107,11 @@ describe("createAgentWeaveBridgeService", () => {
   })
 
   it("creates root span on message.queued and injects traceparent", () => {
+    // service.ts uses sessionKey as the canonical session ID (not the bare sessionId)
     fire({
       type: "message.queued",
-      sessionKey: "sk-1",
-      sessionId: "sess-abc",
+      sessionKey: "agent:main:test-session",
+      sessionId: "test-session",
       channel: "telegram",
       source: "user",
       queueDepth: 0,
@@ -118,13 +119,15 @@ describe("createAgentWeaveBridgeService", () => {
       seq: 1,
     })
 
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "sess-abc")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "sess-abc")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session_id", "agent:main:test-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "agent:main:test-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "agent:main:test-session")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "nix-v1")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "main")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.activity.type", "agent_turn")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("channel", "telegram")
     expect(process.env.AGENTWEAVE_TRACEPARENT).toBeTruthy()
-    expect(process.env.AGENTWEAVE_SESSION_ID).toBe("sess-abc")
+    expect(process.env.AGENTWEAVE_SESSION_ID).toBe("agent:main:test-session")
   })
 
   it("ends span on message.processed (completed) and cleans env", () => {
