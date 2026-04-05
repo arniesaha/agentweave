@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react'
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { Maximize2, RotateCcw } from 'lucide-react'
 import { SessionNode, SessionEdge } from '../lib/queries'
 
@@ -23,6 +23,7 @@ interface DragState {
   moved: boolean
   pointerOffsetX: number
   pointerOffsetY: number
+  pointerId: number
 }
 
 const NODE_RADIUS_BASE = 28
@@ -56,6 +57,40 @@ function nodeColor(node: SessionNode): { fill: string; stroke: string; text: str
   if (node.agentType === 'subagent') return { fill: '#0D1B2A', stroke: '#5BA4F5', text: '#5BA4F5' }
   if (!node.parentSessionId) return { fill: '#0A1A1A', stroke: '#00E5CC', text: '#00E5CC' }
   return { fill: '#0D1F0D', stroke: '#7DDB80', text: '#7DDB80' }
+}
+
+function backEdgePath(from: LayoutNode, to: LayoutNode, fromR: number, toR: number) {
+  // Self-loop: compact loop around node top-right.
+  if (from.sessionId === to.sessionId) {
+    const sx = from.x + fromR * 0.35
+    const sy = from.y - fromR * 0.88
+    const ex = from.x + fromR * 0.88
+    const ey = from.y - fromR * 0.3
+    const loop = fromR + 26
+    return {
+      path: `M ${sx} ${sy} C ${sx + loop} ${sy - loop * 0.25}, ${ex + loop * 0.85} ${ey - loop * 0.95}, ${ex} ${ey}`,
+      arrowX: ex,
+      arrowY: ey,
+      labelX: from.x + fromR + 24,
+      labelY: from.y - fromR - 22,
+    }
+  }
+
+  // General callback/back-edge: bow outward to the right, then come back to target.
+  const sx = from.x + fromR
+  const sy = from.y
+  const ex = to.x + toR + 8
+  const ey = to.y
+  const verticalDelta = Math.abs(sy - ey)
+  const rightBend = Math.max(sx, ex) + 42 + verticalDelta * 0.28
+
+  return {
+    path: `M ${sx} ${sy} C ${rightBend} ${sy}, ${rightBend} ${ey}, ${ex} ${ey}`,
+    arrowX: ex,
+    arrowY: ey,
+    labelX: rightBend - 12,
+    labelY: sy + (ey - sy) * 0.5 - 6,
+  }
 }
 
 /** Compute a simple top-down tree layout. Returns nodes with x/y coordinates. */
@@ -299,7 +334,8 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
       }
     }
 
-    const handleMove = (e: MouseEvent) => {
+    const handleMove = (e: PointerEvent) => {
+      if (e.pointerId !== dragState.pointerId) return
       const pointer = getPointerPositionInSvg(e.clientX, e.clientY)
       if (!pointer) return
 
@@ -314,17 +350,48 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
       setTooltip(null)
     }
 
-    const handleUp = () => {
+    const handleUp = (e: PointerEvent) => {
+      if (e.pointerId !== dragState.pointerId) return
       setDragState(null)
     }
 
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    window.addEventListener('pointercancel', handleUp)
     return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      window.removeEventListener('pointercancel', handleUp)
     }
   }, [dragState])
+
+  const handlePointerDownNode = useCallback((e: React.PointerEvent<SVGGElement>, node: LayoutNode) => {
+    e.stopPropagation()
+    const svg = svgRef.current
+    if (!svg) return
+
+    const rect = svg.getBoundingClientRect()
+    const scrollLeft = svg.parentElement?.scrollLeft ?? 0
+    const scrollTop = svg.parentElement?.scrollTop ?? 0
+    const pointerX = e.clientX - rect.left + scrollLeft
+    const pointerY = e.clientY - rect.top + scrollTop
+
+    if (e.currentTarget.setPointerCapture) {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        // Ignore if capture fails (older browser quirks).
+      }
+    }
+
+    setDragState({
+      id: node.sessionId,
+      moved: false,
+      pointerOffsetX: pointerX - node.x,
+      pointerOffsetY: pointerY - node.y,
+      pointerId: e.pointerId,
+    })
+  }, [])
 
   if (loading) {
     return (
@@ -450,7 +517,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           )
         })}
 
-        {/* Back-edges — amber curved arrows looping to the right */}
+        {/* Back-edges — amber curved callback loops */}
         {displayEdges.map((edge) => {
           const from = nodeMap.get(edge.from)
           const to = nodeMap.get(edge.to)
@@ -458,19 +525,12 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           if (to.depth > from.depth) return null
           const fromR = nodeRadius + Math.min(from.callCount * 1.5, 12)
           const toR   = nodeRadius + Math.min(to.callCount   * 1.5, 12)
-          const rightEdge = svgWidth - 28
-          const fx = from.x + fromR
-          const fy = from.y
-          const tx = to.x + toR + 10
-          const ty = to.y
-          const path = `M ${fx} ${fy} C ${rightEdge} ${fy}, ${rightEdge} ${ty}, ${tx} ${ty}`
-          const labelX = rightEdge - 20
-          const labelY = (fy + ty) / 2
+          const { path, arrowX, arrowY, labelX, labelY } = backEdgePath(from, to, fromR, toR)
           return (
             <g key={`back-${edge.from}->${edge.to}`}>
               <path d={path} fill="none" stroke="#FFBF47" strokeWidth="1.8" strokeDasharray="5 3" opacity="0.72" />
               <polygon
-                points={`${tx + 8},${ty - 4} ${tx + 8},${ty + 4} ${tx},${ty}`}
+                points={`${arrowX + 8},${arrowY - 4} ${arrowX + 8},${arrowY + 4} ${arrowX},${arrowY}`}
                 fill="#FFBF47" opacity="0.8" />
               {edge.taskLabel && (
                 <text x={labelX} y={labelY} textAnchor="end" fontSize="8" fill="#FFBF47" opacity="0.7"
@@ -492,23 +552,11 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
             <g
               key={node.sessionId}
               transform={`translate(${node.x},${node.y})`}
-              style={{ cursor: dragState?.id === node.sessionId ? 'grabbing' : 'grab' }}
-              onMouseDown={(e) => {
-                e.stopPropagation()
-                const svg = svgRef.current
-                if (!svg) return
-                const rect = svg.getBoundingClientRect()
-                const scrollLeft = svg.parentElement?.scrollLeft ?? 0
-                const scrollTop = svg.parentElement?.scrollTop ?? 0
-                const pointerX = e.clientX - rect.left + scrollLeft
-                const pointerY = e.clientY - rect.top + scrollTop
-                setDragState({
-                  id: node.sessionId,
-                  moved: false,
-                  pointerOffsetX: pointerX - node.x,
-                  pointerOffsetY: pointerY - node.y,
-                })
+              style={{
+                cursor: dragState?.id === node.sessionId ? 'grabbing' : 'grab',
+                touchAction: 'none',
               }}
+              onPointerDown={(e) => handlePointerDownNode(e, node)}
               onClick={(e) => {
                 e.stopPropagation()
                 if (!dragState?.moved) {
