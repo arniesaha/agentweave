@@ -347,9 +347,10 @@ export function buildReplayTurns(traces: TempoSpan[], searchedSessionId?: string
 }
 
 /** TraceQL metrics query that returns cost.usd summed per time bucket. */
-export function tempoCostTimeSeriesQuery(): string {
+export function tempoCostTimeSeriesQuery(project?: string): string {
+  const projectFilter = project ? ` && span.prov.project = "${project}"` : ''
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown"${projectFilter} }` +
     ` | sum(span.cost.usd)`
   )
 }
@@ -380,6 +381,25 @@ export function transformTempoCostSeries(
     .map(([time, value]) => ({ time, value }))
 
   return [{ label: 'Cost USD', points }]
+}
+
+/**
+ * Compute total cost across the selected time range from Tempo metrics buckets.
+ * Returns null when metrics are unavailable.
+ */
+export function extractTotalTempoCost(result: TempoMetricResult | null): number | null {
+  if (!result?.series) return null
+
+  let total = 0
+  for (const s of result.series) {
+    for (const sample of s.samples ?? []) {
+      const v = parseFloat(sample.value) || 0
+      if (v <= 0) continue
+      total += v
+    }
+  }
+
+  return total
 }
 
 // ─── Agent Attribution queries ────────────────────────────────────────────────

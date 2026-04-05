@@ -23,6 +23,7 @@ import {
   promCallsByAgentQuery,
   transformTempoTraces,
   transformTempoCostSeries,
+  extractTotalTempoCost,
   transformAgentAttributionTraces,
   transformSubagentTraces,
   buildCostTimeSeries,
@@ -95,10 +96,6 @@ export default function App() {
   const { count: llmCallCount, loading: llmCallLoading, error: llmCallError } =
     useTempoSearchCount(tempoSearchQuery(selectedProject ?? undefined), timeRange, refreshKey)
 
-  const costValue = tracesLoading ? null : traceRows
-    .filter((t) => t.costUsd >= 0)
-    .reduce((s, t) => s + t.costUsd, 0)
-
   const tracesWithCache = traceRows.filter((t) => t.cacheHitRate > 0)
   const cacheValue = tracesLoading
     ? null
@@ -117,8 +114,9 @@ export default function App() {
     usePromQueryRange(promLLMCallsRateQuery(), timeRange, refreshKey, 'prov_llm_model')
 
   const { result: costMetricResult, loading: costMetricLoading, error: costMetricError } =
-    useTempoMetrics(tempoCostTimeSeriesQuery(), timeRange, refreshKey)
+    useTempoMetrics(tempoCostTimeSeriesQuery(selectedProject ?? undefined), timeRange, refreshKey)
 
+  const costValue = extractTotalTempoCost(costMetricResult)
   const costMetricSeries = transformTempoCostSeries(costMetricResult)
   const costChartSeries = costMetricSeries.length > 0
     ? costMetricSeries
@@ -259,8 +257,8 @@ export default function App() {
             iconBg="bg-signal-lime/8"
             label="Total Cost"
             value={costValue !== null ? `$${costValue.toFixed(4)}` : null}
-            loading={tracesLoading}
-            error={tracesError}
+            loading={costMetricLoading}
+            error={costMetricError}
           />
           <StatCard
             icon={Zap}
