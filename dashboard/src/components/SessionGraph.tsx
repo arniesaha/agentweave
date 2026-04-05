@@ -60,19 +60,36 @@ function nodeColor(node: SessionNode): { fill: string; stroke: string; text: str
 }
 
 function backEdgePath(from: LayoutNode, to: LayoutNode, fromR: number, toR: number) {
-  // Self-loop: compact loop around node top-right.
+  // Self-loop: compact, balanced loop hugging the node's upper-right edge.
   if (from.sessionId === to.sessionId) {
-    const sx = from.x + fromR * 0.35
-    const sy = from.y - fromR * 0.88
-    const ex = from.x + fromR * 0.88
-    const ey = from.y - fromR * 0.3
-    const loop = fromR + 26
+    const loopR = fromR * 0.95 + 14
+    const sx = from.x + fromR * 0.62
+    const sy = from.y - fromR * 0.62
+    const mx = from.x - fromR * 0.1
+    const my = from.y - fromR * 0.25
+    const ex = from.x + fromR * 0.96
+    const ey = from.y - fromR * 0.06
+
+    const firstC1X = from.x + loopR
+    const firstC1Y = from.y - loopR * 1.22
+    const firstC2X = from.x - loopR * 0.18
+    const firstC2Y = from.y - loopR * 1.12
+
+    const secondC1X = from.x - loopR * 0.18
+    const secondC1Y = from.y + loopR * 0.1
+    const secondC2X = from.x + loopR * 0.58
+    const secondC2Y = from.y + loopR * 0.4
+
+    const arrowAngle = Math.atan2(ey - secondC2Y, ex - secondC2X)
+
     return {
-      path: `M ${sx} ${sy} C ${sx + loop} ${sy - loop * 0.25}, ${ex + loop * 0.85} ${ey - loop * 0.95}, ${ex} ${ey}`,
+      path: `M ${sx} ${sy} C ${firstC1X} ${firstC1Y}, ${firstC2X} ${firstC2Y}, ${mx} ${my} C ${secondC1X} ${secondC1Y}, ${secondC2X} ${secondC2Y}, ${ex} ${ey}`,
       arrowX: ex,
       arrowY: ey,
-      labelX: from.x + fromR + 24,
-      labelY: from.y - fromR - 22,
+      arrowAngle,
+      labelX: from.x + loopR * 0.5,
+      labelY: from.y - loopR * 0.95,
+      selfLoop: true,
     }
   }
 
@@ -90,6 +107,7 @@ function backEdgePath(from: LayoutNode, to: LayoutNode, fromR: number, toR: numb
     arrowY: ey,
     labelX: rightBend - 12,
     labelY: sy + (ey - sy) * 0.5 - 6,
+    selfLoop: false,
   }
 }
 
@@ -525,15 +543,27 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           if (to.depth > from.depth) return null
           const fromR = nodeRadius + Math.min(from.callCount * 1.5, 12)
           const toR   = nodeRadius + Math.min(to.callCount   * 1.5, 12)
-          const { path, arrowX, arrowY, labelX, labelY } = backEdgePath(from, to, fromR, toR)
+          const { path, arrowX, arrowY, labelX, labelY, arrowAngle, selfLoop } = backEdgePath(from, to, fromR, toR)
+          const arrowRotation = arrowAngle !== undefined ? (arrowAngle * 180) / Math.PI : 180
           return (
             <g key={`back-${edge.from}->${edge.to}`}>
               <path d={path} fill="none" stroke="#FFBF47" strokeWidth="1.8" strokeDasharray="5 3" opacity="0.72" />
-              <polygon
-                points={`${arrowX + 8},${arrowY - 4} ${arrowX + 8},${arrowY + 4} ${arrowX},${arrowY}`}
-                fill="#FFBF47" opacity="0.8" />
+              {selfLoop ? (
+                <polygon
+                  points="0,0 -8,-4 -8,4"
+                  transform={`translate(${arrowX},${arrowY}) rotate(${arrowRotation})`}
+                  fill="#FFBF47"
+                  opacity="0.8"
+                />
+              ) : (
+                <polygon
+                  points={`${arrowX + 8},${arrowY - 4} ${arrowX + 8},${arrowY + 4} ${arrowX},${arrowY}`}
+                  fill="#FFBF47"
+                  opacity="0.8"
+                />
+              )}
               {edge.taskLabel && (
-                <text x={labelX} y={labelY} textAnchor="end" fontSize="8" fill="#FFBF47" opacity="0.7"
+                <text x={labelX} y={labelY} textAnchor={selfLoop ? 'start' : 'end'} fontSize="8" fill="#FFBF47" opacity="0.7"
                   fontFamily="'DM Sans', system-ui">
                   {edge.taskLabel.length > 24 ? edge.taskLabel.slice(0, 23) + '...' : edge.taskLabel}
                 </text>
