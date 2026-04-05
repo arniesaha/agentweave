@@ -1,18 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { createAgentWeaveBridgeService } from "./service.js"
 
-// ── Mock openclaw plugin SDK ──────────────────────────────────────────────────
-// onDiagnosticEvent takes a single (evt) => void listener — capture it so tests
-// can fire synthetic events directly.
-let capturedListener: ((evt: unknown) => void) | null = null
-
-vi.mock("openclaw/plugin-sdk/diagnostics-otel", () => ({
-  onDiagnosticEvent: vi.fn((listener: (evt: unknown) => void) => {
-    capturedListener = listener
-    return () => { capturedListener = null } // unsubscribe
-  }),
-}))
-
 // ── Mock OTel APIs ────────────────────────────────────────────────────────────
 const mockSpan = {
   setAttribute: vi.fn(),
@@ -36,23 +24,53 @@ vi.mock("@opentelemetry/api", () => ({
 }))
 
 vi.mock("@opentelemetry/exporter-trace-otlp-proto", () => ({ OTLPTraceExporter: vi.fn() }))
-vi.mock("@opentelemetry/sdk-node", () => ({ NodeSDK: vi.fn(() => ({ start: vi.fn(), shutdown: vi.fn() })) }))
+
+// NodeSDK must be a real constructor (not an arrow function) so `new NodeSDK()` works.
+// We return an object with start/shutdown as spies so service.ts can call them.
+vi.mock("@opentelemetry/sdk-node", () => ({
+  NodeSDK: vi.fn().mockImplementation(function () {
+    return { start: vi.fn(), shutdown: vi.fn() }
+  }),
+}))
+
 vi.mock("@opentelemetry/resources", () => ({ resourceFromAttributes: vi.fn(() => ({})) }))
 vi.mock("@opentelemetry/sdk-trace-base", () => ({ BatchSpanProcessor: vi.fn() }))
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// service.ts does NOT use onDiagnosticEvent — it writes directly to
+// globalThis.__openclawDiagnosticEventsState. Fire events the same way.
 function fire(evt: object) {
-  if (!capturedListener) throw new Error("No listener registered — did you call service.start()?")
-  capturedListener(evt)
+  const g = globalThis as Record<string, unknown>
+  const state = g.__openclawDiagnosticEventsState as { listeners: Set<(evt: unknown) => void> } | undefined
+  if (!state || state.listeners.size === 0) {
+    throw new Error("No listener registered — did you call service.start()?")
+  }
+  for (const listener of state.listeners) {
+    listener(evt)
+  }
 }
 
-const defaultConfig = {
-  config: {
-    otlpEndpoint: "http://localhost:4318",
-    agentId: "nix-v1",
-    project: "agentweave",
-    enabled: true,
-  },
+// Build a ctx in the shape service.ts actually reads from:
+// ctx.config.plugins.entries["agentweave-bridge"].config
+function makeCtx(overrides: Record<string, unknown> = {}) {
+  return {
+    config: {
+      plugins: {
+        entries: {
+          "agentweave-bridge": {
+            config: {
+              otlpEndpoint: "http://localhost:4318",
+              agentId: "nix-v1",
+              project: "agentweave",
+              enabled: true,
+              ...overrides,
+            },
+          },
+        },
+      },
+    },
+  }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -61,11 +79,12 @@ describe("createAgentWeaveBridgeService", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks()
-    capturedListener = null
+    // Reset shared globalThis state and env vars between tests
+    delete (globalThis as Record<string, unknown>).__openclawDiagnosticEventsState
     delete process.env.AGENTWEAVE_TRACEPARENT
     delete process.env.AGENTWEAVE_SESSION_ID
     service = createAgentWeaveBridgeService()
-    await service.start(defaultConfig)
+    await service.start(makeCtx())
   })
 
   afterEach(async () => {
@@ -73,12 +92,18 @@ describe("createAgentWeaveBridgeService", () => {
   })
 
   it("does not register listener when disabled", async () => {
-    const { onDiagnosticEvent } = await import("openclaw/plugin-sdk/diagnostics-otel")
-    vi.mocked(onDiagnosticEvent).mockClear()
-    capturedListener = null
-    const s = createAgentWeaveBridgeService()
-    await s.start({ config: { ...defaultConfig.config, enabled: false } })
-    expect(onDiagnosticEvent).not.toHaveBeenCalled()
+    const g = globalThis as Record<string, unknown>
+    const stateBefore = g.__openclawDiagnosticEventsState as { listeners: Set<unknown> } | undefined
+    const countBefore = stateBefore?.listeners.size ?? 0
+
+    // A second service instance with enabled:false should not add a listener
+    const disabledService = createAgentWeaveBridgeService()
+    await disabledService.start(makeCtx({ enabled: false }))
+
+    const stateAfter = g.__openclawDiagnosticEventsState as { listeners: Set<unknown> } | undefined
+    expect(stateAfter?.listeners.size ?? 0).toBe(countBefore)
+    // Don't call disabledService.stop() — it shares module-level unsubscribe
+    // with the main service and would incorrectly tear it down.
   })
 
   it("creates root span on message.queued and injects traceparent", () => {
@@ -96,7 +121,7 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "sess-abc")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "sess-abc")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "nix-v1")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.project", "agentweave")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.activity.type", "agent_turn")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("channel", "telegram")
     expect(process.env.AGENTWEAVE_TRACEPARENT).toBeTruthy()
     expect(process.env.AGENTWEAVE_SESSION_ID).toBe("sess-abc")
@@ -112,7 +137,7 @@ describe("createAgentWeaveBridgeService", () => {
     expect(process.env.AGENTWEAVE_TRACEPARENT).toBeUndefined()
   })
 
-  it("sets ERROR status on message.processed with error", () => {
+  it("sets ERROR status on message.processed with error outcome", () => {
     fire({ type: "message.queued", sessionKey: "sk-3", sessionId: "sess-c", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
     fire({ type: "message.processed", sessionKey: "sk-3", sessionId: "sess-c", channel: "cli", outcome: "error", error: "context limit exceeded", ts: Date.now(), seq: 2 })
 
