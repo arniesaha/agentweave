@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react'
-import { Maximize2 } from 'lucide-react'
+import { Maximize2, RotateCcw } from 'lucide-react'
 import { SessionNode, SessionEdge } from '../lib/queries'
 
 interface LayoutNode extends SessionNode {
@@ -15,6 +15,15 @@ interface TooltipState {
 }
 
 type GraphMode = 'agent' | 'session'
+
+type NodePositions = Record<string, { x: number; y: number }>
+
+interface DragState {
+  id: string
+  moved: boolean
+  pointerOffsetX: number
+  pointerOffsetY: number
+}
 
 const NODE_RADIUS_BASE = 28
 const NODE_RADIUS_SESSION = 30
@@ -124,13 +133,15 @@ function layoutTree(
   const maxX = Math.max(...layoutNodes.map((n) => n.x), 0)
   const maxY = Math.max(...layoutNodes.map((n) => n.y), 0)
 
-  const width = (maxX + 1) * (nodeRadius * 2 + hGap) + PADDING * 2
+  // Slightly wider spacing for readability in screenshots.
+  const effectiveGap = hGap + 15
+  const width = (maxX + 1) * (nodeRadius * 2 + effectiveGap) + PADDING * 2
   const height = (maxY + 1) * (nodeRadius * 2 + V_GAP) + PADDING * 2
 
   // Convert grid positions to pixel positions
   const pixelNodes = layoutNodes.map((n) => ({
     ...n,
-    x: PADDING + n.x * (nodeRadius * 2 + hGap) + nodeRadius,
+    x: PADDING + n.x * (nodeRadius * 2 + effectiveGap) + nodeRadius,
     y: PADDING + n.y * (nodeRadius * 2 + V_GAP) + nodeRadius,
   }))
 
@@ -153,6 +164,9 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
   const [mode, setMode] = useState<GraphMode>(fixedMode ?? 'agent')
   const svgRef = useRef<SVGSVGElement>(null)
+
+  const [nodePositions, setNodePositions] = useState<NodePositions>({})
+  const [dragState, setDragState] = useState<DragState | null>(null)
 
   // Agent mode: aggregate session nodes by agentId
   const agentNodes = useMemo(() => {
@@ -233,16 +247,84 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
     [displayNodes, displayEdges, nodeRadius, hGap]
   )
 
-  const nodeMap = useMemo(
-    () => new Map(layoutNodes.map((n) => [n.sessionId, n])),
-    [layoutNodes]
+  const renderedNodes = useMemo(
+    () => layoutNodes.map((n) => {
+      const overridden = nodePositions[n.sessionId]
+      return overridden ? { ...n, x: overridden.x, y: overridden.y } : n
+    }),
+    [layoutNodes, nodePositions]
   )
+
+  const nodeMap = useMemo(
+    () => new Map(renderedNodes.map((n) => [n.sessionId, n])),
+    [renderedNodes]
+  )
+
+  const positionedIdsKey = useMemo(
+    () => renderedNodes.map((n) => n.sessionId).sort().join('|'),
+    [renderedNodes]
+  )
+
+  useEffect(() => {
+    // Clean stale drag overrides if the visible graph changed.
+    setNodePositions((prev) => {
+      const valid = new Set(renderedNodes.map((n) => n.sessionId))
+      const next: NodePositions = {}
+      for (const [id, pos] of Object.entries(prev)) {
+        if (valid.has(id)) next[id] = pos
+      }
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next
+    })
+  }, [positionedIdsKey, renderedNodes])
 
   useEffect(() => {
     const handler = () => setTooltip(null)
     window.addEventListener('click', handler)
     return () => window.removeEventListener('click', handler)
   }, [])
+
+  useEffect(() => {
+    if (!dragState) return
+
+    const getPointerPositionInSvg = (clientX: number, clientY: number) => {
+      const svg = svgRef.current
+      if (!svg) return null
+      const rect = svg.getBoundingClientRect()
+      const container = svg.parentElement
+      const scrollLeft = container?.scrollLeft ?? 0
+      const scrollTop = container?.scrollTop ?? 0
+      return {
+        x: clientX - rect.left + scrollLeft,
+        y: clientY - rect.top + scrollTop,
+      }
+    }
+
+    const handleMove = (e: MouseEvent) => {
+      const pointer = getPointerPositionInSvg(e.clientX, e.clientY)
+      if (!pointer) return
+
+      setNodePositions((prev) => ({
+        ...prev,
+        [dragState.id]: {
+          x: pointer.x - dragState.pointerOffsetX,
+          y: pointer.y - dragState.pointerOffsetY,
+        },
+      }))
+      setDragState((prev) => (prev ? { ...prev, moved: true } : prev))
+      setTooltip(null)
+    }
+
+    const handleUp = () => {
+      setDragState(null)
+    }
+
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [dragState])
 
   if (loading) {
     return (
@@ -297,6 +379,15 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
               <Maximize2 size={13} />
             </button>
           )}
+          <button
+            onClick={() => setNodePositions({})}
+            className="p-1 rounded-md bg-surface-overlay text-ink-muted hover:bg-surface-raised hover:text-ink transition-colors"
+            aria-label="Reset manual node positions"
+            title="Reset layout"
+          >
+            <RotateCcw size={13} />
+          </button>
+          <span className="text-[10px] text-ink-faint">drag nodes to explore causality paths</span>
           <span className="flex items-center gap-1.5">
             <svg width="28" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="#00E5CC" strokeWidth="1.5" strokeDasharray="6 4" opacity="0.6"/><polygon points="22,2 22,8 28,5" fill="#00E5CC" opacity="0.7"/></svg>
             <span>delegates to</span>
@@ -345,7 +436,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           const labelY = from.y + fromR + (ey - from.y - fromR) * 0.45
           return (
             <g key={`fwd-${edge.from}->${edge.to}`}>
-              <path d={path} fill="none" stroke="#00E5CC" strokeWidth="1.5" strokeDasharray="6 4" opacity="0.6" />
+              <path d={path} fill="none" stroke="#00E5CC" strokeWidth="1.8" strokeDasharray="6 4" opacity="0.65" />
               <polygon
                 points={`${ex - 4},${ey - 7} ${ex + 4},${ey - 7} ${ex},${ey}`}
                 fill="#00E5CC" opacity="0.7" />
@@ -377,7 +468,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           const labelY = (fy + ty) / 2
           return (
             <g key={`back-${edge.from}->${edge.to}`}>
-              <path d={path} fill="none" stroke="#FFBF47" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.7" />
+              <path d={path} fill="none" stroke="#FFBF47" strokeWidth="1.8" strokeDasharray="5 3" opacity="0.72" />
               <polygon
                 points={`${tx + 8},${ty - 4} ${tx + 8},${ty + 4} ${tx},${ty}`}
                 fill="#FFBF47" opacity="0.8" />
@@ -392,7 +483,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         })}
 
         {/* Nodes */}
-        {layoutNodes.map((node) => {
+        {renderedNodes.map((node) => {
           const colors = nodeColor(node)
           const isSelected = node.sessionId === selectedId
           const radius = nodeRadius + Math.min(node.callCount * 1.5, 12)
@@ -401,13 +492,32 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
             <g
               key={node.sessionId}
               transform={`translate(${node.x},${node.y})`}
-              style={{ cursor: 'pointer' }}
+              style={{ cursor: dragState?.id === node.sessionId ? 'grabbing' : 'grab' }}
+              onMouseDown={(e) => {
+                e.stopPropagation()
+                const svg = svgRef.current
+                if (!svg) return
+                const rect = svg.getBoundingClientRect()
+                const scrollLeft = svg.parentElement?.scrollLeft ?? 0
+                const scrollTop = svg.parentElement?.scrollTop ?? 0
+                const pointerX = e.clientX - rect.left + scrollLeft
+                const pointerY = e.clientY - rect.top + scrollTop
+                setDragState({
+                  id: node.sessionId,
+                  moved: false,
+                  pointerOffsetX: pointerX - node.x,
+                  pointerOffsetY: pointerY - node.y,
+                })
+              }}
               onClick={(e) => {
                 e.stopPropagation()
-                onSelect(node.sessionId)
+                if (!dragState?.moved) {
+                  onSelect(node.sessionId)
+                }
                 setTooltip(null)
               }}
               onMouseEnter={(e) => {
+                if (dragState) return
                 const svg = svgRef.current
                 if (!svg) return
                 const rect = svg.getBoundingClientRect()
@@ -550,7 +660,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           <span className="w-3 h-3 rounded-full bg-[#2A1215] border border-[#FF6B6B] inline-block" />
           Error
         </span>
-        <span className="text-ink-faint ml-auto">Node size = call count · Click = details</span>
+        <span className="text-ink-faint ml-auto">Node size = call count · Drag = reposition · Click = details</span>
       </div>
     </div>
   )
