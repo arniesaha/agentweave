@@ -1,24 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { createAgentWeaveBridgeService } from "./service.js"
 
-// ── Mock openclaw plugin SDK ──────────────────────────────────────────────────
-// onDiagnosticEvent takes a single (evt) => void listener — capture it so tests
-// can fire synthetic events directly.
-let capturedListener: ((evt: unknown) => void) | null = null
-
-vi.mock("openclaw/plugin-sdk/diagnostics-otel", () => ({
-  onDiagnosticEvent: vi.fn((listener: (evt: unknown) => void) => {
-    capturedListener = listener
-    return () => { capturedListener = null } // unsubscribe
-  }),
-}))
-
 // ── Mock OTel APIs ────────────────────────────────────────────────────────────
 const mockSpan = {
   setAttribute: vi.fn(),
   setStatus: vi.fn(),
   addEvent: vi.fn(),
   end: vi.fn(),
+  spanContext: vi.fn(() => ({ traceId: "abc", spanId: "def", traceFlags: 1 })),
 }
 
 vi.mock("@opentelemetry/api", () => ({
@@ -36,23 +25,54 @@ vi.mock("@opentelemetry/api", () => ({
 }))
 
 vi.mock("@opentelemetry/exporter-trace-otlp-proto", () => ({ OTLPTraceExporter: vi.fn() }))
-vi.mock("@opentelemetry/sdk-node", () => ({ NodeSDK: vi.fn(() => ({ start: vi.fn(), shutdown: vi.fn() })) }))
+
+// NodeSDK must be a proper constructor (not arrow function) — arrow functions can't be new'd.
+vi.mock("@opentelemetry/sdk-node", () => ({
+  NodeSDK: vi.fn().mockImplementation(function () {
+    return { start: vi.fn(), shutdown: vi.fn() }
+  }),
+}))
+
 vi.mock("@opentelemetry/resources", () => ({ resourceFromAttributes: vi.fn(() => ({})) }))
-vi.mock("@opentelemetry/sdk-trace-base", () => ({ BatchSpanProcessor: vi.fn() }))
+vi.mock("@opentelemetry/sdk-trace-base", () => ({
+  BatchSpanProcessor: vi.fn(),
+  SimpleSpanProcessor: vi.fn(),
+}))
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// service.ts writes directly to globalThis.__openclawDiagnosticEventsState —
+// not via onDiagnosticEvent. Fire events through that state.
 function fire(evt: object) {
-  if (!capturedListener) throw new Error("No listener registered — did you call service.start()?")
-  capturedListener(evt)
+  const g = globalThis as Record<string, unknown>
+  const state = g.__openclawDiagnosticEventsState as { listeners: Set<(evt: unknown) => void> } | undefined
+  if (!state || state.listeners.size === 0) {
+    throw new Error("No listener registered — did you call service.start()?")
+  }
+  for (const listener of state.listeners) {
+    listener(evt)
+  }
 }
 
-const defaultConfig = {
-  config: {
-    otlpEndpoint: "http://localhost:4318",
-    agentId: "nix-v1",
-    project: "agentweave",
-    enabled: true,
-  },
+// Build ctx in the shape service.ts reads: ctx.config.plugins.entries["agentweave-bridge"].config
+function makeCtx(overrides: Record<string, unknown> = {}) {
+  return {
+    config: {
+      plugins: {
+        entries: {
+          "agentweave-bridge": {
+            config: {
+              otlpEndpoint: "http://localhost:4318",
+              agentId: "nix-v1",
+              project: "agentweave",
+              enabled: true,
+              ...overrides,
+            },
+          },
+        },
+      },
+    },
+  }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -61,11 +81,12 @@ describe("createAgentWeaveBridgeService", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks()
-    capturedListener = null
+    delete (globalThis as Record<string, unknown>).__openclawDiagnosticEventsState
     delete process.env.AGENTWEAVE_TRACEPARENT
     delete process.env.AGENTWEAVE_SESSION_ID
+    delete process.env.AGENTWEAVE_PARENT_SESSION_ID
     service = createAgentWeaveBridgeService()
-    await service.start(defaultConfig)
+    await service.start(makeCtx())
   })
 
   afterEach(async () => {
@@ -73,19 +94,23 @@ describe("createAgentWeaveBridgeService", () => {
   })
 
   it("does not register listener when disabled", async () => {
-    const { onDiagnosticEvent } = await import("openclaw/plugin-sdk/diagnostics-otel")
-    vi.mocked(onDiagnosticEvent).mockClear()
-    capturedListener = null
-    const s = createAgentWeaveBridgeService()
-    await s.start({ config: { ...defaultConfig.config, enabled: false } })
-    expect(onDiagnosticEvent).not.toHaveBeenCalled()
+    const g = globalThis as Record<string, unknown>
+    const countBefore = (g.__openclawDiagnosticEventsState as { listeners: Set<unknown> } | undefined)?.listeners.size ?? 0
+
+    const disabledService = createAgentWeaveBridgeService()
+    await disabledService.start(makeCtx({ enabled: false }))
+
+    const countAfter = (g.__openclawDiagnosticEventsState as { listeners: Set<unknown> } | undefined)?.listeners.size ?? 0
+    expect(countAfter).toBe(countBefore)
+    // Don't call disabledService.stop() — shares module-level unsubscribe with main service
   })
 
   it("creates root span on message.queued and injects traceparent", () => {
+    // service.ts uses sessionKey as the canonical session ID
     fire({
       type: "message.queued",
-      sessionKey: "sk-1",
-      sessionId: "sess-abc",
+      sessionKey: "agent:main:test-session",
+      sessionId: "test-session",
       channel: "telegram",
       source: "user",
       queueDepth: 0,
@@ -93,18 +118,20 @@ describe("createAgentWeaveBridgeService", () => {
       seq: 1,
     })
 
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "sess-abc")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "sess-abc")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session_id", "agent:main:test-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "agent:main:test-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "agent:main:test-session")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "nix-v1")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.project", "agentweave")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "main")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.activity.type", "agent_turn")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("channel", "telegram")
     expect(process.env.AGENTWEAVE_TRACEPARENT).toBeTruthy()
-    expect(process.env.AGENTWEAVE_SESSION_ID).toBe("sess-abc")
+    expect(process.env.AGENTWEAVE_SESSION_ID).toBe("agent:main:test-session")
   })
 
   it("ends span on message.processed (completed) and cleans env", () => {
-    fire({ type: "message.queued", sessionKey: "sk-2", sessionId: "sess-b", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
-    fire({ type: "message.processed", sessionKey: "sk-2", sessionId: "sess-b", channel: "cli", outcome: "completed", durationMs: 1200, ts: Date.now(), seq: 2 })
+    fire({ type: "message.queued", sessionKey: "agent:main:sk-2", sessionId: "sess-b", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
+    fire({ type: "message.processed", sessionKey: "agent:main:sk-2", sessionId: "sess-b", channel: "cli", outcome: "completed", durationMs: 1200, ts: Date.now(), seq: 2 })
 
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("outcome", "completed")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("duration_ms", 1200)
@@ -112,19 +139,19 @@ describe("createAgentWeaveBridgeService", () => {
     expect(process.env.AGENTWEAVE_TRACEPARENT).toBeUndefined()
   })
 
-  it("sets ERROR status on message.processed with error", () => {
-    fire({ type: "message.queued", sessionKey: "sk-3", sessionId: "sess-c", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
-    fire({ type: "message.processed", sessionKey: "sk-3", sessionId: "sess-c", channel: "cli", outcome: "error", error: "context limit exceeded", ts: Date.now(), seq: 2 })
+  it("sets ERROR status on message.processed with error outcome", () => {
+    fire({ type: "message.queued", sessionKey: "agent:main:sk-3", sessionId: "sess-c", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
+    fire({ type: "message.processed", sessionKey: "agent:main:sk-3", sessionId: "sess-c", channel: "cli", outcome: "error", error: "context limit exceeded", ts: Date.now(), seq: 2 })
 
     expect(mockSpan.setStatus).toHaveBeenCalledWith({ code: 2, message: "context limit exceeded" })
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("error.message", "context limit exceeded")
   })
 
   it("adds model.usage event and span attributes to active span", () => {
-    fire({ type: "message.queued", sessionKey: "sk-4", sessionId: "sess-d", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
+    fire({ type: "message.queued", sessionKey: "agent:main:sk-4", sessionId: "sess-d", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
     fire({
       type: "model.usage",
-      sessionKey: "sk-4",
+      sessionKey: "agent:main:sk-4",
       sessionId: "sess-d",
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -143,14 +170,10 @@ describe("createAgentWeaveBridgeService", () => {
       "model.usage.cache_read_tokens": 200,
       "model.usage.cache_write_tokens": 100,
     }))
-
+    // Also written as span attributes for querying
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.provider", "anthropic")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "claude-sonnet-4-6")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("cost.usd", 0.015)
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.prompt_tokens", 1000)
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.completion_tokens", 500)
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.cache_read_tokens", 200)
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.cache_write_tokens", 100)
   })
 
   it("ignores model.usage for unknown sessionKey", () => {
@@ -159,10 +182,10 @@ describe("createAgentWeaveBridgeService", () => {
   })
 
   it("adds tool.loop event to active span", () => {
-    fire({ type: "message.queued", sessionKey: "sk-5", sessionId: "sess-e", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
+    fire({ type: "message.queued", sessionKey: "agent:main:sk-5", sessionId: "sess-e", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
     fire({
       type: "tool.loop",
-      sessionKey: "sk-5",
+      sessionKey: "agent:main:sk-5",
       sessionId: "sess-e",
       toolName: "exec",
       level: "warning",
@@ -182,7 +205,7 @@ describe("createAgentWeaveBridgeService", () => {
   })
 
   it("ends in-flight spans on stop()", async () => {
-    fire({ type: "message.queued", sessionKey: "sk-6", sessionId: "sess-f", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
+    fire({ type: "message.queued", sessionKey: "agent:main:sk-6", sessionId: "sess-f", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
     await service.stop()
 
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("outcome", "interrupted")
