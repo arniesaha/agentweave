@@ -222,8 +222,12 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
 
 export interface TempoMetricResult {
   series: Array<{
-    labels: Record<string, string>
-    samples: Array<{ timestamp_ms: number; value: string }>
+    labels?: Record<string, string> | Array<{ key: string; value: { stringValue?: string } }>
+    samples: Array<{
+      timestamp_ms?: number
+      timestampMs?: number | string
+      value: string | number
+    }>
   }>
 }
 
@@ -233,7 +237,7 @@ export function extractLastTempoMetricValue(result: TempoMetricResult | null): n
   let total = 0
   for (const s of result.series) {
     if (s.samples.length > 0) {
-      total += parseFloat(s.samples[s.samples.length - 1].value) || 0
+      total += metricSampleValue(s.samples[s.samples.length - 1]) || 0
     }
   }
   return total
@@ -351,7 +355,7 @@ export function tempoCostTimeSeriesQuery(project?: string): string {
   const projectFilter = project ? ` && span.prov.project = "${project}"` : ''
   return (
     `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown"${projectFilter} }` +
-    ` | sum(span.cost.usd)`
+    ` | sum_over_time(span.cost.usd)`
   )
 }
 
@@ -359,6 +363,16 @@ export function tempoCostTimeSeriesQuery(project?: string): string {
  * Transform a TempoMetricResult into the series format expected by TimeSeriesChart.
  * Aggregates all series into a single "Cost USD" series (sum across labels).
  */
+function metricSampleTimeMs(sample: { timestamp_ms?: number; timestampMs?: number | string }): number | null {
+  const ts = sample.timestamp_ms ?? (typeof sample.timestampMs === 'string' ? parseInt(sample.timestampMs, 10) : sample.timestampMs)
+  return Number.isFinite(ts) ? (ts as number) : null
+}
+
+function metricSampleValue(sample: { value: string | number }): number {
+  if (typeof sample.value === 'number') return sample.value
+  return parseFloat(sample.value) || 0
+}
+
 export function transformTempoCostSeries(
   result: TempoMetricResult | null,
 ): Array<{ label: string; points: Array<{ time: number; value: number }> }> {
@@ -368,9 +382,10 @@ export function transformTempoCostSeries(
   const buckets = new Map<number, number>()
   for (const s of result.series) {
     for (const sample of s.samples) {
-      const v = parseFloat(sample.value) || 0
-      if (v <= 0) continue
-      buckets.set(sample.timestamp_ms, (buckets.get(sample.timestamp_ms) ?? 0) + v)
+      const ts = metricSampleTimeMs(sample)
+      const v = metricSampleValue(sample)
+      if (ts === null || v <= 0) continue
+      buckets.set(ts, (buckets.get(ts) ?? 0) + v)
     }
   }
 
@@ -393,7 +408,7 @@ export function extractTotalTempoCost(result: TempoMetricResult | null): number 
   let total = 0
   for (const s of result.series) {
     for (const sample of s.samples ?? []) {
-      const v = parseFloat(sample.value) || 0
+      const v = metricSampleValue(sample)
       if (v <= 0) continue
       total += v
     }

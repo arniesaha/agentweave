@@ -6,6 +6,7 @@ import {
 } from '../lib/queries'
 
 const TEMPO_BASE = '/tempo'
+const TEMPO_METRICS_MAX_WINDOW_SECONDS = 3 * 60 * 60
 
 interface UseTempoSearchResult {
   traces: TempoSpan[]
@@ -106,16 +107,36 @@ export function useTempoMetrics(
     try {
       const { start, end } = getTimeRangeBounds(timeRange)
       const step = getStepForRange(timeRange)
-      const params = new URLSearchParams({
-        q: query,
-        start: String(start),
-        end: String(end),
-        step: `${step}s`,
-      })
-      const resp = await fetch(`${TEMPO_BASE}/api/metrics/query_range?${params}`)
-      if (!resp.ok) throw new Error(`Tempo metrics failed: ${resp.status}`)
-      const data = await resp.json()
-      setResult(data)
+
+      const mergedSeries: Array<{
+        labels?: Record<string, string> | Array<{ key: string; value: { stringValue?: string } }>
+        samples: Array<{ timestamp_ms?: number; timestampMs?: number | string; value: string | number }>
+      }> = []
+
+      for (
+        let chunkStart = start;
+        chunkStart <= end;
+        chunkStart += TEMPO_METRICS_MAX_WINDOW_SECONDS + step
+      ) {
+        const chunkEnd = Math.min(chunkStart + TEMPO_METRICS_MAX_WINDOW_SECONDS, end)
+        const params = new URLSearchParams({
+          q: query,
+          start: String(chunkStart),
+          end: String(chunkEnd),
+          step: `${step}s`,
+        })
+        const resp = await fetch(`${TEMPO_BASE}/api/metrics/query_range?${params}`)
+        if (!resp.ok) {
+          const details = await resp.text().catch(() => '')
+          throw new Error(`Tempo metrics failed: ${resp.status}${details ? ` — ${details}` : ''}`)
+        }
+        const data = await resp.json()
+        if (Array.isArray(data?.series)) {
+          mergedSeries.push(...data.series)
+        }
+      }
+
+      setResult({ series: mergedSeries })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Tempo unavailable')
       setResult(null)
