@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { Activity, DollarSign, Zap, RefreshCw, GitBranch, BarChart2, X, PlayCircle } from 'lucide-react'
+import { Activity, DollarSign, Zap, RefreshCw, GitBranch, BarChart2, X, PlayCircle, Route } from 'lucide-react'
 import { Header } from './components/Header'
 import { StatCard } from './components/StatCard'
 import { TimeSeriesChart } from './components/TimeSeriesChart'
@@ -11,35 +11,37 @@ import { AgentHealthBadges } from './components/AgentHealthBadges'
 import { SessionExplorer } from './components/SessionExplorer'
 import { PromptVersionFilter, filterByPromptVersion, filterTempoSpansByPromptVersion } from './components/PromptVersionFilter'
 import { SessionReplay } from './components/SessionReplay'
+import { MuxRouting } from './components/MuxRouting'
 import {
   TimeRange,
   tempoSearchQuery,
-  tempoCostTimeSeriesQuery,
   tempoAgentAttributionQuery,
   tempoSubagentSearchQuery,
+  tempoMuxRoutingQuery,
+  transformMuxRoutingTraces,
   promLLMCallsRateQuery,
   promCallsByModelQuery,
   promP95LatencyByModelQuery,
   promCallsByAgentQuery,
-  transformTempoTraces,
-  transformTempoCostSeries,
-  extractTotalTempoCost,
-  transformAgentAttributionTraces,
-  transformSubagentTraces,
+  buildCostTotal,
   buildCostTimeSeries,
   buildCostByAgent,
+  transformTempoTraces,
+  transformAgentAttributionTraces,
+  transformSubagentTraces,
   extractProjects,
   computeAgentHealthScores,
 } from './lib/queries'
-import { useTempoSearch, useTempoSearchCount, useTempoMetrics, useSessionGraph } from './hooks/useTempo'
+import { useTempoSearch, useSessionGraph } from './hooks/useTempo'
 import { usePromQueryRange, usePromQueryInstant } from './hooks/usePrometheus'
 
-type ActiveTab = 'overview' | 'sessions' | 'replay'
+type ActiveTab = 'overview' | 'sessions' | 'replay' | 'routing'
 
 const REFRESH_INTERVAL_MS = 60_000 // 60s
 
 const TAB_CONFIG: { key: ActiveTab; label: string; icon: React.ElementType }[] = [
   { key: 'overview', label: 'Overview', icon: BarChart2 },
+  { key: 'routing', label: 'Routing', icon: Route },
   { key: 'sessions', label: 'Sessions', icon: GitBranch },
   { key: 'replay', label: 'Replay', icon: PlayCircle },
 ]
@@ -49,7 +51,7 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const rawTab = new URLSearchParams(window.location.search).get('tab')
-  const initialTab: ActiveTab = (rawTab === 'sessions' || rawTab === 'replay' ? rawTab : 'overview')
+  const initialTab: ActiveTab = (rawTab === 'sessions' || rawTab === 'replay' || rawTab === 'routing' ? rawTab : 'overview')
   const [activeTab, setActiveTab] = useState<ActiveTab>(initialTab)
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] = useState<string | null>(null)
@@ -93,8 +95,9 @@ export default function App() {
     : traceRows
 
   // ─── Stat Card Data ────────────────────────────────────────────────────
-  const { count: llmCallCount, loading: llmCallLoading, error: llmCallError } =
-    useTempoSearchCount(tempoSearchQuery(selectedProject ?? undefined), timeRange, refreshKey)
+  const llmCallCount = tracesLoading ? null : traceRows.length
+  const llmCallLoading = tracesLoading
+  const llmCallError = tracesError
 
   const tracesWithCache = traceRows.filter((t) => t.cacheHitRate > 0)
   const cacheValue = tracesLoading
@@ -113,17 +116,8 @@ export default function App() {
   const { series: callsSeries, loading: callsSeriesLoading, error: callsSeriesError } =
     usePromQueryRange(promLLMCallsRateQuery(), timeRange, refreshKey, 'prov_llm_model')
 
-  const { result: costMetricResult, loading: costMetricLoading, error: costMetricError } =
-    useTempoMetrics(tempoCostTimeSeriesQuery(selectedProject ?? undefined), timeRange, refreshKey)
-
-  const costValue = extractTotalTempoCost(costMetricResult)
-  const costMetricSeries = transformTempoCostSeries(costMetricResult)
-  const costChartSeries = costMetricSeries.length > 0
-    ? costMetricSeries
-    : buildCostTimeSeries(traceRows, timeRange)
-  const costChartSubtitle = costMetricSeries.length > 0
-    ? 'Cost per time bucket (all spans)'
-    : 'Cost per time bucket (loaded traces)'
+  const costValue = useMemo(() => buildCostTotal(traceRows), [traceRows])
+  const costChartSeries = useMemo(() => buildCostTimeSeries(traceRows, timeRange), [traceRows, timeRange])
 
   // ─── Bar Chart Data ───────────────────────────────────────────────────
   const { bars: callsByModel, loading: callsByModelLoading, error: callsByModelError } =
@@ -149,7 +143,7 @@ export default function App() {
   const { bars: callsByAgent, loading: callsByAgentLoading, error: callsByAgentError } =
     usePromQueryInstant(promCallsByAgentQuery(timeRange), timeRange, refreshKey, 'prov_agent_id')
 
-  const costByAgent = buildCostByAgent(traceRows)
+  const costByAgent = useMemo(() => buildCostByAgent(traceRows), [traceRows])
 
   const agentHealthScores = useMemo(
     () => computeAgentHealthScores(traceRows),
@@ -164,6 +158,11 @@ export default function App() {
   const { traces: rawSubagent, loading: subagentLoading, error: subagentError } =
     useTempoSearch(tempoSubagentSearchQuery(), timeRange, refreshKey)
   const subagentRows = transformSubagentTraces(rawSubagent)
+
+  // ─── Mux Routing data ────────────────────────────────────────────────
+  const { traces: rawRoutingTraces, loading: routingLoading, error: routingError } =
+    useTempoSearch(tempoMuxRoutingQuery(), timeRange, refreshKey)
+  const routingRows = useMemo(() => transformMuxRoutingTraces(rawRoutingTraces), [rawRoutingTraces])
 
   // ─── Session graph data ──────────────────────────────────────────────
   const { nodes: sessionNodes, edges: sessionEdges, rawTraces: sessionRawTraces, loading: sessionLoading, error: sessionError } =
@@ -210,6 +209,15 @@ export default function App() {
       </div>
 
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 py-6 space-y-5">
+        {/* Mux Routing tab */}
+        {activeTab === 'routing' && (
+          <MuxRouting
+            rows={routingRows}
+            loading={routingLoading}
+            error={routingError}
+          />
+        )}
+
         {/* Session Explorer tab */}
         {activeTab === 'sessions' && (
           <div className="space-y-4 animate-fade-in">
@@ -256,9 +264,9 @@ export default function App() {
             iconColor="text-signal-lime"
             iconBg="bg-signal-lime/8"
             label="Total Cost"
-            value={costValue !== null ? `$${costValue.toFixed(4)}` : null}
-            loading={costMetricLoading}
-            error={costMetricError}
+            value={!tracesLoading ? `$${costValue.toFixed(4)}` : null}
+            loading={tracesLoading}
+            error={tracesError}
           />
           <StatCard
             icon={Zap}
@@ -293,10 +301,10 @@ export default function App() {
           />
           <TimeSeriesChart
             title="Cost over Time"
-            subtitle={costChartSubtitle}
+            subtitle="Cost per time bucket"
             series={costChartSeries}
-            loading={costMetricLoading && tracesLoading}
-            error={costChartSeries.length === 0 ? (costMetricError ?? tracesError) : null}
+            loading={tracesLoading}
+            error={tracesError}
             type="area"
             valueFormatter={(v) => `$${v.toFixed(4)}`}
           />
@@ -339,7 +347,7 @@ export default function App() {
             subtitle="Estimated total cost per agent"
             data={costByAgent}
             loading={tracesLoading}
-            error={null}
+            error={tracesError}
             valueFormatter={(v) => `$${v.toFixed(4)}`}
           />
         </div>
