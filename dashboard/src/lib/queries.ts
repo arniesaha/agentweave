@@ -1,6 +1,6 @@
 // All query strings and transformers for AgentWeave Dashboard
 
-export type TimeRange = '15m' | '1h' | '3h' | '6h' | '24h' | '7d'
+export type TimeRange = '15m' | '1h' | '3h' | '6h' | '24h' | '7d' | '30d' | '60d' | '90d'
 
 export function getTimeRangeSeconds(range: TimeRange): number {
   const map: Record<TimeRange, number> = {
@@ -10,6 +10,9 @@ export function getTimeRangeSeconds(range: TimeRange): number {
     '6h': 21600,
     '24h': 86400,
     '7d': 604800,
+    '30d': 2592000,
+    '60d': 5184000,
+    '90d': 7776000,
   }
   return map[range]
 }
@@ -28,6 +31,9 @@ export function getStepForRange(range: TimeRange): number {
     '6h': 300,
     '24h': 600,
     '7d': 3600,
+    '30d': 7200,
+    '60d': 14400,
+    '90d': 21600,
   }
   return map[range]
 }
@@ -67,11 +73,42 @@ export function promCallsByAgentQuery(range: TimeRange): string {
   return `sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service="${TEMPO_SERVICE}"}[${seconds}s]))`
 }
 
-export function promCostByAgentQuery(range: TimeRange): string {
-  // Uses Prometheus spanmetrics for call counts as a proxy; actual cost bucketed from traces
-  // This gives relative call volume per agent — use alongside cost stat for context
-  const seconds = getTimeRangeSeconds(range)
-  return `sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service="${TEMPO_SERVICE}"}[${seconds}s]))`
+// ─── Client-side cost aggregation (from Tempo trace data) ────────────────────
+
+export function buildCostTotal(traces: TraceRow[]): number {
+  return traces.reduce((sum, t) => sum + t.costUsd, 0)
+}
+
+export function buildCostTimeSeries(
+  traces: TraceRow[],
+  timeRange: TimeRange,
+): Array<{ label: string; points: TimeSeriesPoint[] }> {
+  const stepMs = getStepForRange(timeRange) * 1000
+  const buckets = new Map<number, number>()
+  for (const t of traces) {
+    if (t.costUsd <= 0) continue
+    const bucket = Math.floor(t.time / stepMs) * stepMs
+    buckets.set(bucket, (buckets.get(bucket) ?? 0) + t.costUsd)
+  }
+  if (!buckets.size) return []
+  const points = Array.from(buckets.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([time, value]) => ({ time, value }))
+  return [{ label: 'Cost', points }]
+}
+
+export function buildCostByAgent(
+  traces: TraceRow[],
+): Array<{ label: string; value: number }> {
+  const byAgent = new Map<string, number>()
+  for (const t of traces) {
+    if (t.costUsd <= 0) continue
+    const agent = t.agentId || 'unknown'
+    byAgent.set(agent, (byAgent.get(agent) ?? 0) + t.costUsd)
+  }
+  return Array.from(byAgent.entries())
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value)
 }
 
 // ─── Response transformers ─────────────────────────────────────────────────
@@ -220,30 +257,7 @@ export function transformTempoTraces(traces: TempoSpan[]): TraceRow[] {
   })
 }
 
-export interface TempoMetricResult {
-  series: Array<{
-    labels?: Record<string, string> | Array<{ key: string; value: { stringValue?: string } }>
-    samples: Array<{
-      timestamp_ms?: number
-      timestampMs?: number | string
-      value: string | number
-    }>
-  }>
-}
-
-export function extractLastTempoMetricValue(result: TempoMetricResult | null): number | null {
-  if (!result?.series?.length) return null
-  // sum the last value of each series
-  let total = 0
-  for (const s of result.series) {
-    if (s.samples.length > 0) {
-      total += metricSampleValue(s.samples[s.samples.length - 1]) || 0
-    }
-  }
-  return total
-}
-
-// ─── Tempo Metrics queries ────────────────────────────────────────────────────
+// ─── Tempo Queries ───────────────────────────────────────────────────────────
 
 /** TraceQL search query returning all spans for a specific session. */
 export function tempoSessionQuery(sessionId: string): string {
@@ -350,79 +364,13 @@ export function buildReplayTurns(traces: TempoSpan[], searchedSessionId?: string
     .map((row, i) => ({ ...row, turnNumber: row.turnNumber || i + 1 }))
 }
 
-/** TraceQL metrics query that returns cost.usd summed per time bucket. */
-export function tempoCostTimeSeriesQuery(project?: string): string {
-  const projectFilter = project ? ` && span.prov.project = "${project}"` : ''
-  return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown"${projectFilter} }` +
-    ` | sum_over_time(span.cost.usd)`
-  )
-}
-
-/**
- * Transform a TempoMetricResult into the series format expected by TimeSeriesChart.
- * Aggregates all series into a single "Cost USD" series (sum across labels).
- */
-function metricSampleTimeMs(sample: { timestamp_ms?: number; timestampMs?: number | string }): number | null {
-  const ts = sample.timestamp_ms ?? (typeof sample.timestampMs === 'string' ? parseInt(sample.timestampMs, 10) : sample.timestampMs)
-  return Number.isFinite(ts) ? (ts as number) : null
-}
-
-function metricSampleValue(sample: { value: string | number }): number {
-  if (typeof sample.value === 'number') return sample.value
-  return parseFloat(sample.value) || 0
-}
-
-export function transformTempoCostSeries(
-  result: TempoMetricResult | null,
-): Array<{ label: string; points: Array<{ time: number; value: number }> }> {
-  if (!result?.series?.length) return []
-
-  // Merge all series into a single time-bucketed map (sum across any label dimensions)
-  const buckets = new Map<number, number>()
-  for (const s of result.series) {
-    for (const sample of s.samples) {
-      const ts = metricSampleTimeMs(sample)
-      const v = metricSampleValue(sample)
-      if (ts === null || v <= 0) continue
-      buckets.set(ts, (buckets.get(ts) ?? 0) + v)
-    }
-  }
-
-  if (!buckets.size) return []
-
-  const points = Array.from(buckets.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([time, value]) => ({ time, value }))
-
-  return [{ label: 'Cost USD', points }]
-}
-
-/**
- * Compute total cost across the selected time range from Tempo metrics buckets.
- * Returns null when metrics are unavailable.
- */
-export function extractTotalTempoCost(result: TempoMetricResult | null): number | null {
-  if (!result?.series) return null
-
-  let total = 0
-  for (const s of result.series) {
-    for (const sample of s.samples ?? []) {
-      const v = metricSampleValue(sample)
-      if (v <= 0) continue
-      total += v
-    }
-  }
-
-  return total
-}
 
 // ─── Agent Attribution queries ────────────────────────────────────────────────
 
 /** TraceQL search selecting sub-agent attribution attributes. */
 export function tempoAgentAttributionQuery(): string {
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.activity.type = "llm_call" }` +
     ` | select(span.prov.agent.type, span.prov.parent.session.id, span.prov.session.turn,` +
     ` span.session.id, span.cost.usd, span.prov.agent.id)`
   )
@@ -431,7 +379,7 @@ export function tempoAgentAttributionQuery(): string {
 /** TraceQL search for session graph: fetches all spans with session identity attributes. */
 export function tempoSessionGraphQuery(): string {
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && name != "llm.unknown" }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.activity.type = "llm_call" }` +
     ` | select(span.prov.session.id, span.session.id, span.prov.parent.session.id, span.prov.task.label,` +
     ` span.prov.agent.id, span.prov.agent.type, span.cost.usd, span.prov.llm.model,` +
     ` span.prov.llm.prompt_tokens, span.prov.llm.completion_tokens, span.prov.project)`
@@ -441,7 +389,7 @@ export function tempoSessionGraphQuery(): string {
 /** TraceQL search for sub-agent spans only. */
 export function tempoSubagentSearchQuery(): string {
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.agent.type = "subagent" }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.agent.type = "subagent" && span.prov.activity.type = "llm_call" }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.prov.parent.session.id, span.session.id,` +
     ` span.prov.agent.id, span.prov.agent.type)`
@@ -570,41 +518,89 @@ export function transformSubagentTraces(traces: TempoSpan[]): SubagentTraceRow[]
   })
 }
 
-// ─── Trace-derived aggregations ──────────────────────────────────────────────
+// ─── Mux Routing queries & types ─────────────────────────────────────────────
 
-/** Aggregate total cost per agent from trace rows. */
-export function buildCostByAgent(
-  traces: TraceRow[]
+export const MUX_SERVICE = 'mux-router'
+
+export function tempoMuxRoutingQuery(): string {
+  return (
+    `{ resource.service.name = "${MUX_SERVICE}" && name = "agent.mux" }` +
+    ` | select(span.prov.llm.prompt_preview, span.prov.route.requested_model,` +
+    ` span.prov.route.resolved_model, span.prov.route.reason,` +
+    ` span.prov.route.runtime, span.prov.route.message_count,` +
+    ` span.prov.llm.prompt_tokens, span.prov.llm.completion_tokens)`
+  )
+}
+
+export interface MuxRoutingRow {
+  traceId: string
+  time: number
+  latencyMs: number
+  promptPreview: string
+  requestedModel: string
+  resolvedModel: string
+  reason: string
+  runtime: string
+  messageCount: number
+  tokensIn: number
+  tokensOut: number
+  redirected: boolean
+}
+
+export function transformMuxRoutingTraces(traces: TempoSpan[]): MuxRoutingRow[] {
+  return traces.map((t) => {
+    const spans = t.spanSets?.[0]?.spans ?? t.spanSet?.spans ?? []
+    const span = spans[0]
+    const attrs = span?.attributes ?? []
+    const requested = getSpanAttr(attrs, 'prov.route.requested_model') || 'unknown'
+    const resolved = getSpanAttr(attrs, 'prov.route.resolved_model') || 'unknown'
+    return {
+      traceId: t.traceID,
+      time: parseInt(t.startTimeUnixNano) / 1e6,
+      latencyMs: span ? span.durationNanos / 1e6 : t.durationMs,
+      promptPreview: getSpanAttr(attrs, 'prov.llm.prompt_preview'),
+      requestedModel: requested,
+      resolvedModel: resolved,
+      reason: getSpanAttr(attrs, 'prov.route.reason'),
+      runtime: getSpanAttr(attrs, 'prov.route.runtime') || 'unknown',
+      messageCount: parseInt(getSpanAttr(attrs, 'prov.route.message_count') || '0') || 0,
+      tokensIn: parseInt(getSpanAttr(attrs, 'prov.llm.prompt_tokens') || '0') || 0,
+      tokensOut: parseInt(getSpanAttr(attrs, 'prov.llm.completion_tokens') || '0') || 0,
+      redirected: requested !== resolved,
+    }
+  }).sort((a, b) => b.time - a.time)
+}
+
+export function buildRoutingReasonBreakdown(
+  rows: MuxRoutingRow[]
 ): Array<{ label: string; value: number }> {
   const map = new Map<string, number>()
-  for (const t of traces) {
-    if (t.costUsd <= 0) continue
-    const key = t.agentId || 'unknown'
-    map.set(key, (map.get(key) ?? 0) + t.costUsd)
+  for (const r of rows) {
+    if (!r.reason) continue
+    map.set(r.reason, (map.get(r.reason) ?? 0) + 1)
   }
   return Array.from(map.entries())
     .map(([label, value]) => ({ label, value }))
     .sort((a, b) => b.value - a.value)
 }
 
-/** Bucket trace costs into a time series for the cost-over-time chart. */
-export function buildCostTimeSeries(
-  traces: TraceRow[],
-  timeRange: TimeRange
-): Array<{ label: string; points: Array<{ time: number; value: number }> }> {
-  if (!traces.length) return []
-  const stepMs = getStepForRange(timeRange) * 1000
-  const buckets = new Map<number, number>()
-  for (const t of traces) {
-    if (t.costUsd <= 0) continue
-    const bucket = Math.floor(t.time / stepMs) * stepMs
-    buckets.set(bucket, (buckets.get(bucket) ?? 0) + t.costUsd)
+export function buildModelRedirectBreakdown(
+  rows: MuxRoutingRow[]
+): Array<{ label: string; value: number }> {
+  const map = new Map<string, number>()
+  for (const r of rows) {
+    const label = r.redirected
+      ? `${r.requestedModel} → ${r.resolvedModel}`
+      : `${r.requestedModel} (kept)`
+    map.set(label, (map.get(label) ?? 0) + 1)
   }
-  const points = Array.from(buckets.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([time, value]) => ({ time, value }))
-  return points.length ? [{ label: 'Cost USD', points }] : []
+  return Array.from(map.entries())
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value)
 }
+
+// ─── Trace-derived aggregations ──────────────────────────────────────────────
+
 
 // ─── Session Graph types & transformers ──────────────────────────────────────
 
