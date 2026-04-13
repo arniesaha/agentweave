@@ -21,6 +21,9 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: '6h', label: '6h' },
   { value: '24h', label: '24h' },
   { value: '7d', label: '7d' },
+  { value: '30d', label: '30d' },
+  { value: '60d', label: '60d' },
+  { value: '90d', label: '90d' },
 ]
 
 export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, tempoError, projects, selectedProject, onProjectChange }: HeaderProps) {
@@ -50,9 +53,9 @@ export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, t
           </div>
 
           {/* Right controls */}
-          <div className="flex items-center gap-3 overflow-x-auto">
+          <div className="flex items-center justify-end gap-2 sm:gap-3 flex-wrap">
             {lastUpdated && (
-              <span className="text-ink-faint text-xs hidden sm:flex items-center gap-1.5">
+              <span className="text-ink-faint text-xs hidden lg:flex items-center gap-1.5">
                 <span className="w-1 h-1 rounded-full bg-signal-lime animate-pulse-subtle" />
                 {formatDistanceToNow(lastUpdated, { addSuffix: true })}
               </span>
@@ -60,11 +63,11 @@ export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, t
 
             {/* Project filter */}
             {projects && projects.length > 0 && (
-              <div className="relative">
+              <div className="relative flex-shrink-0">
                 <select
                   value={selectedProject ?? ''}
                   onChange={(e) => onProjectChange(e.target.value || null)}
-                  className="pl-2.5 pr-7 py-1.5 text-xs bg-surface border border-edge rounded-lg text-ink-muted hover:border-edge-hover focus:border-accent/40 focus:outline-none transition-colors appearance-none cursor-pointer"
+                  className="min-w-[120px] pl-2.5 pr-7 py-1.5 text-xs bg-surface border border-edge rounded-lg text-ink-muted hover:border-edge-hover focus:border-accent/40 focus:outline-none transition-colors appearance-none cursor-pointer"
                 >
                   <option value="">All projects</option>
                   {projects.map((p) => (
@@ -75,8 +78,23 @@ export function Header({ timeRange, onTimeRangeChange, onRefresh, lastUpdated, t
               </div>
             )}
 
-            {/* Time range selector */}
-            <div className="flex items-center bg-surface border border-edge rounded-lg overflow-hidden">
+            {/* Time range selector (mobile) */}
+            <div className="relative md:hidden flex-shrink-0">
+              <select
+                value={timeRange}
+                onChange={(e) => onTimeRangeChange(e.target.value as TimeRange)}
+                className="min-w-[84px] pl-2.5 pr-7 py-1.5 text-xs bg-surface border border-edge rounded-lg text-ink-muted hover:border-edge-hover focus:border-accent/40 focus:outline-none transition-colors appearance-none cursor-pointer"
+                aria-label="Select time range"
+              >
+                {TIME_RANGES.map((r) => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-ink-faint pointer-events-none" />
+            </div>
+
+            {/* Time range selector (desktop/tablet) */}
+            <div className="hidden md:flex items-center bg-surface border border-edge rounded-lg overflow-hidden flex-shrink-0">
               {TIME_RANGES.map((r) => (
                 <button
                   key={r.value}
