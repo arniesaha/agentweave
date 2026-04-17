@@ -73,6 +73,12 @@ export function promCallsByAgentQuery(range: TimeRange): string {
   return `sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service="${TEMPO_SERVICE}"}[${seconds}s]))`
 }
 
+// Cost aggregation via Prometheus spanmetrics (future — use when span cost metric is available)
+export function promCostTotalQuery(range: TimeRange): string {
+  const seconds = getTimeRangeSeconds(range)
+  return `sum(increase(agentweave_cost_usd_total{service="${TEMPO_SERVICE}"}[${seconds}s]))`
+}
+
 // ─── Client-side cost aggregation (from Tempo trace data) ────────────────────
 
 export function buildCostTotal(traces: TraceRow[]): number {
