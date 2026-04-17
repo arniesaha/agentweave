@@ -70,6 +70,13 @@ _DEFAULT_PRICING: dict[str, _PriceEntry] = {
     "gpt-5.3":                    (2.50, 10.00),
     "gpt-5.3-codex":              (2.50, 10.00),
     "gpt-5.4":                    (2.50, 10.00),
+
+    # ── MiniMax (input, output, cache_read, cache_write) ─────────────────────
+    # Official pay-as-you-go prices: https://platform.minimax.io/docs/guides/pricing-paygo
+    # Model names match the `prov.llm.model` attribute emitted by the
+    # OpenClaw/nix-v1 bridge, which uses MiniMax's OpenAI-compatible endpoint.
+    "minimax-m2.7-highspeed":     (0.60, 2.40, 0.06, 0.375),
+    "minimax-m2.5-highspeed":     (0.60, 2.40, 0.03, 0.375),
 }
 
 # Sentinel value returned when model is not in the pricing table.
