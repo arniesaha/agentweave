@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from collections import OrderedDict
 
 import pytest
 
@@ -1046,7 +1047,7 @@ class TestForcedSessionContextRace:
         """POST /session with force+session_key stores in _forced_session_contexts, not global flag."""
         from fastapi.testclient import TestClient
         from agentweave.proxy import app
-        monkeypatch.setattr(proxy_module, "_forced_session_contexts", {})
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
         monkeypatch.setattr(proxy_module, "_session_context_force", False)
 
         client = TestClient(app)
@@ -1073,7 +1074,7 @@ class TestForcedSessionContextRace:
         """POST /session with force:false + session_key removes the key from the map."""
         from fastapi.testclient import TestClient
         from agentweave.proxy import app
-        monkeypatch.setattr(proxy_module, "_forced_session_contexts", {"key-abc": {"prov.session.id": "s"}})
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict({"key-abc": {"prov.session.id": "s"}}))
 
         client = TestClient(app)
         resp = client.post("/session", json={
@@ -1093,9 +1094,9 @@ class TestForcedSessionContextRace:
         from agentweave.config import AgentWeaveConfig
 
         # Seed a forced context for key "key-subagent"
-        monkeypatch.setattr(proxy_module, "_forced_session_contexts", {
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict({
             "key-subagent": {"prov.session.id": "forced-sess", "prov.agent.id": "forced-agent"},
-        })
+        }))
         monkeypatch.setattr(proxy_module, "_session_context_force", False)
         monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
@@ -1151,9 +1152,9 @@ class TestForcedSessionContextRace:
         from agentweave.proxy import app
         from agentweave.config import AgentWeaveConfig
 
-        monkeypatch.setattr(proxy_module, "_forced_session_contexts", {
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict({
             "key-subagent": {"prov.session.id": "forced-sess", "prov.agent.id": "forced-agent"},
-        })
+        }))
         monkeypatch.setattr(proxy_module, "_session_context_force", False)
         monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
@@ -1214,7 +1215,7 @@ class TestForcedSessionContextRace:
         """Backward compat: POST /session with force:true and no session_key sets global flag."""
         from fastapi.testclient import TestClient
         from agentweave.proxy import app
-        monkeypatch.setattr(proxy_module, "_forced_session_contexts", {})
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
         monkeypatch.setattr(proxy_module, "_session_context_force", False)
 
         client = TestClient(app)
@@ -1226,7 +1227,29 @@ class TestForcedSessionContextRace:
         assert resp.status_code == 200
         # Legacy path: global flag should be set
         assert proxy_module._session_context_force is True
-        assert proxy_module._forced_session_contexts == {}
+        assert len(proxy_module._forced_session_contexts) == 0
+
+    def test_forced_contexts_map_is_lru_bounded(self, monkeypatch):
+        """Orphaned entries (bridge plugin crashes mid sub-agent) must not leak.
+
+        _set_forced_context evicts the oldest entry once the map exceeds
+        _MAX_FORCED_CONTEXTS, so an unbounded stream of unique session_keys
+        cannot grow the map past the cap.
+        """
+        cap = proxy_module._MAX_FORCED_CONTEXTS
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
+
+        # Insert cap+50 distinct keys
+        for i in range(cap + 50):
+            proxy_module._set_forced_context(f"key-{i}", {"prov.session.id": f"s-{i}"})
+
+        assert len(proxy_module._forced_session_contexts) == cap
+        # Earliest 50 evicted
+        assert "key-0" not in proxy_module._forced_session_contexts
+        assert "key-49" not in proxy_module._forced_session_contexts
+        # Most-recent cap entries remain
+        assert f"key-{cap + 49}" in proxy_module._forced_session_contexts
+        assert f"key-50" in proxy_module._forced_session_contexts
 
 
 class TestProjectTracking:

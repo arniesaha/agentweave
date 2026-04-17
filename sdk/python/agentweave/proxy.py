@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections import OrderedDict
 import json
 import logging
 import os
@@ -299,7 +300,17 @@ _session_context_force: bool = False
 # each sub-agent window stores its override under a unique key so concurrent
 # requests from other channels (e.g. Telegram) are not misattributed.
 # Key: session_key string, Value: dict of forced session context attrs
-_forced_session_contexts: dict[str, dict[str, str]] = {}
+# LRU-bounded: orphaned entries (e.g. from bridge plugin crashes mid sub-agent)
+# are evicted when the map exceeds _MAX_FORCED_CONTEXTS, preventing slow leak.
+_MAX_FORCED_CONTEXTS = 256
+_forced_session_contexts: OrderedDict[str, dict[str, str]] = OrderedDict()
+
+
+def _set_forced_context(session_key: str, ctx: dict[str, str]) -> None:
+    _forced_session_contexts[session_key] = ctx
+    _forced_session_contexts.move_to_end(session_key)
+    while len(_forced_session_contexts) > _MAX_FORCED_CONTEXTS:
+        _forced_session_contexts.popitem(last=False)
 
 @app.post("/session", include_in_schema=True)
 async def set_session_context(body: dict):
@@ -334,7 +345,7 @@ async def set_session_context(body: dict):
     if session_key:
         if force:
             # Store per-key forced context — isolates concurrent request streams
-            _forced_session_contexts[session_key] = ctx
+            _set_forced_context(session_key, ctx)
         else:
             # Clear the per-key forced context when force is disabled
             _forced_session_contexts.pop(session_key, None)
