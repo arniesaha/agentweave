@@ -410,6 +410,19 @@ export function createAgentWeaveBridgeService() {
               turn.span.setAttribute("prov.llm.cache_write_tokens", cacheWriteTokens)
               break
             }
+
+            case "tool.loop": {
+              const sessionKey = e.sessionKey ?? ""
+              const turn = activeTurns.get(sessionKey)
+              if (!turn) break
+              turn.span.addEvent("tool.loop.detected", {
+                "tool.name": e.toolName ?? "",
+                "tool.loop.count": e.count ?? 0,
+                "tool.loop.level": e.level ?? "",
+                "tool.loop.detector": e.detector ?? "",
+              })
+              break
+            }
           }
         } catch (err) {
           console.warn("[agentweave-bridge] event handler error:", err)

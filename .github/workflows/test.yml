@@ -67,3 +67,23 @@ jobs:
       - name: Run tests
         working-directory: sdk/js
         run: npx jest --verbose
+
+  plugin-openclaw-bridge:
+    name: Plugin — openclaw-agentweave-bridge
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: plugins/openclaw-agentweave-bridge
+        run: npm install
+
+      - name: Run tests
+        working-directory: plugins/openclaw-agentweave-bridge
+        run: npm test
