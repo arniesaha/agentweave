@@ -1,12 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  TimeRange, getTimeRangeBounds, getStepForRange, TempoSpan, TempoMetricResult,
+  TimeRange, getTimeRangeBounds, TempoSpan,
   SessionNode, SessionEdge, buildSessionGraph, tempoSessionGraphQuery,
   ReplayTurn, buildReplayTurns, tempoSessionReplayQuery,
 } from '../lib/queries'
 
 const TEMPO_BASE = '/tempo'
-const TEMPO_METRICS_MAX_WINDOW_SECONDS = 3 * 60 * 60
+
+/**
+ * Max traces returned by `useTempoSearch`. When `traces.length >= TEMPO_SEARCH_LIMIT`,
+ * client-side aggregations (e.g. total cost) are sampling Tempo's most-recent traces
+ * and may under-count. UI should surface this to the user.
+ */
+export const TEMPO_SEARCH_LIMIT = 1000
 
 interface UseTempoSearchResult {
   traces: TempoSpan[]
@@ -26,7 +32,7 @@ export function useTempoSearch(query: string, timeRange: TimeRange, refreshKey: 
       const { start, end } = getTimeRangeBounds(timeRange)
       const params = new URLSearchParams({
         q: query,
-        limit: '1000',
+        limit: String(TEMPO_SEARCH_LIMIT),
         start: String(start),
         end: String(end),
       })
@@ -84,70 +90,6 @@ export function useTempoSearchCount(query: string, timeRange: TimeRange, refresh
   useEffect(() => { fetch_() }, [fetch_])
 
   return { count, loading, error }
-}
-
-interface UseTempoMetricsResult {
-  result: TempoMetricResult | null
-  loading: boolean
-  error: string | null
-}
-
-export function useTempoMetrics(
-  query: string,
-  timeRange: TimeRange,
-  refreshKey: number
-): UseTempoMetricsResult {
-  const [result, setResult] = useState<TempoMetricResult | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const fetch_ = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const { start, end } = getTimeRangeBounds(timeRange)
-      const step = getStepForRange(timeRange)
-
-      const mergedSeries: Array<{
-        labels?: Record<string, string> | Array<{ key: string; value: { stringValue?: string } }>
-        samples: Array<{ timestamp_ms?: number; timestampMs?: number | string; value: string | number }>
-      }> = []
-
-      for (
-        let chunkStart = start;
-        chunkStart <= end;
-        chunkStart += TEMPO_METRICS_MAX_WINDOW_SECONDS + step
-      ) {
-        const chunkEnd = Math.min(chunkStart + TEMPO_METRICS_MAX_WINDOW_SECONDS, end)
-        const params = new URLSearchParams({
-          q: query,
-          start: String(chunkStart),
-          end: String(chunkEnd),
-          step: `${step}s`,
-        })
-        const resp = await fetch(`${TEMPO_BASE}/api/metrics/query_range?${params}`)
-        if (!resp.ok) {
-          const details = await resp.text().catch(() => '')
-          throw new Error(`Tempo metrics failed: ${resp.status}${details ? ` — ${details}` : ''}`)
-        }
-        const data = await resp.json()
-        if (Array.isArray(data?.series)) {
-          mergedSeries.push(...data.series)
-        }
-      }
-
-      setResult({ series: mergedSeries })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Tempo unavailable')
-      setResult(null)
-    } finally {
-      setLoading(false)
-    }
-  }, [query, timeRange, refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => { fetch_() }, [fetch_])
-
-  return { result, loading, error }
 }
 
 // ─── Session Graph Hook ──────────────────────────────────────────────────────

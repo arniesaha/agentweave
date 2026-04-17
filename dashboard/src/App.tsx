@@ -32,7 +32,7 @@ import {
   extractProjects,
   computeAgentHealthScores,
 } from './lib/queries'
-import { useTempoSearch, useSessionGraph } from './hooks/useTempo'
+import { useTempoSearch, useSessionGraph, TEMPO_SEARCH_LIMIT } from './hooks/useTempo'
 import { usePromQueryRange, usePromQueryInstant } from './hooks/usePrometheus'
 
 type ActiveTab = 'overview' | 'sessions' | 'replay' | 'routing'
@@ -267,6 +267,11 @@ export default function App() {
             value={!tracesLoading ? `$${costValue.toFixed(4)}` : null}
             loading={tracesLoading}
             error={tracesError}
+            caption={
+              !tracesLoading && traceRows.length >= TEMPO_SEARCH_LIMIT
+                ? `sampled — showing ${traceRows.length.toLocaleString()} most-recent traces`
+                : null
+            }
           />
           <StatCard
             icon={Zap}

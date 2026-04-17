@@ -11,6 +11,8 @@ interface StatCardProps {
   error?: string | null
   delta?: string | null
   deltaPositive?: boolean
+  /** Optional small muted caption shown under the value (e.g. sampling indicator). */
+  caption?: string | null
 }
 
 function SkeletonBar({ width = 'w-24' }: { width?: string }) {
@@ -27,6 +29,7 @@ export function StatCard({
   error,
   delta,
   deltaPositive,
+  caption,
 }: StatCardProps) {
   return (
     <div className="card glow-hover p-5 flex flex-col gap-4 group">
@@ -49,6 +52,9 @@ export function StatCard({
           <div className="text-2xl font-semibold text-ink-faint mono">--</div>
         ) : (
           <div className="text-2xl font-semibold text-ink mono tracking-tight">{value ?? '--'}</div>
+        )}
+        {caption && !loading && !error && (
+          <div className="text-[10px] text-ink-faint mt-1.5 leading-tight">{caption}</div>
         )}
       </div>
 
