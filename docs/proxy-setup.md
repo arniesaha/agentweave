@@ -181,3 +181,56 @@ The proxy emits standard OTLP HTTP — works with any compatible backend:
 | Jaeger | `http://jaeger-host:4318` |
 | Langfuse v3 | `https://cloud.langfuse.com/api/public/otel` |
 | Any OTel Collector | Collector's OTLP HTTP receiver |
+
+## Key Injection for External Clients
+
+The proxy supports two authentication models:
+
+### Pass-through (Claude Code / OpenClaw)
+
+Clients that already hold a valid API key or OAuth token send it directly. The proxy forwards it unchanged.
+
+```bash
+# Claude Code — key comes from ~/.claude/settings.json or ANTHROPIC_API_KEY
+curl http://192.168.1.70:30400/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4-6","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
+```
+
+### Key Injection (external scripts, GPU PC, examples)
+
+External clients that don't hold their own API key can send a dummy key (`dummy` or any placeholder). The proxy detects this and injects the real key from the k8s secret.
+
+```bash
+# External script — no real key needed locally
+curl http://192.168.1.70:30400/v1/messages \
+  -H "x-api-key: dummy" \
+  -H "X-AgentWeave-Agent-Id: gpu-pc-v1" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4-6","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
+```
+
+**Setup — populate the k8s secret with a real API key:**
+
+```bash
+kubectl create secret generic agentweave-proxy \
+  --from-literal=proxy-token="" \
+  --from-literal=anthropic-api-key="sk-ant-api03_YOUR_KEY" \
+  --from-literal=openai-api-key="" \
+  --from-literal=google-api-key="" \
+  -n agentweave --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl rollout restart deployment/agentweave-proxy -n agentweave
+```
+
+> **Never use OAuth tokens (`sk-ant-oat*`) for injection** — they expire and require SDK-level TLS fingerprinting. Use standard API keys (`sk-ant-api03_*`) only.
+
+**Verify key injection is active:**
+
+```bash
+curl http://192.168.1.70:30400/health
+# Should include: "key_injection": {"anthropic": true}
+```
+
+Run `deploy/validate-secrets.sh` at any time to check which secret fields are populated without exposing their values.

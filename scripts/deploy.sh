@@ -49,6 +49,13 @@ kubectl apply -f "${REPO_ROOT}/deploy/k8s/configmap.yaml"
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/service.yaml"
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/deployment.yaml"
 
+# Validate the agentweave-proxy secret. Warnings are non-fatal (empty fields
+# only disable injection for that provider); OAuth tokens cause a hard fail
+# because they expire and silently break injection after ~24h.
+ts "Validating secret fields"
+AGENTWEAVE_NAMESPACE="${NAMESPACE}" bash "${REPO_ROOT}/deploy/validate-secrets.sh" \
+  || fail "Secret validation failed — refusing to continue deploy"
+
 # Restart deployment to pick up :latest image
 kubectl rollout restart deployment/agentweave-proxy -n "${NAMESPACE}"
 ts "Manifests applied, rollout restarting"
