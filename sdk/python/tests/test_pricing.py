@@ -144,6 +144,55 @@ class TestComputeCost:
         assert abs(base - 12.50) < 1e-9
         assert abs(codex - base) < 1e-9
 
+    def test_minimax_m27_highspeed_pricing(self):
+        """MiniMax-M2.7-highspeed: $0.60 input / $2.40 output per 1M tokens."""
+        from agentweave.pricing import compute_cost
+        # Model name as emitted by the nix-v1 bridge — partial-match path.
+        cost = compute_cost("MiniMax-M2.7-highspeed", input_tokens=1_000_000, output_tokens=1_000_000)
+        assert abs(cost - 3.00) < 1e-9
+
+    def test_minimax_m25_highspeed_pricing(self):
+        """MiniMax-M2.5-highspeed: $0.60 input / $2.40 output per 1M tokens."""
+        from agentweave.pricing import compute_cost
+        cost = compute_cost("MiniMax-M2.5-highspeed", input_tokens=1_000_000, output_tokens=1_000_000)
+        assert abs(cost - 3.00) < 1e-9
+
+    def test_minimax_m27_cache_pricing(self):
+        """Cache read ($0.06/M) and cache write ($0.375/M) for M2.7-highspeed."""
+        from agentweave.pricing import compute_cost
+        # 1M cache_read only
+        cost_read = compute_cost(
+            "MiniMax-M2.7-highspeed",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            cache_read_tokens=1_000_000,
+        )
+        assert abs(cost_read - 0.06) < 1e-9
+        # 1M cache_write only
+        cost_write = compute_cost(
+            "MiniMax-M2.7-highspeed",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            cache_write_tokens=1_000_000,
+        )
+        assert abs(cost_write - 0.375) < 1e-9
+
+    def test_minimax_m25_vs_m27_cache_read_differs(self):
+        """M2.7 cache read ($0.06/M) is 2x M2.5 ($0.03/M) per official docs."""
+        from agentweave.pricing import compute_cost
+        c_m25 = compute_cost(
+            "MiniMax-M2.5-highspeed",
+            input_tokens=1_000_000, output_tokens=0,
+            cache_read_tokens=1_000_000,
+        )
+        c_m27 = compute_cost(
+            "MiniMax-M2.7-highspeed",
+            input_tokens=1_000_000, output_tokens=0,
+            cache_read_tokens=1_000_000,
+        )
+        assert abs(c_m25 - 0.03) < 1e-9
+        assert abs(c_m27 - 0.06) < 1e-9
+
 
 class TestPricingEnvOverride:
     """Test AGENTWEAVE_PRICING_OVERRIDE env variable."""
