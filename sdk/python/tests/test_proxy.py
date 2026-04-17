@@ -1039,6 +1039,196 @@ class TestSessionEndpoint:
         assert "prov.task.label" not in span.attrs
 
 
+class TestForcedSessionContextRace:
+    """Per-key forced session context must not bleed across concurrent channels (issue #149)."""
+
+    def test_session_key_stores_in_forced_map(self, monkeypatch):
+        """POST /session with force+session_key stores in _forced_session_contexts, not global flag."""
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", {})
+        monkeypatch.setattr(proxy_module, "_session_context_force", False)
+
+        client = TestClient(app)
+        resp = client.post("/session", json={
+            "session_id": "subagent-sess-001",
+            "parent_session_id": "parent-001",
+            "force": True,
+            "session_key": "key-abc",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["force"] is True
+        assert data["session_key"] == "key-abc"
+        # Per-key map must be populated
+        assert proxy_module._forced_session_contexts.get("key-abc") == {
+            "prov.session.id": "subagent-sess-001",
+            "prov.parent.session.id": "parent-001",
+        }
+        # Global force flag must NOT be set — that's the whole fix
+        assert proxy_module._session_context_force is False
+
+    def test_session_key_clear_removes_from_map(self, monkeypatch):
+        """POST /session with force:false + session_key removes the key from the map."""
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", {"key-abc": {"prov.session.id": "s"}})
+
+        client = TestClient(app)
+        resp = client.post("/session", json={
+            "session_id": "s",
+            "force": False,
+            "session_key": "key-abc",
+        })
+        assert resp.status_code == 200
+        assert "key-abc" not in proxy_module._forced_session_contexts
+
+    def test_unkeyed_request_not_affected_by_forced_key(self, monkeypatch):
+        """A request without X-AgentWeave-Session-Key must NOT use the forced context."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import httpx
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        from agentweave.config import AgentWeaveConfig
+
+        # Seed a forced context for key "key-subagent"
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", {
+            "key-subagent": {"prov.session.id": "forced-sess", "prov.agent.id": "forced-agent"},
+        })
+        monkeypatch.setattr(proxy_module, "_session_context_force", False)
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+
+        captured: list[dict] = []
+        original_set_request_attrs = proxy_module._set_request_attrs
+
+        def _capturing(span, **kwargs):
+            captured.append({
+                "session_id": kwargs.get("session_id"),
+                "agent_id": kwargs.get("agent_id"),
+            })
+            return original_set_request_attrs(span, **kwargs)
+
+        fake_data = {
+            "id": "msg1", "type": "message", "role": "assistant", "content": [],
+            "model": "claude-3-haiku-20240307", "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        fake_resp = MagicMock(spec=httpx.Response)
+        fake_resp.status_code = 200
+        fake_resp.headers = {}
+        fake_resp.json.return_value = fake_data
+
+        client_instance = AsyncMock()
+        client_instance.request = AsyncMock(return_value=fake_resp)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client_instance)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm), \
+             patch.object(proxy_module, "_set_request_attrs", side_effect=_capturing):
+            client = TestClient(app)
+            # No X-AgentWeave-Session-Key header → must NOT use forced context
+            client.post(
+                "/v1/messages",
+                json={"model": "claude-3-haiku-20240307", "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "hi"}]},
+                headers={"x-api-key": "sk-ant-test", "x-agentweave-agent-id": "telegram-agent"},
+            )
+
+        assert len(captured) >= 1
+        # Must use the per-request header, NOT the forced-agent from the forced context
+        assert captured[0]["agent_id"] == "telegram-agent", (
+            f"Unkeyed request picked up forced agent_id: {captured[0]['agent_id']!r}"
+        )
+
+    def test_keyed_request_uses_forced_context(self, monkeypatch):
+        """A request WITH X-AgentWeave-Session-Key uses the matching forced context."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import httpx
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        from agentweave.config import AgentWeaveConfig
+
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", {
+            "key-subagent": {"prov.session.id": "forced-sess", "prov.agent.id": "forced-agent"},
+        })
+        monkeypatch.setattr(proxy_module, "_session_context_force", False)
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+
+        captured: list[dict] = []
+        original_set_request_attrs = proxy_module._set_request_attrs
+
+        def _capturing(span, **kwargs):
+            captured.append({
+                "session_id": kwargs.get("session_id"),
+                "agent_id": kwargs.get("agent_id"),
+            })
+            return original_set_request_attrs(span, **kwargs)
+
+        fake_data = {
+            "id": "msg2", "type": "message", "role": "assistant", "content": [],
+            "model": "claude-3-haiku-20240307", "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        fake_resp = MagicMock(spec=httpx.Response)
+        fake_resp.status_code = 200
+        fake_resp.headers = {}
+        fake_resp.json.return_value = fake_data
+
+        client_instance = AsyncMock()
+        client_instance.request = AsyncMock(return_value=fake_resp)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client_instance)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm), \
+             patch.object(proxy_module, "_set_request_attrs", side_effect=_capturing):
+            client = TestClient(app)
+            # Matching X-AgentWeave-Session-Key → must use the forced context
+            client.post(
+                "/v1/messages",
+                json={"model": "claude-3-haiku-20240307", "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "hi"}]},
+                headers={
+                    "x-api-key": "sk-ant-test",
+                    "x-agentweave-session-key": "key-subagent",
+                },
+            )
+
+        assert len(captured) >= 1
+        assert captured[0]["agent_id"] == "forced-agent", (
+            f"Keyed request should use forced agent_id, got: {captured[0]['agent_id']!r}"
+        )
+        assert captured[0]["session_id"] == "forced-sess", (
+            f"Keyed request should use forced session_id, got: {captured[0]['session_id']!r}"
+        )
+
+    def test_session_key_header_stripped_from_forwarding(self):
+        """x-agentweave-session-key must not be forwarded upstream."""
+        assert "x-agentweave-session-key" in _SKIP_HEADERS_ALWAYS
+
+    def test_legacy_force_without_key_still_works(self, monkeypatch):
+        """Backward compat: POST /session with force:true and no session_key sets global flag."""
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", {})
+        monkeypatch.setattr(proxy_module, "_session_context_force", False)
+
+        client = TestClient(app)
+        resp = client.post("/session", json={
+            "session_id": "legacy-sess",
+            "force": True,
+            # no session_key
+        })
+        assert resp.status_code == 200
+        # Legacy path: global flag should be set
+        assert proxy_module._session_context_force is True
+        assert proxy_module._forced_session_contexts == {}
+
+
 class TestProjectTracking:
     """Verify prov.project is propagated via env var, POST /session, and header (issue #101)."""
 
