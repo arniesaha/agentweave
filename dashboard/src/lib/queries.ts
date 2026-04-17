@@ -43,10 +43,17 @@ export function getStepForRange(range: TimeRange): number {
 export const TEMPO_SERVICE = 'agentweave-proxy'
 
 export function tempoSearchQuery(project?: string): string {
-  // select() fetches span attributes; used for both trace table and stat card aggregation
+  // select() fetches span attributes; used for both trace table and stat card aggregation.
+  //
+  // Activity filter matches both:
+  //   - `llm_call` spans from the Python proxy (direct Anthropic/OpenAI/Google paths)
+  //   - `agent_turn` spans from openclaw-agentweave-bridge (which carry prov.llm.*
+  //     after the bridge's model.usage handler writes them)
+  // Without the agent_turn branch, MiniMax and other bridge-routed calls never
+  // appear in the Total Cost / LLM Calls StatCards.
   const projectFilter = project ? ` && span.prov.project = "${project}"` : ''
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.activity.type = "llm_call"${projectFilter} }` +
+    `{ resource.service.name = "${TEMPO_SERVICE}" && (span.prov.activity.type = "llm_call" || (span.prov.activity.type = "agent_turn" && span.prov.llm.model != "")) ${projectFilter} }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project,` +
     ` span.prov.security.pii_detected, span.prov.security.pii_kinds)`

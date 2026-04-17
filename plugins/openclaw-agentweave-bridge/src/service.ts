@@ -3,6 +3,7 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto"
 import { NodeSDK } from "@opentelemetry/sdk-node"
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import { BatchSpanProcessor, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base"
+import { resolveCost } from "./pricing.js"
 
 interface ActiveTurn {
   span: Span
@@ -382,11 +383,20 @@ export function createAgentWeaveBridgeService() {
 
               const provider = e.provider ?? ""
               const model = e.model ?? ""
-              const costUsd = e.costUsd ?? 0
               const inputTokens = e.usage?.input ?? 0
               const outputTokens = e.usage?.output ?? 0
               const cacheReadTokens = e.usage?.cacheRead ?? 0
               const cacheWriteTokens = e.usage?.cacheWrite ?? 0
+
+              // OpenClaw may not know pricing for every model (e.g. MiniMax) and
+              // reports costUsd=0 in that case. Fall back to a local pricing
+              // table so the span carries a real cost rather than silently 0.
+              const costUsd = resolveCost(e.costUsd ?? 0, model, {
+                inputTokens,
+                outputTokens,
+                cacheReadTokens,
+                cacheWriteTokens,
+              })
 
               // Keep event emission for event-level timelines/debugging.
               turn.span.addEvent("model.usage", {
