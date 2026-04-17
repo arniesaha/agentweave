@@ -7,6 +7,13 @@ import {
 
 const TEMPO_BASE = '/tempo'
 
+/**
+ * Max traces returned by `useTempoSearch`. When `traces.length >= TEMPO_SEARCH_LIMIT`,
+ * client-side aggregations (e.g. total cost) are sampling Tempo's most-recent traces
+ * and may under-count. UI should surface this to the user.
+ */
+export const TEMPO_SEARCH_LIMIT = 1000
+
 interface UseTempoSearchResult {
   traces: TempoSpan[]
   loading: boolean
@@ -25,7 +32,7 @@ export function useTempoSearch(query: string, timeRange: TimeRange, refreshKey: 
       const { start, end } = getTimeRangeBounds(timeRange)
       const params = new URLSearchParams({
         q: query,
-        limit: '1000',
+        limit: String(TEMPO_SEARCH_LIMIT),
         start: String(start),
         end: String(end),
       })
