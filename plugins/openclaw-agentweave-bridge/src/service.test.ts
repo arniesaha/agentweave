@@ -173,6 +173,10 @@ describe("createAgentWeaveBridgeService", () => {
     // Also written as span attributes for querying
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.provider", "anthropic")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "claude-sonnet-4-6")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.prompt_tokens", 1000)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.completion_tokens", 500)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.cache_read_tokens", 200)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.cache_write_tokens", 100)
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("cost.usd", 0.015)
   })
 
