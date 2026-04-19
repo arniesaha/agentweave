@@ -62,10 +62,36 @@ graph LR
 2. **Decorators** (`@trace_agent`, `@trace_llm`, `@trace_tool`) — wrap your functions directly in Python, TypeScript, or Go. Zero infrastructure needed.
 3. **Proxy** — point any agent's base URL at AgentWeave. It auto-detects the provider, forwards upstream, extracts token counts, and emits OTel spans. No code changes.
 
+## Screenshots
+
 <p align="center">
-  <img src="screenshots/aw_composite_v3.jpg" alt="AgentWeave — Overview, Session Explorer with delegation graph, session drilldown, and Grafana trace waterfall" width="100%">
+  <img src="screenshots/agentweave-overview.png" alt="AgentWeave dashboard overview with KPIs, latency, cost, and model/agent breakdowns" width="100%">
   <br>
-  <em>Overview (KPIs, P95 latency, model/agent breakdown) · Session Explorer (delegation tree, cost per session) · Grafana Tempo (TraceQL + span waterfall)</em>
+  <em>Main dashboard overview (KPIs, latency, token/cost trends, and agent/model breakdowns)</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/agentweave-session.png" alt="AgentWeave session explorer view" width="100%">
+  <br>
+  <em>Session explorer view</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/agentweave-routing.png" alt="AgentWeave routing view" width="100%">
+  <br>
+  <em>Routing view</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/agentweave-replay.png" alt="AgentWeave replay and debug view" width="100%">
+  <br>
+  <em>Replay / debug view</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/agentweave-grafana.png" alt="Grafana Tempo trace view for AgentWeave spans" width="100%">
+  <br>
+  <em>Grafana / Tempo trace view</em>
 </p>
 
 ## How AgentWeave fits in the ecosystem
