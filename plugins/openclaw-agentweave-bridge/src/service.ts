@@ -202,7 +202,7 @@ export function createAgentWeaveBridgeService() {
       console.log("[agentweave-bridge] globalThis keys with openclaw:", Object.keys(g).filter(k => k.includes("openclaw")))
 
       unsubscribe = subscribeToDiagnosticEvents((evt: unknown) => {
-        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number }
+        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string }
         console.log("[agentweave-bridge] event:", e.type, "sessionKey:", e.sessionKey, "source:", e.source)
         try {
           switch (e.type) {
@@ -226,6 +226,8 @@ export function createAgentWeaveBridgeService() {
               span.setAttribute("prov.activity.type", "agent_turn")
               if (e.channel) span.setAttribute("channel", e.channel)
               if (config.project) span.setAttribute("prov.project", config.project)
+              const taskLabel = e.taskLabel?.trim()
+              if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
 
               // Link sub-agent to parent session
               if (agentType === "subagent") {
@@ -261,6 +263,33 @@ export function createAgentWeaveBridgeService() {
 
               activeTurns.set(sessionKey, { span, ctx: spanCtx })
               console.log(`[agentweave-bridge] started root span for ${agentType} session:`, sessionId, "agent:", agentId)
+
+              // Push session context into the proxy so its _session_context dict
+              // includes session_id / agent_id / project / task_label for the
+              // upcoming LLM calls. Bridge sets env vars too, but the proxy
+              // snapshots env only at startup — POST /session is the live path.
+              const proxyBaseUrlForSession = normalizeProxyBaseUrl(config.proxyUrl)
+              if (proxyBaseUrlForSession) {
+                const parentSid = agentType === "subagent"
+                  ? (parentSessionKey
+                    ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:")))
+                  : undefined
+                const sessionPayload: Record<string, unknown> = {
+                  session_id: sessionId,
+                  agent_id: agentId,
+                  agent_type: agentType,
+                  force: agentType === "subagent",
+                }
+                if (config.project) sessionPayload.project = config.project
+                if (parentSid) sessionPayload.parent_session_id = parentSid
+                if (taskLabel) sessionPayload.task_label = taskLabel
+                fetch(`${proxyBaseUrlForSession}/session`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(sessionPayload),
+                }).then(() => console.log(`[agentweave-bridge] proxy session set for ${agentType}: ${sessionId}`))
+                  .catch(err => console.warn(`[agentweave-bridge] proxy session set failed:`, err.message))
+              }
               break
             }
 
@@ -285,6 +314,9 @@ export function createAgentWeaveBridgeService() {
               delete process.env.AGENTWEAVE_AGENT_TYPE
               delete process.env.AGENTWEAVE_PARENT_SESSION_ID
               console.log("[agentweave-bridge] ended root span for session:", sessionKey)
+              // Don't POST a clear — /session replaces the whole context dict,
+              // so {task_label: ""} would wipe session_id/agent_id too. The
+              // next message.queued POST will overwrite cleanly.
               break
             }
 

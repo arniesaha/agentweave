@@ -1557,9 +1557,14 @@ def _maybe_set_response_preview(span: Any, text: str) -> None:
             logger.debug("PII scan error in response preview", exc_info=True)
 
     _capture_prompts = os.getenv("AGENTWEAVE_CAPTURE_PROMPTS", "").lower() in ("1", "true", "yes")
+    if not _capture_prompts:
+        return
     preview = scan_text_cap if pii_mode != PIIMode.OFF else text
-    if _capture_prompts and preview:
-        span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, preview[:512])
+    # Always set the attribute when capture is enabled, even if the response
+    # body has no text (tool-use only, empty response). Without this the field
+    # is NULL in Tempo and downstream lineage queries can't distinguish
+    # "no text" from "preview never attempted" (issue #176).
+    span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, preview[:512] if preview else "")
 
 
 # ---------------------------------------------------------------------------
