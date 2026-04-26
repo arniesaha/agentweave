@@ -41,6 +41,15 @@ export function getStepForRange(range: TimeRange): number {
 // ─── Tempo Queries ───────────────────────────────────────────────────────────
 
 export const TEMPO_SERVICE = 'agentweave-proxy'
+// Services whose spans contribute LLM-call data. mux-router emits llm_call
+// spans for providers that bypass the proxy (e.g. MiniMax direct), so it must
+// be matched alongside agentweave-proxy for Overview/session queries to count
+// them.
+export const TEMPO_SERVICES = ['agentweave-proxy', 'mux-router'] as const
+export const TEMPO_SERVICE_FILTER = `(${TEMPO_SERVICES.map(
+  (s) => `resource.service.name = "${s}"`,
+).join(' || ')})`
+export const PROM_SERVICE_REGEX = TEMPO_SERVICES.join('|')
 
 export function tempoSearchQuery(project?: string): string {
   // select() fetches span attributes; used for both trace table and stat card aggregation.
@@ -53,7 +62,7 @@ export function tempoSearchQuery(project?: string): string {
   // appear in the Total Cost / LLM Calls StatCards.
   const projectFilter = project ? ` && span.prov.project = "${project}"` : ''
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && (span.prov.activity.type = "llm_call" || (span.prov.activity.type = "agent_turn" && span.prov.llm.model != "")) ${projectFilter} }` +
+    `{ ${TEMPO_SERVICE_FILTER} && (span.prov.activity.type = "llm_call" || (span.prov.activity.type = "agent_turn" && span.prov.llm.model != "")) ${projectFilter} }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.session.id, span.prov.agent.id, span.prov.project,` +
     ` span.prov.security.pii_detected, span.prov.security.pii_kinds)`
@@ -63,21 +72,21 @@ export function tempoSearchQuery(project?: string): string {
 // ─── Prometheus Queries ───────────────────────────────────────────────────────
 
 export function promLLMCallsRateQuery(): string {
-  return `sum by (prov_llm_model) (rate(traces_spanmetrics_calls_total{service="${TEMPO_SERVICE}"}[5m])) * 300`
+  return `sum by (prov_llm_model) (rate(traces_spanmetrics_calls_total{service=~"${PROM_SERVICE_REGEX}"}[5m])) * 300`
 }
 
 export function promCallsByModelQuery(range: TimeRange): string {
   const seconds = getTimeRangeSeconds(range)
-  return `sum by (prov_llm_model) (increase(traces_spanmetrics_calls_total{service="${TEMPO_SERVICE}"}[${seconds}s]))`
+  return `sum by (prov_llm_model) (increase(traces_spanmetrics_calls_total{service=~"${PROM_SERVICE_REGEX}"}[${seconds}s]))`
 }
 
 export function promP95LatencyByModelQuery(): string {
-  return `histogram_quantile(0.95, sum by (le, prov_llm_model) (rate(traces_spanmetrics_latency_bucket{service="${TEMPO_SERVICE}"}[5m]))) * 1000`
+  return `histogram_quantile(0.95, sum by (le, prov_llm_model) (rate(traces_spanmetrics_latency_bucket{service=~"${PROM_SERVICE_REGEX}"}[5m]))) * 1000`
 }
 
 export function promCallsByAgentQuery(range: TimeRange): string {
   const seconds = getTimeRangeSeconds(range)
-  return `sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service="${TEMPO_SERVICE}"}[${seconds}s]))`
+  return `sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service=~"${PROM_SERVICE_REGEX}"}[${seconds}s]))`
 }
 
 // ─── Client-side cost aggregation (from Tempo trace data) ────────────────────
@@ -274,7 +283,7 @@ export function tempoSessionQuery(sessionId: string): string {
   // openclaw.turn / openclaw.subagent leak model-ish attrs but do not carry
   // reliable token/cost data.
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.activity.type = "llm_call" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}") }` +
+    `{ ${TEMPO_SERVICE_FILTER} && span.prov.activity.type = "llm_call" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}") }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id)`
   )
@@ -284,7 +293,7 @@ export function tempoSessionQuery(sessionId: string): string {
 export function tempoSessionReplayQuery(sessionId: string): string {
   // Match direct session spans AND child/sub-agent spans (via prov.parent.session.id)
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}" || span.prov.parent.session.id = "${sessionId}") }` +
+    `{ ${TEMPO_SERVICE_FILTER} && (span.session.id = "${sessionId}" || span.prov.session.id = "${sessionId}" || span.prov.parent.session.id = "${sessionId}") }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.cache.hit_rate, span.prov.agent.id,` +
     ` span.prov.session.turn, span.prov.activity.type, span.prov.llm.prompt_preview,` +
@@ -377,7 +386,7 @@ export function buildReplayTurns(traces: TempoSpan[], searchedSessionId?: string
 /** TraceQL search selecting sub-agent attribution attributes. */
 export function tempoAgentAttributionQuery(): string {
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.activity.type = "llm_call" }` +
+    `{ ${TEMPO_SERVICE_FILTER} && span.prov.activity.type = "llm_call" }` +
     ` | select(span.prov.agent.type, span.prov.parent.session.id, span.prov.session.turn,` +
     ` span.session.id, span.cost.usd, span.prov.agent.id)`
   )
@@ -386,7 +395,7 @@ export function tempoAgentAttributionQuery(): string {
 /** TraceQL search for session graph: fetches all spans with session identity attributes. */
 export function tempoSessionGraphQuery(): string {
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.activity.type = "llm_call" }` +
+    `{ ${TEMPO_SERVICE_FILTER} && span.prov.activity.type = "llm_call" }` +
     ` | select(span.prov.session.id, span.session.id, span.prov.parent.session.id, span.prov.task.label,` +
     ` span.prov.agent.id, span.prov.agent.type, span.cost.usd, span.prov.llm.model,` +
     ` span.prov.llm.prompt_tokens, span.prov.llm.completion_tokens, span.prov.project)`
@@ -396,7 +405,7 @@ export function tempoSessionGraphQuery(): string {
 /** TraceQL search for sub-agent spans only. */
 export function tempoSubagentSearchQuery(): string {
   return (
-    `{ resource.service.name = "${TEMPO_SERVICE}" && span.prov.agent.type = "subagent" && span.prov.activity.type = "llm_call" }` +
+    `{ ${TEMPO_SERVICE_FILTER} && span.prov.agent.type = "subagent" && span.prov.activity.type = "llm_call" }` +
     ` | select(span.prov.llm.model, span.cost.usd, span.prov.llm.prompt_tokens,` +
     ` span.prov.llm.completion_tokens, span.prov.parent.session.id, span.session.id,` +
     ` span.prov.agent.id, span.prov.agent.type)`

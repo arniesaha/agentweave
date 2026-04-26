@@ -14,20 +14,27 @@ const TEMPO_BASE = '/tempo'
  */
 export const TEMPO_SEARCH_LIMIT = 1000
 
+// Stale-while-revalidate contract for all hooks in this file:
+//   loading    — true only during the initial fetch (no data yet).
+//   refetching — true while a background refetch is in flight.
+//   On error, last-good data is preserved; only `error` is updated.
+// See #175 for the rationale.
+
 interface UseTempoSearchResult {
   traces: TempoSpan[]
   loading: boolean
+  refetching: boolean
   error: string | null
 }
 
 export function useTempoSearch(query: string, timeRange: TimeRange, refreshKey: number): UseTempoSearchResult {
   const [traces, setTraces] = useState<TempoSpan[]>([])
   const [loading, setLoading] = useState(true)
+  const [refetching, setRefetching] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetch_ = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setRefetching(true)
     try {
       const { start, end } = getTimeRangeBounds(timeRange)
       const params = new URLSearchParams({
@@ -40,33 +47,35 @@ export function useTempoSearch(query: string, timeRange: TimeRange, refreshKey: 
       if (!resp.ok) throw new Error(`Tempo search failed: ${resp.status}`)
       const data = await resp.json()
       setTraces(data.traces ?? [])
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Tempo unavailable')
-      setTraces([])
     } finally {
       setLoading(false)
+      setRefetching(false)
     }
   }, [query, timeRange, refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetch_() }, [fetch_])
 
-  return { traces, loading, error }
+  return { traces, loading, refetching, error }
 }
 
 interface UseTempoSearchCountResult {
   count: number | null
   loading: boolean
+  refetching: boolean
   error: string | null
 }
 
 export function useTempoSearchCount(query: string, timeRange: TimeRange, refreshKey: number): UseTempoSearchCountResult {
   const [count, setCount] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refetching, setRefetching] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetch_ = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setRefetching(true)
     try {
       const { start, end } = getTimeRangeBounds(timeRange)
       const params = new URLSearchParams({
@@ -79,17 +88,18 @@ export function useTempoSearchCount(query: string, timeRange: TimeRange, refresh
       if (!resp.ok) throw new Error(`Tempo search count failed: ${resp.status}`)
       const data = await resp.json()
       setCount((data.traces ?? []).length)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Tempo unavailable')
-      setCount(null)
     } finally {
       setLoading(false)
+      setRefetching(false)
     }
   }, [query, timeRange, refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetch_() }, [fetch_])
 
-  return { count, loading, error }
+  return { count, loading, refetching, error }
 }
 
 // ─── Session Graph Hook ──────────────────────────────────────────────────────
@@ -99,6 +109,7 @@ interface UseSessionGraphResult {
   edges: SessionEdge[]
   rawTraces: TempoSpan[]
   loading: boolean
+  refetching: boolean
   error: string | null
 }
 
@@ -110,11 +121,11 @@ export function useSessionGraph(
   const [edges, setEdges] = useState<SessionEdge[]>([])
   const [rawTraces, setRawTraces] = useState<TempoSpan[]>([])
   const [loading, setLoading] = useState(true)
+  const [refetching, setRefetching] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetch_ = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setRefetching(true)
     try {
       const { start, end } = getTimeRangeBounds(timeRange)
       const params = new URLSearchParams({
@@ -131,19 +142,18 @@ export function useSessionGraph(
       const { nodes: n, edges: e } = buildSessionGraph(traces)
       setNodes(n)
       setEdges(e)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Tempo unavailable')
-      setNodes([])
-      setEdges([])
-      setRawTraces([])
     } finally {
       setLoading(false)
+      setRefetching(false)
     }
   }, [timeRange, refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetch_() }, [fetch_])
 
-  return { nodes, edges, rawTraces, loading, error }
+  return { nodes, edges, rawTraces, loading, refetching, error }
 }
 
 // ─── Session Replay Hook ──────────────────────────────────────────────────────
@@ -152,6 +162,7 @@ interface UseSessionReplayResult {
   turns: ReplayTurn[]
   rawTraces: TempoSpan[]
   loading: boolean
+  refetching: boolean
   error: string | null
 }
 
@@ -159,6 +170,7 @@ export function useSessionReplay(sessionId: string, timeRange: TimeRange, refres
   const [turns, setTurns] = useState<ReplayTurn[]>([])
   const [rawTraces, setRawTraces] = useState<TempoSpan[]>([])
   const [loading, setLoading] = useState(false)
+  const [refetching, setRefetching] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetch_ = useCallback(async () => {
@@ -166,10 +178,10 @@ export function useSessionReplay(sessionId: string, timeRange: TimeRange, refres
       setTurns([])
       setRawTraces([])
       setLoading(false)
+      setRefetching(false)
       return
     }
-    setLoading(true)
-    setError(null)
+    setRefetching(true)
     try {
       const { start, end } = getTimeRangeBounds(timeRange)
       const query = tempoSessionReplayQuery(sessionId)
@@ -185,16 +197,16 @@ export function useSessionReplay(sessionId: string, timeRange: TimeRange, refres
       const traces: TempoSpan[] = data.traces ?? []
       setRawTraces(traces)
       setTurns(buildReplayTurns(traces, sessionId))
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Tempo unavailable')
-      setTurns([])
-      setRawTraces([])
     } finally {
       setLoading(false)
+      setRefetching(false)
     }
   }, [sessionId, timeRange, refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetch_() }, [fetch_])
 
-  return { turns, rawTraces, loading, error }
+  return { turns, rawTraces, loading, refetching, error }
 }

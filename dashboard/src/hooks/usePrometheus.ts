@@ -10,9 +10,12 @@ import {
 
 const PROM_BASE = '/prometheus/api/v1'
 
+// Stale-while-revalidate: see useTempo.ts for the shared contract. #175.
+
 interface UsePromQueryRangeResult {
   series: Array<{ label: string; points: Array<{ time: number; value: number }> }>
   loading: boolean
+  refetching: boolean
   error: string | null
 }
 
@@ -24,11 +27,11 @@ export function usePromQueryRange(
 ): UsePromQueryRangeResult {
   const [series, setSeries] = useState<Array<{ label: string; points: Array<{ time: number; value: number }> }>>([])
   const [loading, setLoading] = useState(true)
+  const [refetching, setRefetching] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetch_ = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setRefetching(true)
     try {
       const { start, end } = getTimeRangeBounds(timeRange)
       const step = getStepForRange(timeRange)
@@ -42,22 +45,24 @@ export function usePromQueryRange(
       if (!resp.ok) throw new Error(`Prometheus query failed: ${resp.status}`)
       const data: PrometheusResponse = await resp.json()
       setSeries(transformPrometheusMatrix(data, labelKey))
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Prometheus unavailable')
-      setSeries([])
     } finally {
       setLoading(false)
+      setRefetching(false)
     }
   }, [query, timeRange, refreshKey, labelKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetch_() }, [fetch_])
 
-  return { series, loading, error }
+  return { series, loading, refetching, error }
 }
 
 interface UsePromQueryInstantResult {
   bars: Array<{ label: string; value: number }>
   loading: boolean
+  refetching: boolean
   error: string | null
 }
 
@@ -69,11 +74,11 @@ export function usePromQueryInstant(
 ): UsePromQueryInstantResult {
   const [bars, setBars] = useState<Array<{ label: string; value: number }>>([])
   const [loading, setLoading] = useState(true)
+  const [refetching, setRefetching] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetch_ = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setRefetching(true)
     try {
       // Use query_range and take the last value for instant-like behavior
       const { start, end } = getTimeRangeBounds(timeRange)
@@ -92,6 +97,7 @@ export function usePromQueryInstant(
       const matrix = data.data?.result as Array<{ metric: Record<string, string>; values: [number, string][] }>
       if (!matrix?.length) {
         setBars([])
+        setError(null)
         return
       }
       const result = matrix
@@ -103,23 +109,25 @@ export function usePromQueryInstant(
         .sort((a, b) => b.value - a.value)
         .slice(0, 10)
       setBars(result)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Prometheus unavailable')
-      setBars([])
     } finally {
       setLoading(false)
+      setRefetching(false)
     }
   }, [query, timeRange, refreshKey, labelKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetch_() }, [fetch_])
 
-  return { bars, loading, error }
+  return { bars, loading, refetching, error }
 }
 
 // Aggregated total from a query_range (sum of latest values)
 interface UsePromScalarResult {
   value: number | null
   loading: boolean
+  refetching: boolean
   error: string | null
 }
 
@@ -130,11 +138,11 @@ export function usePromScalar(
 ): UsePromScalarResult {
   const [value, setValue] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refetching, setRefetching] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetch_ = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setRefetching(true)
     try {
       const { end } = getTimeRangeBounds(timeRange)
       const params = new URLSearchParams({ query, time: String(end) })
@@ -145,15 +153,16 @@ export function usePromScalar(
       const results = transformPrometheusVector(data, '__name__')
       const total = results.reduce((s, r) => s + r.value, 0)
       setValue(total)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Prometheus unavailable')
-      setValue(null)
     } finally {
       setLoading(false)
+      setRefetching(false)
     }
   }, [query, timeRange, refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetch_() }, [fetch_])
 
-  return { value, loading, error }
+  return { value, loading, refetching, error }
 }
