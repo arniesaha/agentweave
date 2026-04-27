@@ -22,6 +22,7 @@ from typing import Any, Callable, Optional, Sequence
 from opentelemetry import trace
 
 from agentweave import schema
+from agentweave.context import current_session_id, warn_missing_session_id_once
 from agentweave.decorators import _extract_llm_attrs, _get_config_attrs
 from agentweave.exporter import get_tracer
 
@@ -85,6 +86,12 @@ def _make_llm_wrapper(
                     span.set_attribute(k, v)
                 # Set after config attrs so explicit model wins over cfg.agent_model
                 span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
+                _sid = current_session_id()
+                if _sid:
+                    span.set_attribute(schema.SESSION_ID, _sid)
+                    span.set_attribute(schema.PROV_SESSION_ID, _sid)
+                else:
+                    warn_missing_session_id_once()
 
                 result = await original(*args, **kwargs)
 
@@ -115,6 +122,12 @@ def _make_llm_wrapper(
                     span.set_attribute(k, v)
                 # Set after config attrs so explicit model wins over cfg.agent_model
                 span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
+                _sid = current_session_id()
+                if _sid:
+                    span.set_attribute(schema.SESSION_ID, _sid)
+                    span.set_attribute(schema.PROV_SESSION_ID, _sid)
+                else:
+                    warn_missing_session_id_once()
 
                 result = original(*args, **kwargs)
 
