@@ -27,6 +27,7 @@ from opentelemetry import trace
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
 from agentweave import schema
+from agentweave.context import current_session_id, session_scope, warn_missing_session_id_once
 from agentweave.exporter import get_tracer
 from agentweave.pricing import compute_cost
 
@@ -180,6 +181,12 @@ def _make_tool_wrapper(fn: Callable, name: str, captures_input: bool, captures_o
                     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_TOOL_CALL)
                     for k, v in _get_config_attrs().items():
                         span.set_attribute(k, v)
+                    _sid = current_session_id()
+                    if _sid:
+                        span.set_attribute(schema.SESSION_ID, _sid)
+                        span.set_attribute(schema.PROV_SESSION_ID, _sid)
+                    else:
+                        warn_missing_session_id_once()
                     if captures_input:
                         span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
                     try:
@@ -207,6 +214,12 @@ def _make_tool_wrapper(fn: Callable, name: str, captures_input: bool, captures_o
                     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_TOOL_CALL)
                     for k, v in _get_config_attrs().items():
                         span.set_attribute(k, v)
+                    _sid = current_session_id()
+                    if _sid:
+                        span.set_attribute(schema.SESSION_ID, _sid)
+                        span.set_attribute(schema.PROV_SESSION_ID, _sid)
+                    else:
+                        warn_missing_session_id_once()
                     if captures_input:
                         span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
                     try:
@@ -304,13 +317,20 @@ def _make_agent_wrapper(
                         span.set_attribute(k, v)
                     if _det_trace_id_int is not None:
                         span.set_attribute(schema.AGENTWEAVE_TRACE_ID, trace_id)
-                    if session_id is not None:
-                        span.set_attribute(schema.SESSION_ID, session_id)
-                        span.set_attribute(schema.PROV_SESSION_ID, session_id)
+                    _sid = session_id or current_session_id()
+                    if _sid:
+                        span.set_attribute(schema.SESSION_ID, _sid)
+                        span.set_attribute(schema.PROV_SESSION_ID, _sid)
+                    else:
+                        warn_missing_session_id_once()
                     _set_subagent_attrs(span)
                     if captures_input:
                         span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
-                    result = await fn(*args, **kwargs)
+                    if _sid:
+                        with session_scope(_sid):
+                            result = await fn(*args, **kwargs)
+                    else:
+                        result = await fn(*args, **kwargs)
                     if captures_output:
                         span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
                         span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))
@@ -336,13 +356,20 @@ def _make_agent_wrapper(
                         span.set_attribute(k, v)
                     if _det_trace_id_int is not None:
                         span.set_attribute(schema.AGENTWEAVE_TRACE_ID, trace_id)
-                    if session_id is not None:
-                        span.set_attribute(schema.SESSION_ID, session_id)
-                        span.set_attribute(schema.PROV_SESSION_ID, session_id)
+                    _sid = session_id or current_session_id()
+                    if _sid:
+                        span.set_attribute(schema.SESSION_ID, _sid)
+                        span.set_attribute(schema.PROV_SESSION_ID, _sid)
+                    else:
+                        warn_missing_session_id_once()
                     _set_subagent_attrs(span)
                     if captures_input:
                         span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
-                    result = fn(*args, **kwargs)
+                    if _sid:
+                        with session_scope(_sid):
+                            result = fn(*args, **kwargs)
+                    else:
+                        result = fn(*args, **kwargs)
                     if captures_output:
                         span.set_attribute(schema.PROV_WAS_GENERATED_BY, span_name)
                         span.set_attribute(f"{schema.PROV_ENTITY}.output.value", str(result))

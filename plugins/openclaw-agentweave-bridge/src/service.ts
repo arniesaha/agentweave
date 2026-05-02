@@ -251,6 +251,22 @@ export function createAgentWeaveBridgeService() {
               if (carrier["traceparent"]) {
                 process.env.AGENTWEAVE_TRACEPARENT = carrier["traceparent"]
               }
+
+              // Capture parent span/trace IDs for the /session POST below so
+              // the proxy can build links[] on llm_call spans (issue #178).
+              // process.env is set as a best-effort signal for any in-process
+              // sub-agent code that inherits env, but the proxy is a separate
+              // process and reads these via POST /session — that is the
+              // authoritative path.
+              let parentTraceIdHex = ""
+              let parentSpanIdHex = ""
+              const spanContext = span.spanContext()
+              if (spanContext) {
+                parentTraceIdHex = spanContext.traceId.replace(/-/g, "").padStart(32, "0")
+                parentSpanIdHex = spanContext.spanId.replace(/-/g, "").padStart(16, "0")
+                process.env.AGENTWEAVE_PARENT_TRACE_ID = parentTraceIdHex
+                process.env.AGENTWEAVE_PARENT_SPAN_ID = parentSpanIdHex
+              }
               process.env.AGENTWEAVE_SESSION_ID = sessionId
               process.env.AGENTWEAVE_AGENT_ID = agentId
               process.env.AGENTWEAVE_AGENT_TYPE = agentType
@@ -283,6 +299,10 @@ export function createAgentWeaveBridgeService() {
                 if (config.project) sessionPayload.project = config.project
                 if (parentSid) sessionPayload.parent_session_id = parentSid
                 if (taskLabel) sessionPayload.task_label = taskLabel
+                if (parentTraceIdHex && parentSpanIdHex) {
+                  sessionPayload.parent_trace_id = parentTraceIdHex
+                  sessionPayload.parent_span_id = parentSpanIdHex
+                }
                 fetch(`${proxyBaseUrlForSession}/session`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
@@ -307,6 +327,8 @@ export function createAgentWeaveBridgeService() {
               turn.span.end()
               activeTurns.delete(sessionKey)
               delete process.env.AGENTWEAVE_TRACEPARENT
+              delete process.env.AGENTWEAVE_PARENT_TRACE_ID
+              delete process.env.AGENTWEAVE_PARENT_SPAN_ID
               delete process.env.ANTHROPIC_BASE_URL
               delete process.env.OPENAI_BASE_URL
               delete process.env.OPENAI_API_BASE

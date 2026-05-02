@@ -1753,3 +1753,268 @@ class TestListModelsEndpoint:
         monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", "secret123")
         resp = self._client().get("/v1/models")
         assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Tests for issue #174: env key fallback when AGENTWEAVE_* vars are unset
+# ---------------------------------------------------------------------------
+
+class TestEnvKeyFallback:
+    """Verify that standard SDK env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+    GOOGLE_API_KEY) are used as fallback when AGENTWEAVE_*_API_KEY is absent.
+
+    This covers the case where the k8s Secret sets only the standard SDK vars
+    (e.g. for sub-agents that also need direct API access) but the proxy's
+    AGENTWEAVE_ANTHROPIC_API_KEY is empty or not set.  Previously, key_injection
+    would remain False in this scenario and sub-agent LLM calls would fail with
+    authentication errors.
+    """
+
+    def test_anthropic_fallback_from_standard_env(self, monkeypatch):
+        """ANTHROPIC_API_KEY is used as fallback when AGENTWEAVE_ANTHROPIC_API_KEY is unset."""
+        import importlib
+        import sys
+
+        # Remove cached proxy module so env-var-level globals are re-evaluated
+        for mod_name in list(sys.modules.keys()):
+            if "agentweave.proxy" in mod_name or mod_name == "agentweave.proxy":
+                del sys.modules[mod_name]
+
+        monkeypatch.setenv("AGENTWEAVE_ANTHROPIC_API_KEY", "")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03_fallback_key")
+        monkeypatch.delenv("AGENTWEAVE_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_GOOGLE_API_KEY", raising=False)
+
+        import agentweave.proxy as fresh_proxy
+        assert fresh_proxy._ANTHROPIC_INJECT_KEY == "sk-ant-api03_fallback_key", (
+            "Expected ANTHROPIC_API_KEY to be used as fallback when "
+            "AGENTWEAVE_ANTHROPIC_API_KEY is empty"
+        )
+
+    def test_openai_fallback_from_standard_env(self, monkeypatch):
+        """OPENAI_API_KEY is used as fallback when AGENTWEAVE_OPENAI_API_KEY is unset."""
+        import sys
+
+        for mod_name in list(sys.modules.keys()):
+            if "agentweave.proxy" in mod_name or mod_name == "agentweave.proxy":
+                del sys.modules[mod_name]
+
+        monkeypatch.setenv("AGENTWEAVE_OPENAI_API_KEY", "")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-fallback")
+        monkeypatch.delenv("AGENTWEAVE_ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_GOOGLE_API_KEY", raising=False)
+
+        import agentweave.proxy as fresh_proxy
+        assert fresh_proxy._OPENAI_INJECT_KEY == "sk-openai-fallback", (
+            "Expected OPENAI_API_KEY to be used as fallback when "
+            "AGENTWEAVE_OPENAI_API_KEY is empty"
+        )
+
+    def test_google_fallback_from_standard_env(self, monkeypatch):
+        """GOOGLE_API_KEY is used as fallback when AGENTWEAVE_GOOGLE_API_KEY is unset."""
+        import sys
+
+        for mod_name in list(sys.modules.keys()):
+            if "agentweave.proxy" in mod_name or mod_name == "agentweave.proxy":
+                del sys.modules[mod_name]
+
+        monkeypatch.setenv("AGENTWEAVE_GOOGLE_API_KEY", "")
+        monkeypatch.setenv("GOOGLE_API_KEY", "AIzaFallbackGoogleKey")
+        monkeypatch.delenv("AGENTWEAVE_ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_OPENAI_API_KEY", raising=False)
+
+        import agentweave.proxy as fresh_proxy
+        assert fresh_proxy._GOOGLE_INJECT_KEY == "AIzaFallbackGoogleKey", (
+            "Expected GOOGLE_API_KEY to be used as fallback when "
+            "AGENTWEAVE_GOOGLE_API_KEY is empty"
+        )
+
+    def test_agentweave_key_takes_precedence_over_standard(self, monkeypatch):
+        """AGENTWEAVE_ANTHROPIC_API_KEY takes priority over ANTHROPIC_API_KEY."""
+        import sys
+
+        for mod_name in list(sys.modules.keys()):
+            if "agentweave.proxy" in mod_name or mod_name == "agentweave.proxy":
+                del sys.modules[mod_name]
+
+        monkeypatch.setenv("AGENTWEAVE_ANTHROPIC_API_KEY", "sk-ant-api03_primary_key")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03_fallback_key")
+
+        import agentweave.proxy as fresh_proxy
+        assert fresh_proxy._ANTHROPIC_INJECT_KEY == "sk-ant-api03_primary_key", (
+            "AGENTWEAVE_ANTHROPIC_API_KEY should take priority over ANTHROPIC_API_KEY"
+        )
+
+    def test_health_endpoint_reflects_fallback_key_injection(self, monkeypatch):
+        """GET /health shows key_injection=true when only the standard SDK env vars are set."""
+        import sys
+        from starlette.testclient import TestClient
+
+        for mod_name in list(sys.modules.keys()):
+            if "agentweave.proxy" in mod_name or mod_name == "agentweave.proxy":
+                del sys.modules[mod_name]
+
+        monkeypatch.setenv("AGENTWEAVE_ANTHROPIC_API_KEY", "")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03_via_standard_env")
+        monkeypatch.delenv("AGENTWEAVE_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+        import agentweave.proxy as fresh_proxy
+        client = TestClient(fresh_proxy.app)
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["key_injection"]["anthropic"] is True, (
+            "key_injection.anthropic should be True when ANTHROPIC_API_KEY fallback is active"
+        )
+        assert data["key_injection"]["openai"] is False
+        assert data["key_injection"]["google"] is False
+
+
+# ---------------------------------------------------------------------------
+# OTel links[] for cross-process span lineage (issue #178)
+# ---------------------------------------------------------------------------
+
+class TestBuildParentLinks:
+    """Tests for _build_parent_links — OTel link construction from parent span/trace IDs."""
+
+    def test_valid_ids_return_one_link(self):
+        from agentweave.proxy import _build_parent_links
+        trace_id = "a" * 32
+        span_id = "b" * 16
+        links = _build_parent_links(trace_id, span_id)
+        assert len(links) == 1
+        ctx = links[0].context
+        assert ctx.trace_id == int(trace_id, 16)
+        assert ctx.span_id == int(span_id, 16)
+        assert links[0].attributes == {"link.type": "parent_agent_turn"}
+
+    def test_missing_trace_id_returns_empty(self):
+        from agentweave.proxy import _build_parent_links
+        assert _build_parent_links(None, "b" * 16) == []
+        assert _build_parent_links("", "b" * 16) == []
+
+    def test_missing_span_id_returns_empty(self):
+        from agentweave.proxy import _build_parent_links
+        assert _build_parent_links("a" * 32, None) == []
+        assert _build_parent_links("a" * 32, "") == []
+
+    def test_invalid_span_id_returns_empty(self):
+        from agentweave.proxy import _build_parent_links
+        # Too short
+        assert _build_parent_links("a" * 32, "b" * 8) == []
+        # Non-hex
+        assert _build_parent_links("a" * 32, "z" * 16) == []
+
+    def test_non_hex_trace_id_is_hashed(self):
+        """Arbitrary string trace IDs are SHA-256 hashed — still returns a link."""
+        from agentweave.proxy import _build_parent_links
+        links = _build_parent_links("my-session-id", "b" * 16)
+        assert len(links) == 1
+
+    def test_skip_headers_includes_parent_ids(self):
+        """x-agentweave-parent-span-id and parent-trace-id are in _SKIP_HEADERS_ALWAYS."""
+        from agentweave.proxy import _SKIP_HEADERS_ALWAYS
+        assert "x-agentweave-parent-span-id" in _SKIP_HEADERS_ALWAYS
+        assert "x-agentweave-parent-trace-id" in _SKIP_HEADERS_ALWAYS
+
+
+class TestSessionParentSpansEndpoint:
+    """POST /session with parent_trace_id/parent_span_id stores per-session entries
+    used to build OTel links[] on llm_call spans (issue #178)."""
+
+    def test_post_stores_parent_span_for_session(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app, _session_parent_spans
+        client = TestClient(app)
+        sid = "sess-link-1"
+        tid = "f" * 32
+        spid = "1" * 16
+        resp = client.post("/session", json={
+            "session_id": sid,
+            "parent_trace_id": tid,
+            "parent_span_id": spid,
+        })
+        assert resp.status_code == 200
+        assert _session_parent_spans.get(sid) == (tid, spid)
+
+    def test_post_with_empty_parent_clears_entry(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app, _session_parent_spans, _set_session_parent_span
+        client = TestClient(app)
+        sid = "sess-link-clear"
+        _set_session_parent_span(sid, "a" * 32, "b" * 16)
+        assert sid in _session_parent_spans
+        resp = client.post("/session", json={
+            "session_id": sid,
+            "parent_trace_id": "",
+            "parent_span_id": "",
+        })
+        assert resp.status_code == 200
+        assert sid not in _session_parent_spans
+
+    def test_post_without_parent_fields_does_not_touch_entry(self):
+        """Vanilla /session POST that doesn't mention parent_* must not clobber
+        an existing parent entry (the bridge sends per-session pushes that
+        only update parent state when a turn starts/ends)."""
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app, _session_parent_spans, _set_session_parent_span
+        client = TestClient(app)
+        sid = "sess-link-preserve"
+        _set_session_parent_span(sid, "c" * 32, "d" * 16)
+        resp = client.post("/session", json={"session_id": sid, "task_label": "foo"})
+        assert resp.status_code == 200
+        assert _session_parent_spans.get(sid) == ("c" * 32, "d" * 16)
+
+    def test_lru_evicts_oldest_when_over_cap(self, monkeypatch):
+        from agentweave.proxy import _session_parent_spans, _set_session_parent_span
+        import agentweave.proxy as proxy_module
+        # Reset and run with a small cap
+        _session_parent_spans.clear()
+        monkeypatch.setattr(proxy_module, "_MAX_SESSION_PARENT_SPANS", 2)
+        _set_session_parent_span("a", "1" * 32, "1" * 16)
+        _set_session_parent_span("b", "2" * 32, "2" * 16)
+        _set_session_parent_span("c", "3" * 32, "3" * 16)
+        assert "a" not in _session_parent_spans
+        assert "b" in _session_parent_spans
+        assert "c" in _session_parent_spans
+
+
+class TestParentLinkResolution:
+    """When an llm_call request arrives, the proxy must look up parent IDs from
+    _session_parent_spans by session_id, with request headers taking precedence."""
+
+    def test_session_lookup_used_when_headers_absent(self):
+        from agentweave.proxy import _session_parent_spans, _set_session_parent_span
+        _session_parent_spans.clear()
+        sid = "sess-lookup"
+        tid = "a" * 32
+        spid = "b" * 16
+        _set_session_parent_span(sid, tid, spid)
+
+        # Simulate the resolution branch: no headers, session_id present
+        parent_trace_id_raw = None
+        parent_span_id_raw = None
+        if (not parent_trace_id_raw or not parent_span_id_raw) and sid:
+            stored = _session_parent_spans.get(sid)
+            if stored:
+                parent_trace_id_raw = parent_trace_id_raw or stored[0]
+                parent_span_id_raw = parent_span_id_raw or stored[1]
+        assert parent_trace_id_raw == tid
+        assert parent_span_id_raw == spid
+
+    def test_no_env_fallback_in_resolution_block(self):
+        """AGENTWEAVE_PARENT_TRACE_ID / _SPAN_ID env vars must NOT be honored
+        for parent-link resolution — the proxy is multi-tenant and process-
+        static env would mis-link every request."""
+        import inspect
+        import agentweave.proxy as proxy_module
+        src = inspect.getsource(proxy_module)
+        marker = "Parent span/trace IDs for OTel link creation"
+        idx = src.find(marker)
+        assert idx != -1, "parent-id resolution comment not found"
+        block = src[idx: idx + 800]
+        assert "AGENTWEAVE_PARENT_TRACE_ID" not in block
+        assert "AGENTWEAVE_PARENT_SPAN_ID" not in block
