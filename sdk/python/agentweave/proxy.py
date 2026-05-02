@@ -100,6 +100,8 @@ _SKIP_HEADERS_ALWAYS = {
     "x-agentweave-agent-type",
     "x-agentweave-turn-depth",
     "x-agentweave-session-key",
+    "x-agentweave-parent-span-id",
+    "x-agentweave-parent-trace-id",
 }
 
 # ---------------------------------------------------------------------------
@@ -137,6 +139,40 @@ def _context_for_trace_id(trace_id_int: int):
     )
     return _trace.set_span_in_context(NonRecordingSpan(span_ctx))
 
+
+_SPAN_ID_RE = re.compile(r'^[0-9a-fA-F]{16}$')
+
+
+def _build_parent_links(
+    parent_trace_id_raw: str | None,
+    parent_span_id_raw: str | None,
+) -> list:
+    """Build an OTel ``links`` list referencing the parent agent_turn span.
+
+    Used to connect ``llm_call`` spans to their parent ``agent_turn`` span
+    when cross-process propagation via traceparent is unreliable (issue #178).
+
+    Returns an empty list when the IDs are absent or malformed.
+    """
+    from opentelemetry.trace import Link
+    if not parent_trace_id_raw or not parent_span_id_raw:
+        return []
+    trace_id_int = _normalize_trace_id(parent_trace_id_raw)
+    if trace_id_int is None:
+        return []
+    parent_span_id_raw = parent_span_id_raw.strip()
+    if not _SPAN_ID_RE.match(parent_span_id_raw):
+        logger.debug("x-agentweave-parent-span-id is not a valid 16-char hex: %r", parent_span_id_raw)
+        return []
+    span_id_int = int(parent_span_id_raw, 16)
+    link_ctx = SpanContext(
+        trace_id=trace_id_int,
+        span_id=span_id_int,
+        is_remote=True,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    return [Link(context=link_ctx, attributes={"link.type": "parent_agent_turn"})]
+
 # Runtime auth token. Set AGENTWEAVE_PROXY_TOKEN or --auth-token.
 # Empty = open mode (dev/localhost only).
 _PROXY_TOKEN: str | None = os.getenv("AGENTWEAVE_PROXY_TOKEN") or None
@@ -146,20 +182,36 @@ _PROXY_TOKEN: str | None = os.getenv("AGENTWEAVE_PROXY_TOKEN") or None
 # IMPORTANT: Only standard API keys (sk-ant-api03_*) can be injected.
 # OAuth tokens (sk-ant-oat*) MUST NOT be used — they expire and require
 # SDK-level auth flow with TLS fingerprinting.  See DEPLOYMENT-RUNBOOK.md.
-_raw_anthropic_key = os.getenv("AGENTWEAVE_ANTHROPIC_API_KEY", "").strip()
+#
+# Key resolution order (highest to lowest priority):
+#   1. AGENTWEAVE_ANTHROPIC_API_KEY / AGENTWEAVE_GOOGLE_API_KEY / AGENTWEAVE_OPENAI_API_KEY
+#      (explicit proxy-injection env vars — set these in the k8s Secret)
+#   2. ANTHROPIC_API_KEY / GOOGLE_API_KEY / OPENAI_API_KEY
+#      (standard SDK env vars — used as fallback when AGENTWEAVE_* are unset or empty)
+#
+# This fallback ensures that sub-agents routed through the proxy succeed even
+# when the k8s Secret only populates the standard SDK vars (closes #174).
+_raw_anthropic_key = (
+    os.getenv("AGENTWEAVE_ANTHROPIC_API_KEY", "").strip()
+    or os.getenv("ANTHROPIC_API_KEY", "").strip()
+)
 if _raw_anthropic_key and _raw_anthropic_key.startswith("sk-ant-oat"):
     logging.getLogger("agentweave.proxy").warning(
-        "AGENTWEAVE_ANTHROPIC_API_KEY contains an OAuth token (sk-ant-oat*) "
-        "which CANNOT be used for proxy injection — OAuth tokens expire and "
-        "require SDK-level auth.  Use a standard API key (sk-ant-api03_*) or "
+        "AGENTWEAVE_ANTHROPIC_API_KEY / ANTHROPIC_API_KEY contains an OAuth token "
+        "(sk-ant-oat*) which CANNOT be used for proxy injection — OAuth tokens expire "
+        "and require SDK-level auth.  Use a standard API key (sk-ant-api03_*) or "
         "clear this env var to enable pass-through mode.  Ignoring."
     )
     _ANTHROPIC_INJECT_KEY: str | None = None
 else:
     _ANTHROPIC_INJECT_KEY: str | None = _raw_anthropic_key or None
 
-_GOOGLE_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_GOOGLE_API_KEY") or None
-_OPENAI_INJECT_KEY: str | None = os.getenv("AGENTWEAVE_OPENAI_API_KEY") or None
+_GOOGLE_INJECT_KEY: str | None = (
+    os.getenv("AGENTWEAVE_GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY") or None
+)
+_OPENAI_INJECT_KEY: str | None = (
+    os.getenv("AGENTWEAVE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or None
+)
 
 
 def _inject_anthropic_key(forward_headers: dict[str, str], query_string: str) -> str:
@@ -936,6 +988,17 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         except (ValueError, TypeError):
             logger.warning("x-agentweave-turn-depth is not a valid integer: %r", turn_depth_raw)
 
+    # Parent span/trace IDs for OTel link creation (issue #178).
+    # Headers take precedence; fall back to env vars set by the bridge.
+    parent_span_id_raw: str | None = (
+        request.headers.get("x-agentweave-parent-span-id")
+        or os.environ.get("AGENTWEAVE_PARENT_SPAN_ID")
+    )
+    parent_trace_id_raw: str | None = (
+        request.headers.get("x-agentweave-parent-trace-id")
+        or os.environ.get("AGENTWEAVE_PARENT_TRACE_ID")
+    )
+
     forward_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in _SKIP_HEADERS_ALWAYS
@@ -996,6 +1059,8 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         agent_type=agent_type,
         turn_depth=turn_depth,
         traceparent=traceparent,
+        parent_span_id_raw=parent_span_id_raw,
+        parent_trace_id_raw=parent_trace_id_raw,
     )
 
     try:
@@ -1077,10 +1142,13 @@ async def _request_and_trace(
     parent_session_id: str | None = None, agent_type: str | None = None,
     turn_depth: int | None = None,
     traceparent: str | None = None,
+    parent_span_id_raw: str | None = None,
+    parent_trace_id_raw: str | None = None,
 ) -> JSONResponse:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
-    with tracer.start_as_current_span(f"{schema.SPAN_PREFIX_LLM}.{model}", context=_span_ctx) as span:
+    _links = _build_parent_links(parent_trace_id_raw, parent_span_id_raw)
+    with tracer.start_as_current_span(f"{schema.SPAN_PREFIX_LLM}.{model}", context=_span_ctx, links=_links) as span:
         _set_request_attrs(span, model=model, provider=provider,
                            agent_id=agent_id, agent_model=agent_model,
                            path=path, body=body,
@@ -1146,10 +1214,13 @@ async def _stream_and_trace(
     parent_session_id: str | None = None, agent_type: str | None = None,
     turn_depth: int | None = None,
     traceparent: str | None = None,
+    parent_span_id_raw: str | None = None,
+    parent_trace_id_raw: str | None = None,
 ) -> AsyncIterator[bytes]:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
-    span = tracer.start_span(f"{schema.SPAN_PREFIX_LLM}.{model}", context=_span_ctx)
+    _links = _build_parent_links(parent_trace_id_raw, parent_span_id_raw)
+    span = tracer.start_span(f"{schema.SPAN_PREFIX_LLM}.{model}", context=_span_ctx, links=_links)
     _set_request_attrs(span, model=model, provider=provider,
                        agent_id=agent_id, agent_model=agent_model,
                        path=path, body=body,

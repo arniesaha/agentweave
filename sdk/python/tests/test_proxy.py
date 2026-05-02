@@ -1753,3 +1753,121 @@ class TestListModelsEndpoint:
         monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", "secret123")
         resp = self._client().get("/v1/models")
         assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Tests for issue #174: env key fallback when AGENTWEAVE_* vars are unset
+# ---------------------------------------------------------------------------
+
+class TestEnvKeyFallback:
+    """Verify that standard SDK env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+    GOOGLE_API_KEY) are used as fallback when AGENTWEAVE_*_API_KEY is absent.
+
+    This covers the case where the k8s Secret sets only the standard SDK vars
+    (e.g. for sub-agents that also need direct API access) but the proxy's
+    AGENTWEAVE_ANTHROPIC_API_KEY is empty or not set.  Previously, key_injection
+    would remain False in this scenario and sub-agent LLM calls would fail with
+    authentication errors.
+    """
+
+    def test_anthropic_fallback_from_standard_env(self, monkeypatch):
+        """ANTHROPIC_API_KEY is used as fallback when AGENTWEAVE_ANTHROPIC_API_KEY is unset."""
+        import importlib
+        import sys
+
+        # Remove cached proxy module so env-var-level globals are re-evaluated
+        for mod_name in list(sys.modules.keys()):
+            if "agentweave.proxy" in mod_name or mod_name == "agentweave.proxy":
+                del sys.modules[mod_name]
+
+        monkeypatch.setenv("AGENTWEAVE_ANTHROPIC_API_KEY", "")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03_fallback_key")
+        monkeypatch.delenv("AGENTWEAVE_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_GOOGLE_API_KEY", raising=False)
+
+        import agentweave.proxy as fresh_proxy
+        assert fresh_proxy._ANTHROPIC_INJECT_KEY == "sk-ant-api03_fallback_key", (
+            "Expected ANTHROPIC_API_KEY to be used as fallback when "
+            "AGENTWEAVE_ANTHROPIC_API_KEY is empty"
+        )
+
+    def test_openai_fallback_from_standard_env(self, monkeypatch):
+        """OPENAI_API_KEY is used as fallback when AGENTWEAVE_OPENAI_API_KEY is unset."""
+        import sys
+
+        for mod_name in list(sys.modules.keys()):
+            if "agentweave.proxy" in mod_name or mod_name == "agentweave.proxy":
+                del sys.modules[mod_name]
+
+        monkeypatch.setenv("AGENTWEAVE_OPENAI_API_KEY", "")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-fallback")
+        monkeypatch.delenv("AGENTWEAVE_ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_GOOGLE_API_KEY", raising=False)
+
+        import agentweave.proxy as fresh_proxy
+        assert fresh_proxy._OPENAI_INJECT_KEY == "sk-openai-fallback", (
+            "Expected OPENAI_API_KEY to be used as fallback when "
+            "AGENTWEAVE_OPENAI_API_KEY is empty"
+        )
+
+    def test_google_fallback_from_standard_env(self, monkeypatch):
+        """GOOGLE_API_KEY is used as fallback when AGENTWEAVE_GOOGLE_API_KEY is unset."""
+        import sys
+
+        for mod_name in list(sys.modules.keys()):
+            if "agentweave.proxy" in mod_name or mod_name == "agentweave.proxy":
+                del sys.modules[mod_name]
+
+        monkeypatch.setenv("AGENTWEAVE_GOOGLE_API_KEY", "")
+        monkeypatch.setenv("GOOGLE_API_KEY", "AIzaFallbackGoogleKey")
+        monkeypatch.delenv("AGENTWEAVE_ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_OPENAI_API_KEY", raising=False)
+
+        import agentweave.proxy as fresh_proxy
+        assert fresh_proxy._GOOGLE_INJECT_KEY == "AIzaFallbackGoogleKey", (
+            "Expected GOOGLE_API_KEY to be used as fallback when "
+            "AGENTWEAVE_GOOGLE_API_KEY is empty"
+        )
+
+    def test_agentweave_key_takes_precedence_over_standard(self, monkeypatch):
+        """AGENTWEAVE_ANTHROPIC_API_KEY takes priority over ANTHROPIC_API_KEY."""
+        import sys
+
+        for mod_name in list(sys.modules.keys()):
+            if "agentweave.proxy" in mod_name or mod_name == "agentweave.proxy":
+                del sys.modules[mod_name]
+
+        monkeypatch.setenv("AGENTWEAVE_ANTHROPIC_API_KEY", "sk-ant-api03_primary_key")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03_fallback_key")
+
+        import agentweave.proxy as fresh_proxy
+        assert fresh_proxy._ANTHROPIC_INJECT_KEY == "sk-ant-api03_primary_key", (
+            "AGENTWEAVE_ANTHROPIC_API_KEY should take priority over ANTHROPIC_API_KEY"
+        )
+
+    def test_health_endpoint_reflects_fallback_key_injection(self, monkeypatch):
+        """GET /health shows key_injection=true when only the standard SDK env vars are set."""
+        import sys
+        from starlette.testclient import TestClient
+
+        for mod_name in list(sys.modules.keys()):
+            if "agentweave.proxy" in mod_name or mod_name == "agentweave.proxy":
+                del sys.modules[mod_name]
+
+        monkeypatch.setenv("AGENTWEAVE_ANTHROPIC_API_KEY", "")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03_via_standard_env")
+        monkeypatch.delenv("AGENTWEAVE_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+        import agentweave.proxy as fresh_proxy
+        client = TestClient(fresh_proxy.app)
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["key_injection"]["anthropic"] is True, (
+            "key_injection.anthropic should be True when ANTHROPIC_API_KEY fallback is active"
+        )
+        assert data["key_injection"]["openai"] is False
+        assert data["key_injection"]["google"] is False
