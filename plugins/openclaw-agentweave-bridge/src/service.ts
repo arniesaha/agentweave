@@ -251,6 +251,16 @@ export function createAgentWeaveBridgeService() {
               if (carrier["traceparent"]) {
                 process.env.AGENTWEAVE_TRACEPARENT = carrier["traceparent"]
               }
+
+              // Expose parent span/trace IDs so the proxy can create OTel links[]
+              // connecting llm_call spans back to this agent_turn span (issue #178).
+              const spanContext = span.spanContext()
+              if (spanContext) {
+                const traceIdHex = spanContext.traceId.replace(/-/g, "").padStart(32, "0")
+                const spanIdHex = spanContext.spanId.replace(/-/g, "").padStart(16, "0")
+                process.env.AGENTWEAVE_PARENT_TRACE_ID = traceIdHex
+                process.env.AGENTWEAVE_PARENT_SPAN_ID = spanIdHex
+              }
               process.env.AGENTWEAVE_SESSION_ID = sessionId
               process.env.AGENTWEAVE_AGENT_ID = agentId
               process.env.AGENTWEAVE_AGENT_TYPE = agentType
@@ -307,6 +317,8 @@ export function createAgentWeaveBridgeService() {
               turn.span.end()
               activeTurns.delete(sessionKey)
               delete process.env.AGENTWEAVE_TRACEPARENT
+              delete process.env.AGENTWEAVE_PARENT_TRACE_ID
+              delete process.env.AGENTWEAVE_PARENT_SPAN_ID
               delete process.env.ANTHROPIC_BASE_URL
               delete process.env.OPENAI_BASE_URL
               delete process.env.OPENAI_API_BASE

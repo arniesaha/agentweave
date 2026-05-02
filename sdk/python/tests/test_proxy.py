@@ -1871,3 +1871,51 @@ class TestEnvKeyFallback:
         )
         assert data["key_injection"]["openai"] is False
         assert data["key_injection"]["google"] is False
+
+
+# ---------------------------------------------------------------------------
+# OTel links[] for cross-process span lineage (issue #178)
+# ---------------------------------------------------------------------------
+
+class TestBuildParentLinks:
+    """Tests for _build_parent_links — OTel link construction from parent span/trace IDs."""
+
+    def test_valid_ids_return_one_link(self):
+        from agentweave.proxy import _build_parent_links
+        trace_id = "a" * 32
+        span_id = "b" * 16
+        links = _build_parent_links(trace_id, span_id)
+        assert len(links) == 1
+        ctx = links[0].context
+        assert ctx.trace_id == int(trace_id, 16)
+        assert ctx.span_id == int(span_id, 16)
+        assert links[0].attributes == {"link.type": "parent_agent_turn"}
+
+    def test_missing_trace_id_returns_empty(self):
+        from agentweave.proxy import _build_parent_links
+        assert _build_parent_links(None, "b" * 16) == []
+        assert _build_parent_links("", "b" * 16) == []
+
+    def test_missing_span_id_returns_empty(self):
+        from agentweave.proxy import _build_parent_links
+        assert _build_parent_links("a" * 32, None) == []
+        assert _build_parent_links("a" * 32, "") == []
+
+    def test_invalid_span_id_returns_empty(self):
+        from agentweave.proxy import _build_parent_links
+        # Too short
+        assert _build_parent_links("a" * 32, "b" * 8) == []
+        # Non-hex
+        assert _build_parent_links("a" * 32, "z" * 16) == []
+
+    def test_non_hex_trace_id_is_hashed(self):
+        """Arbitrary string trace IDs are SHA-256 hashed — still returns a link."""
+        from agentweave.proxy import _build_parent_links
+        links = _build_parent_links("my-session-id", "b" * 16)
+        assert len(links) == 1
+
+    def test_skip_headers_includes_parent_ids(self):
+        """x-agentweave-parent-span-id and parent-trace-id are in _SKIP_HEADERS_ALWAYS."""
+        from agentweave.proxy import _SKIP_HEADERS_ALWAYS
+        assert "x-agentweave-parent-span-id" in _SKIP_HEADERS_ALWAYS
+        assert "x-agentweave-parent-trace-id" in _SKIP_HEADERS_ALWAYS
