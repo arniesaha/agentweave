@@ -62,7 +62,7 @@ from typing import Any, AsyncIterator
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from opentelemetry.trace import NonRecordingSpan, SpanContext, StatusCode, TraceFlags
+from opentelemetry.trace import Link, NonRecordingSpan, SpanContext, StatusCode, TraceFlags
 
 from agentweave import schema
 from agentweave.config import AgentWeaveConfig
@@ -154,7 +154,6 @@ def _build_parent_links(
 
     Returns an empty list when the IDs are absent or malformed.
     """
-    from opentelemetry.trace import Link
     if not parent_trace_id_raw or not parent_span_id_raw:
         return []
     trace_id_int = _normalize_trace_id(parent_trace_id_raw)
@@ -162,16 +161,38 @@ def _build_parent_links(
         return []
     parent_span_id_raw = parent_span_id_raw.strip()
     if not _SPAN_ID_RE.match(parent_span_id_raw):
-        logger.debug("x-agentweave-parent-span-id is not a valid 16-char hex: %r", parent_span_id_raw)
+        logger.debug("parent span id is not a valid 16-char hex: %r", parent_span_id_raw)
         return []
     span_id_int = int(parent_span_id_raw, 16)
+    # TraceFlags(0): the parent's sampling decision is its own — links are
+    # independent of sampling so we don't claim it.
     link_ctx = SpanContext(
         trace_id=trace_id_int,
         span_id=span_id_int,
         is_remote=True,
-        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        trace_flags=TraceFlags(0),
     )
     return [Link(context=link_ctx, attributes={"link.type": "parent_agent_turn"})]
+
+
+# Per-session parent agent_turn IDs pushed by the bridge via POST /session.
+# Cross-process channel for issue #178: bridge → proxy is HTTP, so env vars
+# don't propagate.  Bridge POSTs (parent_trace_id, parent_span_id) keyed by
+# session_id at message.received and clears at message.processed.
+# LRU-bounded to defend against bridge crashes leaving stale entries.
+_MAX_SESSION_PARENT_SPANS = 256
+_session_parent_spans: "OrderedDict[str, tuple[str, str]]" = OrderedDict()
+
+
+def _set_session_parent_span(session_id: str, trace_id: str, span_id: str) -> None:
+    _session_parent_spans[session_id] = (trace_id, span_id)
+    _session_parent_spans.move_to_end(session_id)
+    while len(_session_parent_spans) > _MAX_SESSION_PARENT_SPANS:
+        _session_parent_spans.popitem(last=False)
+
+
+def _clear_session_parent_span(session_id: str) -> None:
+    _session_parent_spans.pop(session_id, None)
 
 # Runtime auth token. Set AGENTWEAVE_PROXY_TOKEN or --auth-token.
 # Empty = open mode (dev/localhost only).
@@ -380,6 +401,11 @@ async def set_session_context(body: dict):
 
     To clear a per-key override, POST with ``force: false`` and the same
     ``session_key``.
+
+    Optional ``parent_trace_id`` and ``parent_span_id`` (when paired with
+    ``session_id``) populate the per-session parent agent_turn map used to
+    build OTel links[] on llm_call spans (issue #178).  Sending either field
+    as an explicit empty string clears the entry for that session.
     """
     global _session_context, _session_context_force, _forced_session_contexts
     ctx = {k: v for k, v in {
@@ -390,6 +416,19 @@ async def set_session_context(body: dict):
         "prov.agent.id": body.get("agent_id", ""),
         "prov.project": body.get("project", ""),
     }.items() if v}
+
+    # Issue #178: bridge pushes the active agent_turn's trace/span IDs so the
+    # proxy can build links[] on llm_call spans.  Keyed by session_id so
+    # concurrent sessions stay isolated.  Empty values clear the entry.
+    _sid_for_parent = body.get("session_id", "")
+    _ptid = (body.get("parent_trace_id") or "").strip()
+    _psid = (body.get("parent_span_id") or "").strip()
+    if _sid_for_parent:
+        if _ptid and _psid:
+            _set_session_parent_span(_sid_for_parent, _ptid, _psid)
+        elif "parent_trace_id" in body or "parent_span_id" in body:
+            # Explicit empty string in either field clears the entry.
+            _clear_session_parent_span(_sid_for_parent)
 
     force = bool(body.get("force", False))
     session_key = body.get("session_key", "")
@@ -989,15 +1028,17 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
             logger.warning("x-agentweave-turn-depth is not a valid integer: %r", turn_depth_raw)
 
     # Parent span/trace IDs for OTel link creation (issue #178).
-    # Headers take precedence; fall back to env vars set by the bridge.
-    parent_span_id_raw: str | None = (
-        request.headers.get("x-agentweave-parent-span-id")
-        or os.environ.get("AGENTWEAVE_PARENT_SPAN_ID")
-    )
-    parent_trace_id_raw: str | None = (
-        request.headers.get("x-agentweave-parent-trace-id")
-        or os.environ.get("AGENTWEAVE_PARENT_TRACE_ID")
-    )
+    # Headers take precedence (direct callers); fall back to the per-session
+    # entry pushed by the bridge via POST /session.
+    # Env-var fallback is deliberately omitted: the proxy is a long-lived
+    # multi-tenant server, so process-static env would mis-link every request.
+    parent_trace_id_raw: str | None = request.headers.get("x-agentweave-parent-trace-id")
+    parent_span_id_raw: str | None = request.headers.get("x-agentweave-parent-span-id")
+    if (not parent_trace_id_raw or not parent_span_id_raw) and session_id:
+        _stored = _session_parent_spans.get(session_id)
+        if _stored:
+            parent_trace_id_raw = parent_trace_id_raw or _stored[0]
+            parent_span_id_raw = parent_span_id_raw or _stored[1]
 
     forward_headers = {
         k: v for k, v in request.headers.items()

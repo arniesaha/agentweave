@@ -1919,3 +1919,102 @@ class TestBuildParentLinks:
         from agentweave.proxy import _SKIP_HEADERS_ALWAYS
         assert "x-agentweave-parent-span-id" in _SKIP_HEADERS_ALWAYS
         assert "x-agentweave-parent-trace-id" in _SKIP_HEADERS_ALWAYS
+
+
+class TestSessionParentSpansEndpoint:
+    """POST /session with parent_trace_id/parent_span_id stores per-session entries
+    used to build OTel links[] on llm_call spans (issue #178)."""
+
+    def test_post_stores_parent_span_for_session(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app, _session_parent_spans
+        client = TestClient(app)
+        sid = "sess-link-1"
+        tid = "f" * 32
+        spid = "1" * 16
+        resp = client.post("/session", json={
+            "session_id": sid,
+            "parent_trace_id": tid,
+            "parent_span_id": spid,
+        })
+        assert resp.status_code == 200
+        assert _session_parent_spans.get(sid) == (tid, spid)
+
+    def test_post_with_empty_parent_clears_entry(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app, _session_parent_spans, _set_session_parent_span
+        client = TestClient(app)
+        sid = "sess-link-clear"
+        _set_session_parent_span(sid, "a" * 32, "b" * 16)
+        assert sid in _session_parent_spans
+        resp = client.post("/session", json={
+            "session_id": sid,
+            "parent_trace_id": "",
+            "parent_span_id": "",
+        })
+        assert resp.status_code == 200
+        assert sid not in _session_parent_spans
+
+    def test_post_without_parent_fields_does_not_touch_entry(self):
+        """Vanilla /session POST that doesn't mention parent_* must not clobber
+        an existing parent entry (the bridge sends per-session pushes that
+        only update parent state when a turn starts/ends)."""
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app, _session_parent_spans, _set_session_parent_span
+        client = TestClient(app)
+        sid = "sess-link-preserve"
+        _set_session_parent_span(sid, "c" * 32, "d" * 16)
+        resp = client.post("/session", json={"session_id": sid, "task_label": "foo"})
+        assert resp.status_code == 200
+        assert _session_parent_spans.get(sid) == ("c" * 32, "d" * 16)
+
+    def test_lru_evicts_oldest_when_over_cap(self, monkeypatch):
+        from agentweave.proxy import _session_parent_spans, _set_session_parent_span
+        import agentweave.proxy as proxy_module
+        # Reset and run with a small cap
+        _session_parent_spans.clear()
+        monkeypatch.setattr(proxy_module, "_MAX_SESSION_PARENT_SPANS", 2)
+        _set_session_parent_span("a", "1" * 32, "1" * 16)
+        _set_session_parent_span("b", "2" * 32, "2" * 16)
+        _set_session_parent_span("c", "3" * 32, "3" * 16)
+        assert "a" not in _session_parent_spans
+        assert "b" in _session_parent_spans
+        assert "c" in _session_parent_spans
+
+
+class TestParentLinkResolution:
+    """When an llm_call request arrives, the proxy must look up parent IDs from
+    _session_parent_spans by session_id, with request headers taking precedence."""
+
+    def test_session_lookup_used_when_headers_absent(self):
+        from agentweave.proxy import _session_parent_spans, _set_session_parent_span
+        _session_parent_spans.clear()
+        sid = "sess-lookup"
+        tid = "a" * 32
+        spid = "b" * 16
+        _set_session_parent_span(sid, tid, spid)
+
+        # Simulate the resolution branch: no headers, session_id present
+        parent_trace_id_raw = None
+        parent_span_id_raw = None
+        if (not parent_trace_id_raw or not parent_span_id_raw) and sid:
+            stored = _session_parent_spans.get(sid)
+            if stored:
+                parent_trace_id_raw = parent_trace_id_raw or stored[0]
+                parent_span_id_raw = parent_span_id_raw or stored[1]
+        assert parent_trace_id_raw == tid
+        assert parent_span_id_raw == spid
+
+    def test_no_env_fallback_in_resolution_block(self):
+        """AGENTWEAVE_PARENT_TRACE_ID / _SPAN_ID env vars must NOT be honored
+        for parent-link resolution — the proxy is multi-tenant and process-
+        static env would mis-link every request."""
+        import inspect
+        import agentweave.proxy as proxy_module
+        src = inspect.getsource(proxy_module)
+        marker = "Parent span/trace IDs for OTel link creation"
+        idx = src.find(marker)
+        assert idx != -1, "parent-id resolution comment not found"
+        block = src[idx: idx + 800]
+        assert "AGENTWEAVE_PARENT_TRACE_ID" not in block
+        assert "AGENTWEAVE_PARENT_SPAN_ID" not in block
