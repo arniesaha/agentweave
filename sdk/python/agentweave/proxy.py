@@ -319,6 +319,44 @@ def _detect_provider(path: str) -> str:
     return "anthropic"
 
 
+# Paths that have a ChatGPT-backend equivalent under /codex/<suffix>.
+# OpenAI rejects ChatGPT-mode JWTs at api.openai.com — those tokens only work
+# against chatgpt.com/backend-api/codex/*. When a caller hits the OpenAI
+# Responses API (typically the OpenClaw openai-codex provider, which always
+# emits POST /v1/responses regardless of upstream), detect the JWT-shaped
+# bearer and reroute it to the ChatGPT backend.
+_OPENAI_TO_CODEX_PATH = {"v1/responses": "codex/responses"}
+
+
+def _is_chatgpt_mode_bearer(auth_header: str) -> bool:
+    """True when the Authorization header carries a ChatGPT-mode JWT.
+
+    ChatGPT-mode access tokens are RS256 JWTs (start with ``eyJ`` after
+    base64-decoding the header) and are not interchangeable with ``sk-*``
+    OpenAI API keys.  ``sk-ant-*`` (Anthropic) is also explicitly excluded.
+    """
+    if not auth_header:
+        return False
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else auth_header
+    return token.startswith("eyJ") and not token.startswith("sk-")
+
+
+def _maybe_reroute_openai_to_codex(provider: str, path: str, auth_header: str) -> tuple[str, str]:
+    """Reroute OpenAI Responses-API traffic to the ChatGPT codex backend when
+    the caller is using a ChatGPT-mode JWT instead of an ``sk-*`` API key.
+
+    Returns the (provider, path) pair to use for upstream dispatch.
+    """
+    if provider != "openai":
+        return provider, path
+    rewritten = _OPENAI_TO_CODEX_PATH.get(path)
+    if rewritten is None:
+        return provider, path
+    if not _is_chatgpt_mode_bearer(auth_header):
+        return provider, path
+    return "codex", rewritten
+
+
 def _upstream_url(provider: str, path: str, query_string: str) -> str:
     if provider == "google":
         base = _GOOGLE_BASE
@@ -914,6 +952,11 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
             pass
 
     provider = _detect_provider(path)
+    # ChatGPT-mode tokens (Bearer eyJ…) reach api.openai.com only to be rejected.
+    # Reroute Responses-API calls carrying such tokens to chatgpt.com/backend-api/codex.
+    provider, path = _maybe_reroute_openai_to_codex(
+        provider, path, request.headers.get("authorization", "")
+    )
     model = _extract_model(provider, path, body)
     is_stream = _is_streaming(provider, path, body)
     query_string = request.url.query
