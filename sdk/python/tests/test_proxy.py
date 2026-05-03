@@ -15,6 +15,8 @@ import agentweave.proxy as proxy_module
 from agentweave.proxy import (
     _check_auth,
     _detect_provider,
+    _is_chatgpt_mode_bearer,
+    _maybe_reroute_openai_to_codex,
     _extract_anthropic_cache_tokens,
     _inject_anthropic_key,
     _openai_response_text,
@@ -75,6 +77,69 @@ class TestDetectProvider:
 
     def test_anthropic_fallback(self):
         assert _detect_provider("v1/unknown/path") == "anthropic"
+
+
+class TestChatGPTModeBearerDetection:
+    """ChatGPT-mode JWTs (eyJ…) versus OpenAI sk-* keys versus empty/anthropic."""
+
+    def test_chatgpt_jwt_with_bearer_prefix(self):
+        assert _is_chatgpt_mode_bearer("Bearer eyJhbGciOiJSUzI1NiIs.payload.sig") is True
+
+    def test_chatgpt_jwt_without_prefix(self):
+        assert _is_chatgpt_mode_bearer("eyJhbGciOiJSUzI1NiIs.payload.sig") is True
+
+    def test_openai_sk_key_is_not_chatgpt(self):
+        assert _is_chatgpt_mode_bearer("Bearer sk-proj-abc123") is False
+
+    def test_anthropic_sk_ant_is_not_chatgpt(self):
+        assert _is_chatgpt_mode_bearer("Bearer sk-ant-oat01-abc") is False
+
+    def test_empty_header(self):
+        assert _is_chatgpt_mode_bearer("") is False
+
+
+class TestMaybeRerouteOpenAIToCodex:
+    """Reroute /v1/responses to /codex/responses when caller uses ChatGPT JWT."""
+
+    def test_v1_responses_with_chatgpt_jwt_reroutes(self):
+        provider, path = _maybe_reroute_openai_to_codex(
+            "openai", "v1/responses", "Bearer eyJhbGciOi.payload.sig"
+        )
+        assert provider == "codex"
+        assert path == "codex/responses"
+
+    def test_v1_responses_with_sk_key_passes_through(self):
+        provider, path = _maybe_reroute_openai_to_codex(
+            "openai", "v1/responses", "Bearer sk-proj-abc"
+        )
+        assert provider == "openai"
+        assert path == "v1/responses"
+
+    def test_v1_responses_with_no_auth_passes_through(self):
+        provider, path = _maybe_reroute_openai_to_codex("openai", "v1/responses", "")
+        assert provider == "openai"
+        assert path == "v1/responses"
+
+    def test_chat_completions_is_unaffected(self):
+        provider, path = _maybe_reroute_openai_to_codex(
+            "openai", "v1/chat/completions", "Bearer eyJhbGciOi.payload.sig"
+        )
+        assert provider == "openai"
+        assert path == "v1/chat/completions"
+
+    def test_anthropic_provider_unaffected(self):
+        provider, path = _maybe_reroute_openai_to_codex(
+            "anthropic", "v1/messages", "Bearer eyJhbGciOi.payload.sig"
+        )
+        assert provider == "anthropic"
+        assert path == "v1/messages"
+
+    def test_codex_provider_unaffected(self):
+        provider, path = _maybe_reroute_openai_to_codex(
+            "codex", "codex/responses", "Bearer eyJhbGciOi.payload.sig"
+        )
+        assert provider == "codex"
+        assert path == "codex/responses"
 
 
 class _FakeSpan:
