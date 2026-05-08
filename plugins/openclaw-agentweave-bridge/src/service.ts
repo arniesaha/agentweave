@@ -3,6 +3,8 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto"
 import { NodeSDK } from "@opentelemetry/sdk-node"
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import { BatchSpanProcessor, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base"
+// @ts-ignore — provided by host at runtime, not in plugin's local node_modules
+import { onDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
 import { resolveCost } from "./pricing.js"
 
 interface ActiveTurn {
@@ -95,36 +97,13 @@ function initSdk(config: BridgeConfig): void {
   console.log("[agentweave-bridge] OTel SDK started, exporting to:", `${config.otlpEndpoint}/v1/traces`)
 }
 
-interface DiagnosticEventsState {
-  seq: number
-  listeners: Set<(evt: unknown) => void>
-  dispatchDepth: number
-}
-
-function ensureDiagnosticEventsState(): DiagnosticEventsState {
-  // Mirror OpenClaw's own getDiagnosticEventsState() from
-  // plugin-sdk/diagnostic-events-C_wM1rid.js — lazy-init the shared
-  // globalThis singleton.  The plugin starts before any diagnostic event
-  // has been emitted, so the state doesn't exist yet.  Creating it here
-  // with the same shape means emitDiagnosticEvent() will find our
-  // listeners when it later calls getDiagnosticEventsState().
-  const g = globalThis as Record<string, unknown>
-  if (!g.__openclawDiagnosticEventsState) {
-    g.__openclawDiagnosticEventsState = {
-      seq: 0,
-      listeners: new Set(),
-      dispatchDepth: 0,
-    }
-    console.log("[agentweave-bridge] initialized __openclawDiagnosticEventsState on globalThis")
-  }
-  return g.__openclawDiagnosticEventsState as DiagnosticEventsState
-}
-
 function subscribeToDiagnosticEvents(listener: (evt: unknown) => void): () => void {
-  const state = ensureDiagnosticEventsState()
-  state.listeners.add(listener)
-  console.log("[agentweave-bridge] subscribed to diagnostic events, listeners:", state.listeners.size)
-  return () => { state.listeners.delete(listener) }
+  // openclaw/plugin-sdk's onDiagnosticEvent registers against the
+  // Symbol-keyed state added in OpenClaw v2026.5.x, replacing the
+  // string-keyed globalThis singleton this plugin used to poke directly.
+  const unsubscribe = (onDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(listener)
+  console.log("[agentweave-bridge] subscribed to diagnostic events via plugin-sdk")
+  return unsubscribe
 }
 
 function getSpanSessionId(turn: ActiveTurn): string | undefined {
@@ -194,12 +173,6 @@ export function createAgentWeaveBridgeService() {
 
       if (config.enabled === false) return
       initSdk(config)
-
-      // Ensure the diagnostic events state exists on globalThis before OpenClaw
-      // emits any events.  OpenClaw's emitDiagnosticEvent() lazy-inits the same
-      // key, so both sides converge on the same singleton.
-      const g = globalThis as Record<string, unknown>
-      console.log("[agentweave-bridge] globalThis keys with openclaw:", Object.keys(g).filter(k => k.includes("openclaw")))
 
       unsubscribe = subscribeToDiagnosticEvents((evt: unknown) => {
         const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string }

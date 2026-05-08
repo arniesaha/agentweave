@@ -29,5 +29,8 @@
         "description": "AgentWeave proxy URL injected as ANTHROPIC_BASE_URL, OPENAI_BASE_URL, and OPENAI_API_BASE for sub-agents (with trailing /v1 stripped). Falls back to AGENTWEAVE_PROXY_URL env var"
       }
     }
+  },
+  "activation": {
+    "onStartup": true
   }
 }

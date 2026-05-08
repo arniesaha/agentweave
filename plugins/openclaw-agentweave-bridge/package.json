@@ -5,7 +5,8 @@
   "description": "AgentWeave bridge plugin for OpenClaw — creates root OTel spans per user message",
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build": "tsc"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -21,6 +22,8 @@
     "vitest": "^3.0.0"
   },
   "openclaw": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./dist/index.js"
+    ]
   }
 }
