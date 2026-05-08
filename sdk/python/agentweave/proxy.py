@@ -100,6 +100,7 @@ _SKIP_HEADERS_ALWAYS = {
     "x-agentweave-agent-type",
     "x-agentweave-turn-depth",
     "x-agentweave-session-key",
+    "x-agentweave-task-label",
     "x-agentweave-parent-span-id",
     "x-agentweave-parent-trace-id",
 }
@@ -1018,6 +1019,12 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     # Only use explicitly set project — do NOT infer from agent_id prefix.
     # Use AGENTWEAVE_PROJECT env var or X-AgentWeave-Project header.
     project = request.headers.get("x-agentweave-project") or os.getenv("AGENTWEAVE_PROJECT") or None
+    task_label: str | None = (
+        (_active_ctx.get("prov.task.label") if _force else None)
+        or request.headers.get("x-agentweave-task-label")
+        or os.getenv("AGENTWEAVE_TASK_LABEL")
+        or None
+    )
     turn: int | None = None
     turn_raw = request.headers.get("x-agentweave-turn")
     if turn_raw is not None:
@@ -1240,7 +1247,8 @@ async def _request_and_trace(
                            det_trace_id_raw=det_trace_id_raw,
                            parent_session_id=parent_session_id,
                            agent_type=agent_type, turn_depth=turn_depth,
-                           traceparent=traceparent)
+                           traceparent=traceparent,
+                           task_label=task_label)
         if turn_count is not None:
             span.set_attribute(schema.AGENT_TURN_COUNT, turn_count)
         start = time.perf_counter()
@@ -1312,7 +1320,8 @@ async def _stream_and_trace(
                        det_trace_id_raw=det_trace_id_raw,
                        parent_session_id=parent_session_id,
                        agent_type=agent_type, turn_depth=turn_depth,
-                       traceparent=traceparent)
+                       traceparent=traceparent,
+                       task_label=task_label)
     if turn_count is not None:
         span.set_attribute(schema.AGENT_TURN_COUNT, turn_count)
 
@@ -1734,6 +1743,7 @@ def _set_request_attrs(
     parent_session_id: str | None = None, agent_type: str | None = None,
     turn_depth: int | None = None,
     traceparent: str | None = None,
+    task_label: str | None = None,
 ) -> None:
     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
     span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
@@ -1764,6 +1774,8 @@ def _set_request_attrs(
     # W3C traceparent passthrough (issue #44)
     if traceparent is not None:
         span.set_attribute(schema.PROV_TRACE_PARENT, traceparent)
+    if task_label is not None:
+        span.set_attribute(schema.PROV_TASK_LABEL, task_label)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
@@ -1780,6 +1792,8 @@ def _set_request_attrs(
         _explicit_session_attrs.add(schema.PROV_PROJECT)
     if turn is not None:
         _explicit_session_attrs.add(schema.PROV_SESSION_TURN)
+    if task_label is not None:
+        _explicit_session_attrs.add(schema.PROV_TASK_LABEL)
     if parent_session_id is not None:
         _explicit_session_attrs.add(schema.PROV_PARENT_SESSION_ID)
     if agent_type is not None:
