@@ -1235,6 +1235,7 @@ async def _request_and_trace(
     traceparent: str | None = None,
     parent_span_id_raw: str | None = None,
     parent_trace_id_raw: str | None = None,
+    task_label: str | None = None,
 ) -> JSONResponse:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
@@ -1308,6 +1309,7 @@ async def _stream_and_trace(
     traceparent: str | None = None,
     parent_span_id_raw: str | None = None,
     parent_trace_id_raw: str | None = None,
+    task_label: str | None = None,
 ) -> AsyncIterator[bytes]:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
