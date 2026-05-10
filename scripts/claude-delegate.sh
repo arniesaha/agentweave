@@ -41,13 +41,21 @@ fi
 if [[ -n "${CLAUDE_BIN:-}" ]]; then
   CLAUDE_CMD="$CLAUDE_BIN"
 elif command -v claude >/dev/null 2>&1; then
-  CLAUDE_CMD="claude"
+  # Resolve to an absolute path — bare `[[ -x claude ]]` below only
+  # inspects the current working directory, not PATH.
+  CLAUDE_CMD="$(command -v claude)"
 elif [[ -d "$REAL_HOME/.local/share/claude/versions" ]]; then
   CLAUDE_CMD="$(ls -1t "$REAL_HOME/.local/share/claude/versions"/* 2>/dev/null | head -1 || true)"
 elif [[ -d /home/Arnab/.local/share/claude/versions ]]; then
   CLAUDE_CMD="$(ls -1t /home/Arnab/.local/share/claude/versions/* 2>/dev/null | head -1 || true)"
 else
   CLAUDE_CMD=""
+fi
+
+# If the resolved command is still a bare name (e.g. CLAUDE_BIN=claude),
+# look it up on PATH so the `-x` check has an absolute path to test.
+if [[ -n "$CLAUDE_CMD" && "$CLAUDE_CMD" != /* && "$CLAUDE_CMD" != ./* ]]; then
+  CLAUDE_CMD="$(command -v "$CLAUDE_CMD" 2>/dev/null || true)"
 fi
 
 if [[ -z "$CLAUDE_CMD" || ! -x "$CLAUDE_CMD" ]]; then
