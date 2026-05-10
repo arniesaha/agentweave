@@ -1277,6 +1277,10 @@ class TestForcedSessionContextRace:
         """x-agentweave-session-key must not be forwarded upstream."""
         assert "x-agentweave-session-key" in _SKIP_HEADERS_ALWAYS
 
+    def test_task_label_header_stripped_from_forwarding(self):
+        """x-agentweave-task-label must not be forwarded upstream."""
+        assert "x-agentweave-task-label" in _SKIP_HEADERS_ALWAYS
+
     def test_legacy_force_without_key_still_works(self, monkeypatch):
         """Backward compat: POST /session with force:true and no session_key sets global flag."""
         from fastapi.testclient import TestClient
@@ -1353,6 +1357,20 @@ class TestProjectTracking:
         assert proxy_module._session_context.get("prov.project") == "skynet"
         monkeypatch.delenv("AGENTWEAVE_PROJECT")
         importlib.reload(proxy_module)
+
+    def test_task_label_param_sets_span_attr(self, monkeypatch):
+        """Explicit task_label parameter sets prov.task.label on spans."""
+        from agentweave.config import AgentWeaveConfig
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        monkeypatch.setattr(proxy_module, "_session_context", {"prov.task.label": "from-session"})
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+            task_label="from-header",
+        )
+        assert span.attrs["prov.task.label"] == "from-header"
 
     def test_project_header_sets_span_attr(self, monkeypatch):
         """X-AgentWeave-Project header sets prov.project on spans."""

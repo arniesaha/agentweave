@@ -265,6 +265,7 @@ export function createAgentWeaveBridgeService() {
                   : undefined
                 const sessionPayload: Record<string, unknown> = {
                   session_id: sessionId,
+                  session_key: sessionKey,
                   agent_id: agentId,
                   agent_type: agentType,
                   force: agentType === "subagent",
@@ -278,7 +279,10 @@ export function createAgentWeaveBridgeService() {
                 }
                 fetch(`${proxyBaseUrlForSession}/session`, {
                   method: "POST",
-                  headers: { "Content-Type": "application/json" },
+                  headers: {
+                    "Content-Type": "application/json",
+                    "x-agentweave-session-key": sessionKey,
+                  },
                   body: JSON.stringify(sessionPayload),
                 }).then(() => console.log(`[agentweave-bridge] proxy session set for ${agentType}: ${sessionId}`))
                   .catch(err => console.warn(`[agentweave-bridge] proxy session set failed:`, err.message))
