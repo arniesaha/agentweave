@@ -31,6 +31,9 @@ const PRICING: Record<string, PriceEntry> = {
   "gpt-5.3":                    [ 2.50, 10.00],
   "gpt-5.3-codex":              [ 2.50, 10.00],
   "gpt-5.4":                    [ 2.50, 10.00],
+  "gpt-5.4-mini":               [ 0.25,  2.00],
+  "gpt-5.5":                    [ 2.50, 10.00],
+  "gpt-5.5-mini":               [ 0.25,  2.00],
   // ── MiniMax (official pay-as-you-go, highspeed tier) ──────────────────────
   "minimax-m2.7-highspeed":     [ 0.60,  2.40, 0.06, 0.375],
   "minimax-m2.5-highspeed":     [ 0.60,  2.40, 0.03, 0.375],

@@ -70,6 +70,9 @@ _DEFAULT_PRICING: dict[str, _PriceEntry] = {
     "gpt-5.3":                    (2.50, 10.00),
     "gpt-5.3-codex":              (2.50, 10.00),
     "gpt-5.4":                    (2.50, 10.00),
+    "gpt-5.4-mini":               (0.25,  2.00),
+    "gpt-5.5":                    (2.50, 10.00),
+    "gpt-5.5-mini":               (0.25,  2.00),
 
     # ── MiniMax (input, output, cache_read, cache_write) ─────────────────────
     # Official pay-as-you-go prices: https://platform.minimax.io/docs/guides/pricing-paygo
