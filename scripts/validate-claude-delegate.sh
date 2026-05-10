@@ -13,7 +13,7 @@
 # Env:
 #   AGENTWEAVE_PROXY_URL  default: http://192.168.1.70:30400
 #   TEMPO_API_URL         default: http://192.168.1.70:31989
-#   CLAUDE_BIN            default: claude
+#   CLAUDE_BIN            optional; otherwise wrapper autodetects
 #   VALIDATE_TIMEOUT      default: 60 (seconds to wait for Tempo to index)
 
 set -euo pipefail
@@ -21,7 +21,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROXY_URL="${AGENTWEAVE_PROXY_URL:-http://192.168.1.70:30400}"
 TEMPO_URL="${TEMPO_API_URL:-http://192.168.1.70:31989}"
-CLAUDE_BIN_VAL="${CLAUDE_BIN:-claude}"
 TIMEOUT="${VALIDATE_TIMEOUT:-60}"
 
 PROMPT="say only the word OK"
@@ -49,7 +48,15 @@ TASK="validate-claude-delegate dry run"
 ts "session_id=${SESSION_ID}"
 ts "running claude via wrapper"
 
-CLAUDE_BIN="$CLAUDE_BIN_VAL" "$REPO_ROOT/scripts/claude-delegate.sh" \
+env_args=()
+if [[ -n "${CLAUDE_BIN:-}" ]]; then
+  env_args+=(CLAUDE_BIN="$CLAUDE_BIN")
+fi
+if [[ -n "${CLAUDE_REAL_HOME:-}" ]]; then
+  env_args+=(CLAUDE_REAL_HOME="$CLAUDE_REAL_HOME")
+fi
+
+env "${env_args[@]}" "$REPO_ROOT/scripts/claude-delegate.sh" \
   --agent-id "$AGENT_ID" \
   --session-id "$SESSION_ID" \
   --parent "$PARENT" \

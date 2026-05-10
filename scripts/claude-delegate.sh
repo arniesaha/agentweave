@@ -24,16 +24,36 @@
 #
 # Defaults overridable via env:
 #   AGENTWEAVE_PROXY_URL  (default: http://192.168.1.70:30400)
-#   CLAUDE_BIN            (default: claude on PATH)
-#   CLAUDE_REAL_HOME      (default: $HOME — source of credentials/skills)
+#   CLAUDE_BIN            (default: claude on PATH, then native install)
+#   CLAUDE_REAL_HOME      (default: $HOME, then /home/Arnab if needed)
 #
 # Anything after `--` is forwarded to claude as-is.
 
 set -euo pipefail
 
 PROXY_URL="${AGENTWEAVE_PROXY_URL:-http://192.168.1.70:30400}"
-CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 REAL_HOME="${CLAUDE_REAL_HOME:-$HOME}"
+
+if [[ -z "${CLAUDE_REAL_HOME:-}" && -e /home/Arnab/.claude.json && -e /home/Arnab/.claude/.credentials.json ]]; then
+  REAL_HOME="/home/Arnab"
+fi
+
+if [[ -n "${CLAUDE_BIN:-}" ]]; then
+  CLAUDE_CMD="$CLAUDE_BIN"
+elif command -v claude >/dev/null 2>&1; then
+  CLAUDE_CMD="claude"
+elif [[ -d "$REAL_HOME/.local/share/claude/versions" ]]; then
+  CLAUDE_CMD="$(ls -1t "$REAL_HOME/.local/share/claude/versions"/* 2>/dev/null | head -1 || true)"
+elif [[ -d /home/Arnab/.local/share/claude/versions ]]; then
+  CLAUDE_CMD="$(ls -1t /home/Arnab/.local/share/claude/versions/* 2>/dev/null | head -1 || true)"
+else
+  CLAUDE_CMD=""
+fi
+
+if [[ -z "$CLAUDE_CMD" || ! -x "$CLAUDE_CMD" ]]; then
+  echo "claude-delegate: Claude Code binary not found; set CLAUDE_BIN" >&2
+  exit 2
+fi
 
 agent_id=""
 session_id=""
@@ -95,6 +115,13 @@ for entry in .credentials.json .claude.json agents skills plugins commands mcp-n
   fi
 done
 
+# Claude Code keeps the main account/session metadata at ~/.claude.json
+# outside ~/.claude on native installs. Without this, the private HOME
+# starts unauthenticated even when the real profile is logged in.
+if [[ -e "$REAL_HOME/.claude.json" || -L "$REAL_HOME/.claude.json" ]]; then
+  ln -s "$REAL_HOME/.claude.json" "$TEMP_HOME/.claude.json"
+fi
+
 # Minimal settings.json with our env block.
 cat > "$TEMP_HOME/.claude/settings.json" <<JSON
 {
@@ -111,4 +138,4 @@ ANTHROPIC_BASE_URL="$PROXY_URL" \
 ANTHROPIC_CUSTOM_HEADERS="$headers" \
 AGENTWEAVE_PROXY_URL="$PROXY_URL" \
 HOME="$TEMP_HOME" \
-  exec "$CLAUDE_BIN" "$@"
+  exec "$CLAUDE_CMD" "$@"

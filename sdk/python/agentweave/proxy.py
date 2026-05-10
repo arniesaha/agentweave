@@ -1832,6 +1832,8 @@ def _set_request_attrs(
     # Apply global session context (env-var defaults) — but don't overwrite
     # per-request values that were already set explicitly above.
     _explicit_session_attrs: set[str] = set()
+    if agent_id:
+        _explicit_session_attrs.update({schema.PROV_AGENT_ID, schema.PROV_WAS_ASSOCIATED_WITH})
     if session_id is not None:
         _explicit_session_attrs.update({schema.SESSION_ID, schema.PROV_SESSION_ID})
     if project is not None:
