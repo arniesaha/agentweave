@@ -353,10 +353,15 @@ export function createAgentWeaveBridgeService() {
                   // Force the proxy to attribute LLM calls to this sub-agent session
                   const proxyUrl = normalizeProxyBaseUrl(config.proxyUrl) || "http://192.168.1.70:30400"
                   const mainSessionId = mainKey ? (activeTurns.get(mainKey)?.span as any)?._attributes?.["session.id"] || "nix-main" : "nix-main"
+                  // Issue #189: include session_key so the proxy stores this
+                  // forced context per-key in _forced_session_contexts, instead
+                  // of toggling the legacy global _session_context_force flag
+                  // (which would hijack attribution for unrelated callers).
                   fetch(`${proxyUrl}/session`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
+                      session_key: sessionKey,
                       session_id: sessionId,
                       parent_session_id: mainSessionId,
                       agent_id: subagentId,
@@ -378,12 +383,17 @@ export function createAgentWeaveBridgeService() {
                   turn.span.end()
                   activeTurns.delete(sessionKey)
 
-                  // Restore proxy to main session (clear force)
+                  // Restore proxy to main session — clear the per-key forced
+                  // context for this sessionKey (issue #189). force:false +
+                  // matching session_key removes the entry from
+                  // _forced_session_contexts without touching the legacy
+                  // global flag.
                   const proxyUrl = normalizeProxyBaseUrl(config.proxyUrl) || "http://192.168.1.70:30400"
                   fetch(`${proxyUrl}/session`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
+                      session_key: sessionKey,
                       session_id: "nix-main",
                       agent_type: "main",
                       force: false,
