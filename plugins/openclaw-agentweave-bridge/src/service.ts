@@ -462,6 +462,30 @@ export function createAgentWeaveBridgeService() {
               break
             }
 
+            case "model.call.completed": {
+              // OpenClaw's embedded codex/Responses runner emits this — NOT
+              // `model.usage` (which only fires from the legacy openai-compat
+              // HTTP path). Without a handler, codex turn spans land in
+              // Tempo without `prov.llm.{provider,model}`, so the dashboard's
+              // "Calls by Model" panel can't bucket them.
+              //
+              // The event does NOT carry token counts today, so we only
+              // stamp identity attributes here. Cost stays at whatever
+              // `model.usage` set later in the turn (often 0 for codex
+              // until openclaw enriches this event with usage). Followup
+              // tracked separately.
+              const sessionKey = e.sessionKey ?? ""
+              const sessionId = e.sessionId ?? ""
+              const match = findTurnForModelUsage(sessionKey, sessionId)
+              if (!match) break
+              const provider = e.provider ?? ""
+              const model = e.model ?? ""
+              if (!provider && !model) break
+              if (provider) match.turn.span.setAttribute("prov.llm.provider", provider)
+              if (model) match.turn.span.setAttribute("prov.llm.model", model)
+              break
+            }
+
             case "tool.loop": {
               const sessionKey = e.sessionKey ?? ""
               const turn = activeTurns.get(sessionKey)
