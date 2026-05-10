@@ -48,15 +48,12 @@ TASK="validate-claude-delegate dry run"
 ts "session_id=${SESSION_ID}"
 ts "running claude via wrapper"
 
-env_args=()
-if [[ -n "${CLAUDE_BIN:-}" ]]; then
-  env_args+=(CLAUDE_BIN="$CLAUDE_BIN")
-fi
-if [[ -n "${CLAUDE_REAL_HOME:-}" ]]; then
-  env_args+=(CLAUDE_REAL_HOME="$CLAUDE_REAL_HOME")
-fi
-
-env "${env_args[@]}" "$REPO_ROOT/scripts/claude-delegate.sh" \
+# Run the wrapper inline so CLAUDE_BIN / CLAUDE_REAL_HOME are inherited
+# when set, and otherwise the wrapper's autodetection picks up `claude`
+# from PATH. Calling through `env` with an empty arg list misbehaves on
+# systems whose user-level `env` is a wrapper script (e.g.
+# ~/.local/bin/env that re-exports PATH) — it can swallow the command.
+"$REPO_ROOT/scripts/claude-delegate.sh" \
   --agent-id "$AGENT_ID" \
   --session-id "$SESSION_ID" \
   --parent "$PARENT" \
