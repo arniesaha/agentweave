@@ -1281,6 +1281,154 @@ class TestForcedSessionContextRace:
         """x-agentweave-task-label must not be forwarded upstream."""
         assert "x-agentweave-task-label" in _SKIP_HEADERS_ALWAYS
 
+    def test_legacy_global_force_does_not_override_explicit_header(self, monkeypatch):
+        """Issue #189: when ONLY the legacy global force flag is set (no per-key
+        match) and the request carries an explicit X-AgentWeave-Agent-Id, the
+        explicit header MUST win — otherwise unrelated callers (e.g. a Claude
+        Code Mac dryrun) get hijacked into whatever subagent the bridge most
+        recently forced (e.g. nix-v1).
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import httpx
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        from agentweave.config import AgentWeaveConfig
+
+        # Legacy global force is on, with a global ctx pinning agent_id=nix-v1
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
+        monkeypatch.setattr(proxy_module, "_session_context", {
+            "prov.session.id": "claude-code-main",
+            "prov.agent.id": "nix-v1",
+            "prov.task.label": "subagent agent",
+            "prov.project": "claude-code",
+            "prov.parent.session.id": "nix-main",
+            "prov.agent.type": "subagent",
+        })
+        monkeypatch.setattr(proxy_module, "_session_context_force", True)
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+
+        captured: list[dict] = []
+        original_set_request_attrs = proxy_module._set_request_attrs
+
+        def _capturing(span, **kwargs):
+            captured.append({
+                "session_id": kwargs.get("session_id"),
+                "agent_id": kwargs.get("agent_id"),
+                "task_label": kwargs.get("task_label"),
+                "project": kwargs.get("project"),
+                "parent_session_id": kwargs.get("parent_session_id"),
+                "agent_type": kwargs.get("agent_type"),
+            })
+            return original_set_request_attrs(span, **kwargs)
+
+        fake_data = {
+            "id": "msg3", "type": "message", "role": "assistant", "content": [],
+            "model": "claude-3-haiku-20240307", "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        fake_resp = MagicMock(spec=httpx.Response)
+        fake_resp.status_code = 200
+        fake_resp.headers = {}
+        fake_resp.json.return_value = fake_data
+
+        client_instance = AsyncMock()
+        client_instance.request = AsyncMock(return_value=fake_resp)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client_instance)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm), \
+             patch.object(proxy_module, "_set_request_attrs", side_effect=_capturing):
+            client = TestClient(app)
+            # Mac dryrun: explicit headers, NO session_key
+            client.post(
+                "/v1/messages",
+                json={"model": "claude-3-haiku-20240307", "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "hi"}]},
+                headers={
+                    "x-api-key": "sk-ant-test",
+                    "x-agentweave-agent-id": "claude-code-mac-subagent",
+                    "x-agentweave-session-id": "claude-code-nexus-dryrun-20260510",
+                    "x-agentweave-task-label": "nexus dryrun",
+                    "x-agentweave-project": "nexus",
+                    "x-agentweave-parent-session-id": "nix-main",
+                    "x-agentweave-agent-type": "subagent",
+                },
+            )
+
+        assert len(captured) >= 1
+        c = captured[0]
+        assert c["agent_id"] == "claude-code-mac-subagent", (
+            f"Explicit header must beat legacy global force, got: {c['agent_id']!r}"
+        )
+        assert c["session_id"] == "claude-code-nexus-dryrun-20260510"
+        assert c["task_label"] == "nexus dryrun"
+        assert c["project"] == "nexus"
+        assert c["parent_session_id"] == "nix-main"
+        assert c["agent_type"] == "subagent"
+
+    def test_legacy_global_force_fills_attrs_when_header_missing(self, monkeypatch):
+        """Issue #189: legacy global force still acts as a fallback for
+        attributes the request does NOT supply — preserves backward compat
+        for the few legacy callers that have not migrated to session_key.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import httpx
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        from agentweave.config import AgentWeaveConfig
+
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
+        monkeypatch.setattr(proxy_module, "_session_context", {
+            "prov.session.id": "legacy-fallback-sess",
+            "prov.agent.id": "legacy-fallback-agent",
+        })
+        monkeypatch.setattr(proxy_module, "_session_context_force", True)
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+
+        captured: list[dict] = []
+        original_set_request_attrs = proxy_module._set_request_attrs
+
+        def _capturing(span, **kwargs):
+            captured.append({
+                "session_id": kwargs.get("session_id"),
+                "agent_id": kwargs.get("agent_id"),
+            })
+            return original_set_request_attrs(span, **kwargs)
+
+        fake_data = {
+            "id": "msg4", "type": "message", "role": "assistant", "content": [],
+            "model": "claude-3-haiku-20240307", "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        fake_resp = MagicMock(spec=httpx.Response)
+        fake_resp.status_code = 200
+        fake_resp.headers = {}
+        fake_resp.json.return_value = fake_data
+
+        client_instance = AsyncMock()
+        client_instance.request = AsyncMock(return_value=fake_resp)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client_instance)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm), \
+             patch.object(proxy_module, "_set_request_attrs", side_effect=_capturing):
+            client = TestClient(app)
+            # No attribution headers — fallback chain should fill from legacy ctx
+            client.post(
+                "/v1/messages",
+                json={"model": "claude-3-haiku-20240307", "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "hi"}]},
+                headers={"x-api-key": "sk-ant-test"},
+            )
+
+        assert len(captured) >= 1
+        assert captured[0]["agent_id"] == "legacy-fallback-agent"
+        assert captured[0]["session_id"] == "legacy-fallback-sess"
+
     def test_legacy_force_without_key_still_works(self, monkeypatch):
         """Backward compat: POST /session with force:true and no session_key sets global flag."""
         from fastapi.testclient import TestClient

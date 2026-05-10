@@ -11,6 +11,7 @@
 - Reads `AGENTWEAVE_AGENT_TYPE` from env — auto-tags spans with `prov.agent.type`
 - Session context via `POST /session` or env vars: `AGENTWEAVE_SESSION_ID`, `AGENTWEAVE_PARENT_SESSION_ID`, `AGENTWEAVE_TASK_LABEL`, `AGENTWEAVE_AGENT_TYPE`
 - Prefer per-session-key isolation for concurrent agents: include `session_key` in `POST /session` and send `x-agentweave-session-key` + optional `x-agentweave-task-label` on each proxied LLM request
+- Attribution precedence: explicit per-request headers beat legacy global forced context (issue #189). For delegated Claude Code launches, use `scripts/claude-delegate.sh`. See `docs/attribution-runbook.md`.
 - Sub-agent attribution: `prov.parent.session.id`, `prov.agent.type`, `prov.task.label`
 - traceparent passthrough: reads incoming `traceparent` header, sets `prov.trace.parent` on span, forwards downstream
 - Benchmarks: ~6ms p50 overhead on LLM calls (<2%)

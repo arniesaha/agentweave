@@ -992,15 +992,25 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         else None
     )
     _is_subagent_env = os.getenv("AGENTWEAVE_AGENT_TYPE", "").lower() == "subagent"
-    # _force is True when either a per-key override or the legacy global flag is active.
-    _force = bool(_forced_ctx is not None) or _session_context_force
+    # Issue #189: split per-key force from legacy global force.
+    # _force_per_key: request carries a session_key matching a stored forced
+    #   context — caller explicitly opted in, so this wins over per-request
+    #   headers (preserves bridge-driven subagent attribution).
+    # _force_legacy: legacy global _session_context_force flag is set, but the
+    #   request did NOT match a per-key context. Treat as a low-priority
+    #   FALLBACK only: explicit per-request headers must win, otherwise
+    #   unrelated callers get hijacked by whichever subagent the bridge
+    #   most recently forced (the original #189 symptom).
+    _force_per_key = _forced_ctx is not None
+    _force_legacy = _session_context_force and not _force_per_key
     # _active_ctx is the context dict to read forced attributes from.
-    _active_ctx: dict[str, str] = _forced_ctx if _forced_ctx is not None else _session_context
+    _active_ctx: dict[str, str] = _forced_ctx if _force_per_key else _session_context
 
     agent_id = (
-        (_active_ctx.get("prov.agent.id") if _force else None)
+        (_active_ctx.get("prov.agent.id") if _force_per_key else None)
         or (os.getenv("AGENTWEAVE_AGENT_ID") if _is_subagent_env else None)
         or request.headers.get("x-agentweave-agent-id")
+        or (_active_ctx.get("prov.agent.id") if _force_legacy else None)
         or os.getenv("AGENTWEAVE_AGENT_ID")
         or _config_value("agent_id")
         or "unattributed"
@@ -1012,17 +1022,25 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     )
 
     session_id = (
-        (_active_ctx.get("prov.session.id") if _force else None)
+        (_active_ctx.get("prov.session.id") if _force_per_key else None)
         or (os.getenv("AGENTWEAVE_SESSION_ID") if _is_subagent_env else None)
         or request.headers.get("x-agentweave-session-id")
+        or (_active_ctx.get("prov.session.id") if _force_legacy else None)
         or os.getenv("AGENTWEAVE_SESSION_ID")
     )
     # Only use explicitly set project — do NOT infer from agent_id prefix.
     # Use AGENTWEAVE_PROJECT env var or X-AgentWeave-Project header.
-    project = request.headers.get("x-agentweave-project") or os.getenv("AGENTWEAVE_PROJECT") or None
+    project = (
+        request.headers.get("x-agentweave-project")
+        or (_active_ctx.get("prov.project") if _force_per_key else None)
+        or os.getenv("AGENTWEAVE_PROJECT")
+        or (_active_ctx.get("prov.project") if _force_legacy else None)
+        or None
+    )
     task_label: str | None = (
-        (_active_ctx.get("prov.task.label") if _force else None)
+        (_active_ctx.get("prov.task.label") if _force_per_key else None)
         or request.headers.get("x-agentweave-task-label")
+        or (_active_ctx.get("prov.task.label") if _force_legacy else None)
         or os.getenv("AGENTWEAVE_TASK_LABEL")
         or None
     )
@@ -1057,16 +1075,18 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
 
     # Sub-agent attribution headers (issue #15)
     parent_session_id: str | None = (
-        (_active_ctx.get("prov.parent.session.id") if _force else None)
+        (_active_ctx.get("prov.parent.session.id") if _force_per_key else None)
         or (os.getenv("AGENTWEAVE_PARENT_SESSION_ID") if _is_subagent_env else None)
         or request.headers.get("x-agentweave-parent-session-id")
+        or (_active_ctx.get("prov.parent.session.id") if _force_legacy else None)
         or os.getenv("AGENTWEAVE_PARENT_SESSION_ID")
         or None
     )
     agent_type: str | None = (
-        (_active_ctx.get("prov.agent.type") if _force else None)
+        (_active_ctx.get("prov.agent.type") if _force_per_key else None)
         or (os.getenv("AGENTWEAVE_AGENT_TYPE") if _is_subagent_env else None)
         or request.headers.get("x-agentweave-agent-type")
+        or (_active_ctx.get("prov.agent.type") if _force_legacy else None)
         or os.getenv("AGENTWEAVE_AGENT_TYPE")
         or None
     )
@@ -1153,6 +1173,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         traceparent=traceparent,
         parent_span_id_raw=parent_span_id_raw,
         parent_trace_id_raw=parent_trace_id_raw,
+        task_label=task_label,
     )
 
     try:
