@@ -48,6 +48,8 @@ class TestProvAttributes:
         assert schema.PROV_SESSION_ID == "prov.session.id"
         assert schema.PROV_PROJECT == "prov.project"
         assert schema.PROV_SESSION_TURN == "prov.session.turn"
+        assert schema.PROV_CWD == "prov.cwd"
+        assert schema.PROV_REPOSITORY == "prov.repository"
 
     def test_all_prov_attributes_start_with_prov(self):
         """All PROV_ constants should have values starting with 'prov.'."""

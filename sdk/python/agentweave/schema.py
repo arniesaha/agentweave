@@ -50,6 +50,8 @@ PROV_SESSION_TURN = "prov.session.turn"
 PROV_PARENT_SESSION_ID = "prov.parent.session.id"  # ID of parent session that spawned this sub-agent
 PROV_AGENT_TYPE = "prov.agent.type"                 # "main" | "subagent" | "delegated"
 PROV_TASK_LABEL = "prov.task.label"                 # human-readable task label for session
+PROV_CWD = "prov.cwd"                               # caller working directory
+PROV_REPOSITORY = "prov.repository"                 # enclosing git repository name
 
 # Agent type constants
 AGENT_TYPE_MAIN = "main"

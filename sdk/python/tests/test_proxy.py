@@ -27,6 +27,7 @@ from agentweave.proxy import (
     _set_google_response_attrs,
     _set_openai_response_attrs,
     _set_request_attrs,
+    _detect_repository_name,
     _anthropic_response_text,
     _google_response_text,
     _SKIP_HEADERS_ALWAYS,
@@ -2083,3 +2084,61 @@ class TestParentLinkResolution:
         block = src[idx: idx + 800]
         assert "AGENTWEAVE_PARENT_TRACE_ID" not in block
         assert "AGENTWEAVE_PARENT_SPAN_ID" not in block
+
+class TestRepositoryDetection:
+    def test_detect_repository_name_finds_nearest_git_root(self, tmp_path):
+        repo = tmp_path / "repo-a"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        nested = repo / "sub" / "deep"
+        nested.mkdir(parents=True)
+
+        assert _detect_repository_name(str(nested)) == "repo-a"
+
+    def test_detect_repository_name_returns_none_when_not_in_repo(self, tmp_path):
+        d = tmp_path / "no-repo"
+        d.mkdir()
+        assert _detect_repository_name(str(d)) is None
+
+
+class TestSetRequestAttrsCwdRepository:
+    def test_sets_prov_cwd_and_optional_repository(self, monkeypatch, tmp_path):
+        repo = tmp_path / "myproj"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        monkeypatch.setenv("PWD", str(repo))
+
+        span = _FakeSpan()
+        _set_request_attrs(
+            span,
+            model="gpt-4o",
+            provider="openai",
+            agent_id="nix-v1",
+            agent_model="gpt-4o",
+            path="v1/responses",
+            body={},
+        )
+
+        assert span.attrs["prov.cwd"] == str(repo)
+        assert span.attrs["prov.repository"] == "myproj"
+
+    def test_sets_only_prov_cwd_when_no_repo(self, monkeypatch, tmp_path):
+        d = tmp_path / "scratch"
+        d.mkdir()
+
+        monkeypatch.setenv("PWD", str(d))
+
+        span = _FakeSpan()
+        _set_request_attrs(
+            span,
+            model="gpt-4o",
+            provider="openai",
+            agent_id="nix-v1",
+            agent_model="gpt-4o",
+            path="v1/responses",
+            body={},
+        )
+
+        assert span.attrs["prov.cwd"] == str(d)
+        assert "prov.repository" not in span.attrs

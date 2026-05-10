@@ -52,6 +52,7 @@ import asyncio
 import hashlib
 from collections import OrderedDict
 import json
+import pathlib
 import logging
 import os
 import re
@@ -1726,6 +1727,20 @@ def _maybe_set_response_preview(span: Any, text: str) -> None:
 # Request attributes
 # ---------------------------------------------------------------------------
 
+def _detect_repository_name(cwd: str | None) -> str | None:
+    """Return nearest enclosing git repository name for cwd, if any."""
+    if not cwd:
+        return None
+    try:
+        p = pathlib.Path(cwd).resolve()
+        for candidate in (p, *p.parents):
+            if (candidate / ".git").exists():
+                return candidate.name or None
+    except Exception:
+        return None
+    return None
+
+
 def _set_request_attrs(
     span: Any, model: str, provider: str, agent_id: str, agent_model: str,
     path: str, body: dict,
@@ -1752,6 +1767,14 @@ def _set_request_attrs(
         span.set_attribute(schema.PROV_SESSION_TURN, turn)
     if det_trace_id_raw is not None:
         span.set_attribute(schema.AGENTWEAVE_TRACE_ID, det_trace_id_raw)
+
+    # Invocation environment context (issue #181)
+    cwd = os.getenv("PWD") or os.getcwd()
+    if cwd:
+        span.set_attribute(schema.PROV_CWD, cwd)
+        repository = _detect_repository_name(cwd)
+        if repository:
+            span.set_attribute(schema.PROV_REPOSITORY, repository)
 
     # Sub-agent attribution (issue #15)
     if parent_session_id is not None:
