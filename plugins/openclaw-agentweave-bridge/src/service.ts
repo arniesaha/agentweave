@@ -4,7 +4,7 @@ import { NodeSDK } from "@opentelemetry/sdk-node"
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import { BatchSpanProcessor, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base"
 // @ts-ignore — provided by host at runtime, not in plugin's local node_modules
-import { onDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
+import { onDiagnosticEvent, onModelDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
 import { resolveCost } from "./pricing.js"
 
 interface ActiveTurn {
@@ -98,12 +98,35 @@ function initSdk(config: BridgeConfig): void {
 }
 
 function subscribeToDiagnosticEvents(listener: (evt: unknown) => void): () => void {
-  // openclaw/plugin-sdk's onDiagnosticEvent registers against the
-  // Symbol-keyed state added in OpenClaw v2026.5.x, replacing the
-  // string-keyed globalThis singleton this plugin used to poke directly.
-  const unsubscribe = (onDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(listener)
+  // Two openclaw plugin-sdk subscriptions:
+  //
+  // 1. `onDiagnosticEvent` covers the public (untrusted) event stream —
+  //    message/session lifecycle, queue events, etc. used to manage spans.
+  // 2. `onModelDiagnosticEvent` is the narrow opt-in over the trusted
+  //    `model.*` family (call.started/completed/error, usage, failover).
+  //    Without it, the embedded codex runner's `model.call.completed`
+  //    events never reach the bridge and codex turn spans land in
+  //    AgentWeave without `prov.llm.{provider,model}` (issue: codex traffic
+  //    silently buckets as "unknown" on the dashboard).
+  //
+  // `onModelDiagnosticEvent` was added to the plugin-sdk in a separate
+  // openclaw PR; older runtimes export only `onDiagnosticEvent`, so we
+  // guard the call to keep the bridge compatible.
+  const unsubMain = (onDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(listener)
   console.log("[agentweave-bridge] subscribed to diagnostic events via plugin-sdk")
-  return unsubscribe
+  let unsubModel: (() => void) | undefined
+  if (typeof onModelDiagnosticEvent === "function") {
+    unsubModel = (onModelDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(listener)
+    console.log("[agentweave-bridge] subscribed to model.* trusted events via plugin-sdk")
+  } else {
+    console.warn(
+      "[agentweave-bridge] openclaw plugin-sdk is missing onModelDiagnosticEvent — codex turn spans will not be enriched with prov.llm.model. Upgrade openclaw to a build that exports it.",
+    )
+  }
+  return () => {
+    unsubMain()
+    if (unsubModel) unsubModel()
+  }
 }
 
 function getSpanSessionId(turn: ActiveTurn): string | undefined {
