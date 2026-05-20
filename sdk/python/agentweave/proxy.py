@@ -1006,14 +1006,19 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     # _active_ctx is the context dict to read forced attributes from.
     _active_ctx: dict[str, str] = _forced_ctx if _force_per_key else _session_context
 
-    agent_id = (
-        (_active_ctx.get("prov.agent.id") if _force_per_key else None)
-        or (os.getenv("AGENTWEAVE_AGENT_ID") if _is_subagent_env else None)
-        or request.headers.get("x-agentweave-agent-id")
-        or (_active_ctx.get("prov.agent.id") if _force_legacy else None)
-        or os.getenv("AGENTWEAVE_AGENT_ID")
-        or _config_value("agent_id")
-        or "unattributed"
+    # The literal "unattributed" sentinel is treated as a no-op so it can't
+    # short-circuit the project-qualified fallback below — defends against
+    # stale configmaps / env defaults that hard-code the sentinel (#199).
+    def _real(v):
+        return v if v and v != "unattributed" else None
+
+    _agent_id_resolved = (
+        (_real(_active_ctx.get("prov.agent.id")) if _force_per_key else None)
+        or (_real(os.getenv("AGENTWEAVE_AGENT_ID")) if _is_subagent_env else None)
+        or _real(request.headers.get("x-agentweave-agent-id"))
+        or (_real(_active_ctx.get("prov.agent.id")) if _force_legacy else None)
+        or _real(os.getenv("AGENTWEAVE_AGENT_ID"))
+        or _real(_config_value("agent_id"))
     )
     agent_model = (
         request.headers.get("x-agentweave-agent-model")
@@ -1036,6 +1041,12 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         or os.getenv("AGENTWEAVE_PROJECT")
         or (_active_ctx.get("prov.project") if _force_legacy else None)
         or None
+    )
+    # When attribution is missing but we still know the project, qualify the
+    # fallback so the dashboard's "unattributed" bucket self-identifies its
+    # source instead of grouping every leak under one opaque label (#199).
+    agent_id = _agent_id_resolved or (
+        f"unattributed:{project}" if project else "unattributed"
     )
     task_label: str | None = (
         (_active_ctx.get("prov.task.label") if _force_per_key else None)

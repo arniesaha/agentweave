@@ -1858,6 +1858,87 @@ class TestAttributeResolution:
         )
         assert agent_id == "unattributed"
 
+    def _capture_agent_id(self, monkeypatch, *, project_header=None, project_env=None, agent_id_env=None):
+        """Helper: drive the real proxy with no attribution and capture agent_id."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import httpx
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        from agentweave.config import AgentWeaveConfig
+
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
+        monkeypatch.setattr(proxy_module, "_session_context", {})
+        monkeypatch.setattr(proxy_module, "_session_context_force", False)
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        if agent_id_env is not None:
+            monkeypatch.setenv("AGENTWEAVE_AGENT_ID", agent_id_env)
+        else:
+            monkeypatch.delenv("AGENTWEAVE_AGENT_ID", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_AGENT_TYPE", raising=False)
+        if project_env is not None:
+            monkeypatch.setenv("AGENTWEAVE_PROJECT", project_env)
+        else:
+            monkeypatch.delenv("AGENTWEAVE_PROJECT", raising=False)
+
+        captured: list[dict] = []
+        original_set_request_attrs = proxy_module._set_request_attrs
+
+        def _capturing(span, **kwargs):
+            captured.append({"agent_id": kwargs.get("agent_id")})
+            return original_set_request_attrs(span, **kwargs)
+
+        fake_data = {
+            "id": "msg-fallback", "type": "message", "role": "assistant", "content": [],
+            "model": "claude-3-haiku-20240307", "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        fake_resp = MagicMock(spec=httpx.Response)
+        fake_resp.status_code = 200
+        fake_resp.headers = {}
+        fake_resp.json.return_value = fake_data
+        client_instance = AsyncMock()
+        client_instance.request = AsyncMock(return_value=fake_resp)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client_instance)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        req_headers = {"x-api-key": "sk-ant-test"}
+        if project_header is not None:
+            req_headers["x-agentweave-project"] = project_header
+
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm), \
+             patch.object(proxy_module, "_set_request_attrs", side_effect=_capturing):
+            TestClient(app).post(
+                "/v1/messages",
+                json={"model": "claude-3-haiku-20240307", "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "hi"}]},
+                headers=req_headers,
+            )
+        assert captured, "expected at least one set_request_attrs call"
+        return captured[0]["agent_id"]
+
+    def test_unattributed_fallback_qualified_by_project_env(self, monkeypatch):
+        """#199: when no attribution header, fallback carries project label."""
+        agent_id = self._capture_agent_id(monkeypatch, project_env="nix")
+        assert agent_id == "unattributed:nix"
+
+    def test_unattributed_fallback_qualified_by_project_header(self, monkeypatch):
+        agent_id = self._capture_agent_id(monkeypatch, project_header="nix")
+        assert agent_id == "unattributed:nix"
+
+    def test_unattributed_fallback_bare_when_no_project(self, monkeypatch):
+        agent_id = self._capture_agent_id(monkeypatch)
+        assert agent_id == "unattributed"
+
+    def test_unattributed_sentinel_in_env_treated_as_no_attribution(self, monkeypatch):
+        """A stale configmap setting AGENTWEAVE_AGENT_ID='unattributed' must
+        not short-circuit the project-qualified fallback (#199)."""
+        agent_id = self._capture_agent_id(
+            monkeypatch, project_env="nix", agent_id_env="unattributed"
+        )
+        assert agent_id == "unattributed:nix"
+
     def test_session_id_from_header_over_env(self, monkeypatch):
         monkeypatch.setenv("AGENTWEAVE_SESSION_ID", "env-session")
         headers = {"x-agentweave-session-id": "header-session"}

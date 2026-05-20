@@ -7,9 +7,10 @@ data:
   # OTLP HTTP endpoint for trace export
   AGENTWEAVE_OTLP_ENDPOINT: "http://tempo.monitoring.svc.cluster.local:4318"
 
-  # Fallback agent ID when request has no X-AgentWeave-Agent-Id header.
-  # Per-request headers take precedence (see proxy.py attribute resolution).
-  AGENTWEAVE_AGENT_ID: "unattributed"
+  # AGENTWEAVE_AGENT_ID intentionally unset. proxy.py already falls back to
+  # "unattributed" (or "unattributed:<project>" when project is known, #199)
+  # when no per-request header/env is present. Setting a literal default here
+  # would short-circuit the qualified fallback.
 
   # Capture prompt/response previews in spans for session replay
   AGENTWEAVE_CAPTURE_PROMPTS: "1"
