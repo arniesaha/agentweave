@@ -1858,7 +1858,7 @@ class TestAttributeResolution:
         )
         assert agent_id == "unattributed"
 
-    def _capture_agent_id(self, monkeypatch, *, project_header=None, project_env=None):
+    def _capture_agent_id(self, monkeypatch, *, project_header=None, project_env=None, agent_id_env=None):
         """Helper: drive the real proxy with no attribution and capture agent_id."""
         from unittest.mock import AsyncMock, MagicMock, patch
         import httpx
@@ -1871,7 +1871,10 @@ class TestAttributeResolution:
         monkeypatch.setattr(proxy_module, "_session_context_force", False)
         monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
-        monkeypatch.delenv("AGENTWEAVE_AGENT_ID", raising=False)
+        if agent_id_env is not None:
+            monkeypatch.setenv("AGENTWEAVE_AGENT_ID", agent_id_env)
+        else:
+            monkeypatch.delenv("AGENTWEAVE_AGENT_ID", raising=False)
         monkeypatch.delenv("AGENTWEAVE_AGENT_TYPE", raising=False)
         if project_env is not None:
             monkeypatch.setenv("AGENTWEAVE_PROJECT", project_env)
@@ -1927,6 +1930,14 @@ class TestAttributeResolution:
     def test_unattributed_fallback_bare_when_no_project(self, monkeypatch):
         agent_id = self._capture_agent_id(monkeypatch)
         assert agent_id == "unattributed"
+
+    def test_unattributed_sentinel_in_env_treated_as_no_attribution(self, monkeypatch):
+        """A stale configmap setting AGENTWEAVE_AGENT_ID='unattributed' must
+        not short-circuit the project-qualified fallback (#199)."""
+        agent_id = self._capture_agent_id(
+            monkeypatch, project_env="nix", agent_id_env="unattributed"
+        )
+        assert agent_id == "unattributed:nix"
 
     def test_session_id_from_header_over_env(self, monkeypatch):
         monkeypatch.setenv("AGENTWEAVE_SESSION_ID", "env-session")
