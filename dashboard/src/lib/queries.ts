@@ -50,6 +50,7 @@ export const TEMPO_SERVICE_FILTER = `(${TEMPO_SERVICES.map(
   (s) => `resource.service.name = "${s}"`,
 ).join(' || ')})`
 export const PROM_SERVICE_REGEX = TEMPO_SERVICES.join('|')
+const PROM_LLM_SPAN_FILTER = `service=~"${PROM_SERVICE_REGEX}",prov_llm_model=~".+"`
 
 export function tempoSearchQuery(project?: string): string {
   // select() fetches span attributes; used for both trace table and stat card aggregation.
@@ -72,21 +73,21 @@ export function tempoSearchQuery(project?: string): string {
 // ─── Prometheus Queries ───────────────────────────────────────────────────────
 
 export function promLLMCallsRateQuery(): string {
-  return `sum by (prov_llm_model) (rate(traces_spanmetrics_calls_total{service=~"${PROM_SERVICE_REGEX}"}[5m])) * 300`
+  return `sum by (prov_llm_model) (rate(traces_spanmetrics_calls_total{${PROM_LLM_SPAN_FILTER}}[5m])) * 300`
 }
 
 export function promCallsByModelQuery(range: TimeRange): string {
   const seconds = getTimeRangeSeconds(range)
-  return `sum by (prov_llm_model) (increase(traces_spanmetrics_calls_total{service=~"${PROM_SERVICE_REGEX}"}[${seconds}s]))`
+  return `sum by (prov_llm_model) (increase(traces_spanmetrics_calls_total{${PROM_LLM_SPAN_FILTER}}[${seconds}s]))`
 }
 
 export function promP95LatencyByModelQuery(): string {
-  return `histogram_quantile(0.95, sum by (le, prov_llm_model) (rate(traces_spanmetrics_latency_bucket{service=~"${PROM_SERVICE_REGEX}"}[5m]))) * 1000`
+  return `histogram_quantile(0.95, sum by (le, prov_llm_model) (rate(traces_spanmetrics_latency_bucket{${PROM_LLM_SPAN_FILTER}}[5m]))) * 1000`
 }
 
 export function promCallsByAgentQuery(range: TimeRange): string {
   const seconds = getTimeRangeSeconds(range)
-  return `sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{service=~"${PROM_SERVICE_REGEX}"}[${seconds}s]))`
+  return `sum by (prov_agent_id) (increase(traces_spanmetrics_calls_total{${PROM_LLM_SPAN_FILTER}}[${seconds}s]))`
 }
 
 // ─── Client-side cost aggregation (from Tempo trace data) ────────────────────
@@ -395,7 +396,7 @@ export function tempoAgentAttributionQuery(): string {
 /** TraceQL search for session graph: fetches all spans with session identity attributes. */
 export function tempoSessionGraphQuery(): string {
   return (
-    `{ ${TEMPO_SERVICE_FILTER} && span.prov.activity.type = "llm_call" }` +
+    `{ ${TEMPO_SERVICE_FILTER} && (span.prov.activity.type = "llm_call" || span.prov.activity.type = "agent_turn") }` +
     ` | select(span.prov.session.id, span.session.id, span.prov.parent.session.id, span.prov.task.label,` +
     ` span.prov.agent.id, span.prov.agent.type, span.cost.usd, span.prov.llm.model,` +
     ` span.prov.llm.prompt_tokens, span.prov.llm.completion_tokens, span.prov.project)`
