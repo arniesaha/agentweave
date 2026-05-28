@@ -13,6 +13,7 @@ import os
 import platform
 import sys
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urlunparse
@@ -85,6 +86,7 @@ def run_doctor(
     checks.append(_check_otlp_endpoint(effective_env))
     checks.extend(_check_identity_env(effective_env))
     checks.append(_check_proxy_token(effective_env))
+    checks.append(_check_openclaw_bridge(effective_env))
     checks.append(_check_proxy_health(effective_env, proxy_url, timeout_seconds) if check_proxy else _check_proxy_health_skipped())
     return checks
 
@@ -245,6 +247,83 @@ def _check_proxy_token(env: Mapping[str, str]) -> DoctorCheck:
     )
 
 
+def _check_openclaw_bridge(env: Mapping[str, str]) -> DoctorCheck:
+    config_path = _openclaw_config_path(env)
+    has_openclaw_hint = _has_openclaw_hint(env, config_path)
+    has_agentweave_hint = _has_agentweave_hint(env)
+
+    if not has_openclaw_hint:
+        return DoctorCheck(
+            name="openclaw.bridge",
+            status=PASS,
+            message="OpenClaw config was not detected.",
+        )
+
+    if not config_path or not config_path.exists():
+        status = WARN if has_agentweave_hint else PASS
+        return DoctorCheck(
+            name="openclaw.bridge",
+            status=status,
+            message="OpenClaw hints are present, but openclaw.json was not found.",
+            suggestion=(
+                "Set OPENCLAW_CONFIG_PATH or install the agentweave-bridge plugin in ~/.openclaw/openclaw.json."
+                if status == WARN
+                else None
+            ),
+            details={"config_path": str(config_path) if config_path else None},
+        )
+
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return DoctorCheck(
+            name="openclaw.bridge",
+            status=WARN,
+            message=f"OpenClaw config could not be read: {exc}.",
+            suggestion="Check openclaw.json permissions, then rerun `agentweave doctor`.",
+            details={"config_path": str(config_path)},
+        )
+    except json.JSONDecodeError as exc:
+        return DoctorCheck(
+            name="openclaw.bridge",
+            status=WARN,
+            message=f"OpenClaw config is not valid JSON: {exc.msg}.",
+            suggestion="Fix openclaw.json, then rerun `agentweave doctor`.",
+            details={"config_path": str(config_path), "line": exc.lineno, "column": exc.colno},
+        )
+
+    bridge_entry = _find_openclaw_bridge_entry(config)
+    if bridge_entry is None:
+        status = WARN if has_agentweave_hint else PASS
+        return DoctorCheck(
+            name="openclaw.bridge",
+            status=status,
+            message="OpenClaw config does not include the agentweave-bridge plugin.",
+            suggestion=(
+                "Install plugins/openclaw-agentweave-bridge and add it under plugins.entries in openclaw.json."
+                if status == WARN
+                else None
+            ),
+            details={"config_path": str(config_path)},
+        )
+
+    if _bridge_entry_disabled(bridge_entry):
+        return DoctorCheck(
+            name="openclaw.bridge",
+            status=WARN,
+            message="OpenClaw agentweave-bridge plugin is configured but disabled.",
+            suggestion="Set the bridge plugin config `enabled` value to true and restart OpenClaw.",
+            details={"config_path": str(config_path)},
+        )
+
+    return DoctorCheck(
+        name="openclaw.bridge",
+        status=PASS,
+        message="OpenClaw agentweave-bridge plugin is configured.",
+        details={"config_path": str(config_path)},
+    )
+
+
 def _check_proxy_health_skipped() -> DoctorCheck:
     return DoctorCheck(
         name="proxy.health",
@@ -326,6 +405,74 @@ def _first_provider_url(env: Mapping[str, str]) -> str | None:
         if value:
             return value
     return None
+
+
+def _has_agentweave_hint(env: Mapping[str, str]) -> bool:
+    if any(env.get(name, "").strip() for name in PROVIDER_BASE_URLS):
+        return True
+    return any(name.startswith("AGENTWEAVE_") and value.strip() for name, value in env.items())
+
+
+def _has_openclaw_hint(env: Mapping[str, str], config_path: Path | None) -> bool:
+    if any(name.startswith("OPENCLAW_") and value.strip() for name, value in env.items()):
+        return True
+    return bool(config_path and config_path.exists())
+
+
+def _openclaw_config_path(env: Mapping[str, str]) -> Path | None:
+    explicit_path = env.get("OPENCLAW_CONFIG_PATH", "").strip() or env.get("OPENCLAW_CONFIG", "").strip()
+    if explicit_path:
+        return Path(explicit_path).expanduser()
+
+    openclaw_home = env.get("OPENCLAW_HOME", "").strip()
+    if openclaw_home:
+        return Path(openclaw_home).expanduser() / "openclaw.json"
+
+    home = env.get("HOME", "").strip()
+    if not home:
+        return None
+    return Path(home).expanduser() / ".openclaw" / "openclaw.json"
+
+
+def _find_openclaw_bridge_entry(config: object) -> object | None:
+    if not isinstance(config, dict):
+        return None
+    plugins = config.get("plugins")
+    if not isinstance(plugins, dict):
+        return None
+    entries = plugins.get("entries")
+    if not isinstance(entries, dict):
+        return None
+
+    for name, entry in entries.items():
+        if _looks_like_bridge_reference(name) or _entry_references_bridge(entry):
+            return entry
+    return None
+
+
+def _entry_references_bridge(entry: object) -> bool:
+    if isinstance(entry, str):
+        return _looks_like_bridge_reference(entry)
+    if not isinstance(entry, dict):
+        return False
+    return any(
+        _looks_like_bridge_reference(str(entry.get(key, "")))
+        for key in ("id", "name", "package", "path")
+    )
+
+
+def _looks_like_bridge_reference(value: str) -> bool:
+    normalized = value.lower()
+    return "agentweave-bridge" in normalized or "openclaw-agentweave-bridge" in normalized
+
+
+def _bridge_entry_disabled(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("enabled") is False:
+        return True
+    config = entry.get("config")
+    return isinstance(config, dict) and config.get("enabled") is False
 
 
 def _proxy_root_url(value: str) -> str:

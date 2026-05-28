@@ -133,6 +133,24 @@ function getSpanSessionId(turn: ActiveTurn): string | undefined {
   return (turn.span as any)?._attributes?.["session.id"] as string | undefined
 }
 
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") continue
+    const trimmed = value.trim()
+    if (trimmed) return trimmed
+  }
+  return undefined
+}
+
+function applyExecutionContextAttrs(span: Span, evt: Record<string, unknown>): void {
+  const rawData = (evt.raw_data ?? evt.rawData) as Record<string, unknown> | undefined
+  const cwd = firstString(evt.cwd, rawData?.cwd)
+  const repository = firstString(evt.repository, rawData?.repository)
+
+  if (cwd) span.setAttribute("prov.cwd", cwd)
+  if (repository) span.setAttribute("prov.repository", repository)
+}
+
 function findTurnForModelUsage(sessionKey: string, sessionId: string): { key: string; turn: ActiveTurn; reason: string } | null {
   const activeKeys = Array.from(activeTurns.keys())
 
@@ -198,7 +216,7 @@ export function createAgentWeaveBridgeService() {
       initSdk(config)
 
       unsubscribe = subscribeToDiagnosticEvents((evt: unknown) => {
-        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string }
+        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string; cwd?: string; repository?: string; raw_data?: { cwd?: string; repository?: string }; rawData?: { cwd?: string; repository?: string } }
         console.log("[agentweave-bridge] event:", e.type, "sessionKey:", e.sessionKey, "source:", e.source)
         try {
           switch (e.type) {
@@ -224,6 +242,7 @@ export function createAgentWeaveBridgeService() {
               if (config.project) span.setAttribute("prov.project", config.project)
               const taskLabel = e.taskLabel?.trim()
               if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
+              applyExecutionContextAttrs(span, e as Record<string, unknown>)
 
               // Link sub-agent to parent session
               if (agentType === "subagent") {
@@ -360,6 +379,7 @@ export function createAgentWeaveBridgeService() {
                   span.setAttribute("prov.agent.type", "subagent")
                   span.setAttribute("prov.activity.type", "agent_turn")
                   if (config.project) span.setAttribute("prov.project", config.project)
+                  applyExecutionContextAttrs(span, e as Record<string, unknown>)
                   // Link to active main session as parent
                   const mainKey = Array.from(activeTurns.keys()).find(k =>
                     k.startsWith("agent:main:") && !k.includes(":subagent:"))
