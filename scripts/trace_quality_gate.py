@@ -57,6 +57,8 @@ class SpanRecord:
             return True
         if self.span_name.startswith("llm."):
             return True
+        if self.is_lifecycle():
+            return False
         return bool(self.model.strip())
 
     def is_lifecycle(self) -> bool:
@@ -311,7 +313,7 @@ def evaluate(records: list[SpanRecord]) -> dict[str, Any]:
                 )
             )
 
-        if model and SUSPICIOUS_MODEL_RE.search(model):
+        if is_llm and model and SUSPICIOUS_MODEL_RE.search(model):
             failures.append(
                 issue(
                     "fail",

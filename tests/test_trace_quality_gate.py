@@ -80,6 +80,25 @@ def test_blank_model_lifecycle_span_is_info_not_failure():
     assert report["info"][0]["code"] == "blank_model_lifecycle_span"
 
 
+def test_model_label_on_lifecycle_span_is_not_llm_warning():
+    report = trace_quality_gate.evaluate(
+        [
+            SpanRecord(
+                source="fixture",
+                service="agentweave-proxy",
+                span_name="openclaw.turn",
+                activity_type="",
+                model="gpt-5.5",
+                agent_id="nix-v1",
+            )
+        ]
+    )
+
+    assert report["status"] == "pass"
+    assert report["summary"]["llm_records"] == 0
+    assert not report["warnings"]
+
+
 def test_tempo_fixture_parsing_preserves_attributes():
     payload = {
         "traces": [

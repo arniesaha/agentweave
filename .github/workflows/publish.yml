@@ -35,7 +35,7 @@ jobs:
         run: pytest
 
   publish-pypi:
-    needs: test-python
+    needs: [test-python, preflights]
     runs-on: ubuntu-latest
     environment: pypi
     steps:
@@ -79,7 +79,7 @@ jobs:
         run: npx jest --verbose
 
   publish-npm:
-    needs: test-js
+    needs: [test-js, preflights]
     runs-on: ubuntu-latest
     environment: npm
     steps:
@@ -124,9 +124,30 @@ jobs:
         working-directory: sdk/go
         run: go vet ./...
 
+  preflights:
+    name: Repository preflights
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate compatibility smoke script
+        run: |
+          bash -n scripts/compatibility-smoke.sh
+          scripts/compatibility-smoke.sh
+
+      - name: Validate trace quality gate
+        run: |
+          python -m py_compile scripts/trace_quality_gate.py tests/test_trace_quality_gate.py
+          python -m pytest tests/test_trace_quality_gate.py
+
   # ── Docker ──────────────────────────────────────────────
   docker:
-    needs: test-python
+    needs: [test-python, preflights]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

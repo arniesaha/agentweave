@@ -15,7 +15,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from typing import Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from urllib.request import urlopen
 
 
@@ -274,7 +274,7 @@ def _check_proxy_health(env: Mapping[str, str], proxy_url: str | None, timeout_s
             details={"value": base_url},
         )
 
-    health_url = f"{base_url.rstrip('/')}/health"
+    health_url = f"{_proxy_root_url(base_url)}/health"
     try:
         with urlopen(health_url, timeout=timeout_seconds) as response:
             status_code = int(getattr(response, "status", 200))
@@ -326,6 +326,23 @@ def _first_provider_url(env: Mapping[str, str]) -> str | None:
         if value:
             return value
     return None
+
+
+def _proxy_root_url(value: str) -> str:
+    """Return the proxy origin/root URL even when a provider URL includes /v1.
+
+    Users naturally pass provider base URLs like ``http://localhost:4000/v1``
+    to doctor because those are the values used by Anthropic/OpenAI SDKs. The
+    proxy health endpoint lives at ``/health`` on the proxy root, not under the
+    provider API prefix.
+    """
+    parsed = urlparse(value)
+    path = parsed.path.rstrip("/")
+    for suffix in ("/v1", "/v1beta"):
+        if path == suffix or path.endswith(suffix):
+            path = path[: -len(suffix)]
+            break
+    return urlunparse((parsed.scheme, parsed.netloc, path.rstrip("/"), "", "", "")).rstrip("/")
 
 
 def _url_validation_error(value: str) -> str | None:

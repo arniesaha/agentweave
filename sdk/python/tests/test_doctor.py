@@ -91,6 +91,8 @@ def test_doctor_json_exit_nonzero_on_hard_failure(monkeypatch):
 def test_doctor_healthy_with_proxy_check(monkeypatch):
     import agentweave.doctor as doctor_module
 
+    seen_urls = []
+
     class FakeResponse:
         status = 200
 
@@ -104,12 +106,19 @@ def test_doctor_healthy_with_proxy_check(monkeypatch):
             return b'{"ok": true}'
 
     monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.3.0")
-    monkeypatch.setattr(doctor_module, "urlopen", lambda url, timeout: FakeResponse())
+    def fake_urlopen(url, timeout):
+        seen_urls.append(url)
+        return FakeResponse()
 
-    checks = doctor_module.run_doctor(env=_healthy_env(), check_proxy=True)
+    monkeypatch.setattr(doctor_module, "urlopen", fake_urlopen)
+
+    checks = doctor_module.run_doctor(
+        env=_healthy_env(), check_proxy=True, proxy_url="http://localhost:4000/v1"
+    )
 
     assert {check.status for check in checks} == {"pass"}
     assert not doctor_module.has_failures(checks)
+    assert seen_urls == ["http://localhost:4000/health"]
 
 
 def test_doctor_unreachable_proxy_is_warning(monkeypatch):

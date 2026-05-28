@@ -87,3 +87,25 @@ jobs:
       - name: Run tests
         working-directory: plugins/openclaw-agentweave-bridge
         run: npm test
+
+  preflights:
+    name: Repository preflights
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate compatibility smoke script
+        run: |
+          bash -n scripts/compatibility-smoke.sh
+          scripts/compatibility-smoke.sh
+
+      - name: Validate trace quality gate
+        run: |
+          python -m py_compile scripts/trace_quality_gate.py tests/test_trace_quality_gate.py
+          python -m pytest tests/test_trace_quality_gate.py
