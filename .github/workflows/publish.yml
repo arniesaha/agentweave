@@ -138,7 +138,7 @@ jobs:
       - name: Validate compatibility smoke script
         run: |
           bash -n scripts/compatibility-smoke.sh
-          scripts/compatibility-smoke.sh
+          bash scripts/compatibility-smoke.sh
 
       - name: Validate trace quality gate
         run: |
