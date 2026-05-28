@@ -15,8 +15,8 @@ AgentWeave is currently in **0.x.y pre-release**. During this phase:
 
 | Component | Current Version | Location |
 |-----------|----------------|----------|
-| Proxy + Python SDK | `0.3.0` | `sdk/python/pyproject.toml`, `sdk/python/agentweave/__init__.py`, `sdk/python/agentweave/proxy.py` |
-| TypeScript SDK | `0.3.0` | `sdk/js/package.json` |
+| Proxy + Python SDK | `0.3.1` | `sdk/python/pyproject.toml`, `sdk/python/agentweave/__init__.py`, `sdk/python/agentweave/proxy.py` |
+| TypeScript SDK | `0.3.1` | `sdk/js/package.json` |
 | Go SDK | `v0.x.y` | `sdk/go/go.mod` (tag-based) |
 | Docker image | matches proxy version | built from `deploy/docker/Dockerfile` |
 

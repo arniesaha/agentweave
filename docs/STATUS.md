@@ -8,8 +8,8 @@ AgentWeave is in developer preview on the `0.3.x` line.
 
 | Component | Current version/source | Status |
 |---|---:|---|
-| Python SDK / proxy | `0.3.0` in `sdk/python/pyproject.toml` | Active |
-| TypeScript SDK | `0.3.0` in `sdk/js/package.json` | Active |
+| Python SDK / proxy | `0.3.1` in `sdk/python/pyproject.toml` | Active |
+| TypeScript SDK | `0.3.1` in `sdk/js/package.json` | Active |
 | Go SDK | tag-based module `github.com/arniesaha/agentweave-go` | Preview |
 | Dashboard | built from `dashboard/` | Dogfooded |
 
