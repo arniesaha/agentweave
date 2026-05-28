@@ -21,16 +21,23 @@ agent.nix                          94ms
 
 ```mermaid
 graph LR
-    subgraph Agents["Agents — proxy mode"]
-        A1["Anthropic Agent"]
-        A2["Gemini Agent"]
-        A3["OpenAI Agent"]
+    subgraph Runtimes["Agent runtimes"]
+        CC["Claude Code / OpenClaw"]
+        FW["LangGraph / CrewAI / AutoGen"]
+        APP["Custom Python / JS / Go agents"]
     end
 
-    SDK["Any Agent — SDK decorators / auto_instrument()"]
+    subgraph Instrumentation["Instrumentation paths"]
+        DEC["SDK decorators"]
+        AUTO["auto_instrument()"]
+        BRIDGE["Runtime bridge headers"]
+        P["Provider proxy :4000"]
+    end
 
-    subgraph Proxy["AgentWeave Proxy :4000"]
-        P["Multi-Provider Proxy"]
+    subgraph Contract["AgentWeave span contract"]
+        CTX["session + parent session"]
+        ATTR["prov.* + gen_ai.* attributes"]
+        COST["tokens + cache + cost"]
     end
 
     subgraph LLMs["Upstream LLMs"]
@@ -44,21 +51,29 @@ graph LR
         GR["AgentWeave Dashboard"]
     end
 
-    A1 -- "ANTHROPIC_BASE_URL" --> P
-    A2 -- "GOOGLE_GENAI_BASE_URL" --> P
-    A3 -- "OPENAI_BASE_URL" --> P
-    SDK -- "OTel spans" --> OT
+    CC --> BRIDGE
+    FW --> AUTO
+    APP --> DEC
+    CC -- "ANTHROPIC_BASE_URL" --> P
+    FW -- "OPENAI_BASE_URL / GOOGLE_GENAI_BASE_URL" --> P
+
+    DEC --> CTX
+    AUTO --> CTX
+    BRIDGE --> CTX
+    P --> CTX
+    CTX --> ATTR
+    ATTR --> COST
 
     P -- "/v1/messages" --> AN
     P -- "/v1beta/models/*" --> GO
     P -- "/v1/chat/completions" --> OA
-    P -- "OTel spans" --> OT
+    COST -- "OTel spans" --> OT
     OT --> GR
 ```
 
 **Three paths to instrumentation:**
 
-1. **Auto-instrumentation** (`auto_instrument()`) — one call patches Anthropic and OpenAI SDKs. No decorators needed.
+1. **Auto-instrumentation** (`auto_instrument()`) — one call patches Anthropic, OpenAI, and Google GenAI SDKs. No decorators needed.
 2. **Decorators** (`@trace_agent`, `@trace_llm`, `@trace_tool`) — wrap your functions directly in Python, TypeScript, or Go. Zero infrastructure needed.
 3. **Proxy** — point any agent's base URL at AgentWeave. It auto-detects the provider, forwards upstream, extracts token counts, and emits OTel spans. No code changes.
 
@@ -150,10 +165,9 @@ for the public developer-preview path.
 ```python
 from agentweave import auto_instrument
 
-auto_instrument()  # patches Anthropic + OpenAI SDKs automatically
+auto_instrument()  # patches Anthropic, OpenAI, and Google GenAI SDKs automatically
 
-# Every client.messages.create() and client.chat.completions.create()
-# now emits OTel spans with token counts — no wrappers needed.
+# Supported SDK calls now emit OTel spans with token counts — no wrappers needed.
 ```
 
 ### Option B — Decorators (explicit control)
@@ -207,10 +221,11 @@ auto_instrument(captures_output=True)          # include response preview
 uninstrument()                                 # restore originals
 ```
 
-- Supports **Anthropic** (`Messages.create`) and **OpenAI** (`Completions.create`), sync + async
+- Direct mode supports **Anthropic**, **OpenAI**, and **Google GenAI**, sync + async non-streaming calls
+- Proxy mode rewrites provider base URLs so the AgentWeave proxy traces Anthropic, OpenAI-compatible, and Gemini-compatible traffic
 - Composes with explicit `@trace_llm` — auto-instrumentation detects existing spans and skips to avoid double-tracing
 - Idempotent — calling `auto_instrument()` twice is safe
-- Streaming support deferred to a follow-up
+- Direct streaming support is still limited; use the proxy path for streaming provider traffic
 
 ## Decorators
 
@@ -327,15 +342,44 @@ const subAgent = traceAgent({
 | `prov.activity.type` | `tool_call`, `agent_turn`, or `llm_call` |
 | `prov.agent.id` | Agent identifier |
 | `prov.agent.model` | Model name |
+| `session.id` | OpenTelemetry-compatible session ID for grouping spans |
+| `prov.session.id` | AgentWeave session ID for a user conversation, task, or run |
+| `prov.parent.session.id` | Parent session ID when a delegated agent runs under another session |
+| `prov.agent.type` | Agent role such as `main`, `subagent`, `delegated`, or `hook` |
+| `prov.session.turn` | Turn or delegation depth within a session graph |
+| `prov.project` | Project or app identity |
+| `prov.task.label` | Human-readable label for the task this agent is executing |
+| `prov.cwd` | Runtime working directory when available |
+| `prov.repository` | Detected git repository name when available |
 | `prov.used` | Serialized inputs consumed by the activity |
 | `prov.wasGeneratedBy` | Output produced by the activity |
 | `prov.wasAssociatedWith` | Agent responsible for the activity |
 | `prov.llm.provider` | `anthropic`, `openai`, or `google` |
+| `prov.llm.model` | Provider model name |
 | `prov.llm.prompt_tokens` | Input token count |
 | `prov.llm.completion_tokens` | Output token count |
 | `prov.llm.total_tokens` | Total tokens |
 | `prov.llm.stop_reason` | Why the model stopped |
-| `prov.task.label` | Human-readable label for the task this agent is executing |
+| `cost.usd` | Estimated USD cost when model pricing and token usage are known |
+| `tokens.cache_read` | Anthropic prompt-cache read tokens, or `0` for providers without cache data |
+| `tokens.cache_write` | Anthropic prompt-cache write tokens, or `0` for providers without cache data |
+| `cache.hit_rate` | Prompt-cache hit rate for providers that expose cache usage |
+
+## OpenTelemetry GenAI Attributes
+
+AgentWeave emits its provenance attributes and the OpenTelemetry GenAI semantic
+attribute shape together, so downstream backends can use either convention.
+
+| Attribute | Description |
+|---|---|
+| `gen_ai.operation.name` | `chat` for LLM calls and `invoke_agent` for agent turns |
+| `gen_ai.provider.name` | Provider name such as `anthropic`, `openai`, or `google` |
+| `gen_ai.system` | Legacy provider attribute kept for compatibility during the preview line |
+| `gen_ai.request.model` | Requested model |
+| `gen_ai.usage.input_tokens` | Input token count |
+| `gen_ai.usage.output_tokens` | Output token count |
+| `gen_ai.response.finish_reasons` | Provider finish/stop reasons |
+| `gen_ai.agent.name` | Agent identity when known |
 
 Full schema: [`sdk/python/agentweave/schema.py`](sdk/python/agentweave/schema.py)
 
@@ -344,14 +388,19 @@ Full schema: [`sdk/python/agentweave/schema.py`](sdk/python/agentweave/schema.py
 For agents you can't instrument with decorators (Claude Code, Node.js, any runtime), run the **AgentWeave proxy** — a transparent HTTP server that sits between your agents and their LLM providers. Works with Claude Code out of the box — just set `ANTHROPIC_BASE_URL` in `~/.claude/settings.json` ([setup guide](docs/claude-code-proxy.md)).
 
 ```bash
-pip install "agentweave[proxy]"
-agentweave proxy start --port 4000 --endpoint http://localhost:4318 --agent-id my-agent
+pip install "agentweave-sdk[proxy]"
+agentweave start --port 4000 --endpoint http://localhost:4318
 
 # Point agents at the proxy — no code changes needed
-export ANTHROPIC_BASE_URL=http://localhost:4000
+export ANTHROPIC_BASE_URL=http://localhost:4000/v1
+export OPENAI_BASE_URL=http://localhost:4000/v1
 export GOOGLE_GENAI_BASE_URL=http://localhost:4000
-export OPENAI_BASE_URL=http://localhost:4000
+export AGENTWEAVE_AGENT_ID=my-agent
 ```
+
+Use `agentweave status` to inspect the background proxy and `agentweave stop`
+to stop it. For foreground runs, `agentweave proxy start ...` is still
+available.
 
 **OpenAI/Codex streaming note:**
 - `/v1/chat/completions` needs `stream_options.include_usage=true` for token usage
@@ -393,7 +442,7 @@ AgentWeave emits standard OTLP HTTP — works with any compatible backend:
 git clone https://github.com/arniesaha/agentweave && cd agentweave
 pip install -e "./sdk/python[dev]"
 
-pytest sdk/python                                    # 237 Python tests
+pytest sdk/python/tests tests -q                    # Python SDK + repo tests
 (cd sdk/js && npm ci && npx jest --verbose)           # 10 TypeScript tests
 (cd sdk/go && go test ./... -v)                       # 4 Go tests
 ```

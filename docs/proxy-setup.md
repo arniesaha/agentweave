@@ -1,6 +1,8 @@
 # AgentWeave Proxy — Setup Guide
 
-The AgentWeave proxy is a transparent HTTP server that sits between your agents and the Anthropic API. Every LLM call gets an OTel span — no SDK changes required.
+The AgentWeave proxy is a transparent HTTP server that sits between your
+agents and Anthropic, OpenAI-compatible, or Gemini-compatible APIs. Every LLM
+call gets an OTel span — no SDK changes required.
 
 ```
 Claude Code ──┐
@@ -18,17 +20,21 @@ agents share one proxy.
 ## Prerequisites
 
 ```bash
-pip install "agentweave[proxy]"
+pip install "agentweave-sdk[proxy]"
 ```
 
 ## Start the proxy
 
 ```bash
-agentweave proxy start \
+agentweave start \
   --port 4000 \
   --endpoint http://localhost:4318 \   # your OTLP backend
   --agent-id my-agent-v1
 ```
+
+`agentweave start` runs the local proxy as a managed background process. Use
+`agentweave status` to inspect it and `agentweave stop` when you are done. For
+foreground/debug runs, `agentweave proxy start ...` is still available.
 
 Options:
 | Flag | Default | Description |

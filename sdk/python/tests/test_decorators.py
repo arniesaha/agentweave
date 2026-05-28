@@ -405,6 +405,7 @@ class TestTraceLlm:
 
         # OTel gen_ai.* dual-emit assertions
         assert attrs[schema.GEN_AI_OPERATION_NAME] == "chat"
+        assert attrs[schema.GEN_AI_PROVIDER_NAME] == "anthropic"
         assert attrs[schema.GEN_AI_SYSTEM] == "anthropic"
         assert attrs[schema.GEN_AI_REQUEST_MODEL] == "claude-sonnet-4-6"
         assert attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] == 150
@@ -446,6 +447,7 @@ class TestTraceLlm:
 
         # OTel gen_ai.* dual-emit assertions
         assert attrs[schema.GEN_AI_OPERATION_NAME] == "chat"
+        assert attrs[schema.GEN_AI_PROVIDER_NAME] == "openai"
         assert attrs[schema.GEN_AI_SYSTEM] == "openai"
         assert attrs[schema.GEN_AI_REQUEST_MODEL] == "gpt-4o"
         assert attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] == 100

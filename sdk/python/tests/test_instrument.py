@@ -182,6 +182,7 @@ class TestAnthropicInstrumentation:
         assert attrs[schema.AUTO_INSTRUMENTED] is True
         # OTel gen_ai.* dual-emit
         assert attrs[schema.GEN_AI_OPERATION_NAME] == "chat"
+        assert attrs[schema.GEN_AI_PROVIDER_NAME] == "anthropic"
         assert attrs[schema.GEN_AI_SYSTEM] == "anthropic"
         assert attrs[schema.GEN_AI_REQUEST_MODEL] == "claude-sonnet-4-6"
         assert attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] == 100
@@ -228,6 +229,7 @@ class TestOpenAIInstrumentation:
         assert attrs[schema.PROV_LLM_TOTAL_TOKENS] == 120
         # OTel gen_ai.* dual-emit
         assert attrs[schema.GEN_AI_OPERATION_NAME] == "chat"
+        assert attrs[schema.GEN_AI_PROVIDER_NAME] == "openai"
         assert attrs[schema.GEN_AI_SYSTEM] == "openai"
         assert attrs[schema.GEN_AI_REQUEST_MODEL] == "gpt-4o"
         assert attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] == 80

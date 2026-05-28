@@ -151,6 +151,7 @@ class TestGoogleInstrumentation:
         assert attrs[schema.AUTO_INSTRUMENTED] is True
         # OTel gen_ai.* dual-emit
         assert attrs[schema.GEN_AI_OPERATION_NAME] == "chat"
+        assert attrs[schema.GEN_AI_PROVIDER_NAME] == "google"
         assert attrs[schema.GEN_AI_SYSTEM] == "google"
         assert attrs[schema.GEN_AI_REQUEST_MODEL] == "gemini-2.0-flash"
         assert attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] == 20

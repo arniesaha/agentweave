@@ -1,6 +1,6 @@
 # AgentWeave Project Status
 
-Last updated: 2026-05-27
+Last updated: 2026-05-28
 
 ## Current Release Line
 
@@ -19,7 +19,7 @@ The public quickstart should stay local-first:
 
 ```bash
 pip install "agentweave-sdk[proxy]"
-agentweave proxy start --port 4000 --endpoint http://localhost:4318
+agentweave start --port 4000 --endpoint http://localhost:4318
 export ANTHROPIC_BASE_URL=http://localhost:4000/v1
 ```
 
@@ -31,7 +31,8 @@ than public setup docs.
 
 - Multi-provider transparent proxy paths for Anthropic, OpenAI-compatible, and
   Gemini-compatible APIs.
-- Python SDK decorators and `auto_instrument()` for Anthropic/OpenAI clients.
+- Python SDK decorators and `auto_instrument()` for Anthropic, OpenAI, and
+  Google GenAI clients in direct mode.
 - TypeScript and Go SDKs with basic tracing APIs.
 - OpenClaw bridge dogfooding with session, agent, model, token, and cost
   attribution.

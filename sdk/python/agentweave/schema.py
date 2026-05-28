@@ -11,14 +11,18 @@ AgentWeave emits both prov.* and gen_ai.* attributes on every span so
 that backends like Datadog, Grafana, and Arize work out of the box.
 
 Mapping:
-  prov.activity.type = llm_call   → gen_ai.operation.name = chat
-  prov.activity.type = agent_turn → gen_ai.operation.name = invoke_agent
-  prov.llm.provider               → gen_ai.system
-  prov.agent.model                → gen_ai.request.model
-  prov.llm.prompt_tokens          → gen_ai.usage.input_tokens
-  prov.llm.completion_tokens      → gen_ai.usage.output_tokens
-  prov.llm.stop_reason            → gen_ai.response.finish_reasons (array)
-  prov.agent.id                   → gen_ai.agent.name
+  prov.activity.type = llm_call   -> gen_ai.operation.name = chat
+  prov.activity.type = agent_turn -> gen_ai.operation.name = invoke_agent
+  prov.llm.provider               -> gen_ai.provider.name and gen_ai.system
+  prov.agent.model / llm model    -> gen_ai.request.model
+  prov.llm.prompt_tokens          -> gen_ai.usage.input_tokens
+  prov.llm.completion_tokens      -> gen_ai.usage.output_tokens
+  prov.llm.stop_reason            -> gen_ai.response.finish_reasons (array)
+  prov.agent.id                   -> gen_ai.agent.name
+
+``gen_ai.system`` is kept for compatibility with older GenAI semantic
+conventions. Newer OpenTelemetry semantic convention packages replace it with
+``gen_ai.provider.name``, so AgentWeave emits both during the preview line.
 
 Reference: https://opentelemetry.io/docs/specs/semconv/gen-ai/
 """
@@ -131,6 +135,7 @@ AGENTWEAVE_TRACE_ID = "agentweave.trace_id"
 # ---------------------------------------------------------------------------
 
 GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
 GEN_AI_SYSTEM = "gen_ai.system"
 GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"

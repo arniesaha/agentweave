@@ -1842,6 +1842,7 @@ def _set_request_attrs(
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
+    span.set_attribute(schema.GEN_AI_PROVIDER_NAME, provider)
     span.set_attribute(schema.GEN_AI_SYSTEM, provider)
     span.set_attribute(schema.GEN_AI_REQUEST_MODEL, agent_model)
     span.set_attribute(schema.GEN_AI_AGENT_NAME, agent_id)

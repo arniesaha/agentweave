@@ -78,7 +78,7 @@ Creates a single span from hook data.
   "span_name": "subagent.stop",
   "session_id": "abc123",
   "attributes": {
-    "prov.parent_session_id": "parent-456",
+    "prov.parent.session.id": "parent-456",
     "prov.agent.type": "subagent"
   }
 }
@@ -222,5 +222,5 @@ Spans created from hooks include these attributes:
 | `prov.tool.name` | Tool name (if present) |
 | `prov.tool.input_preview` | First 512 chars of tool input |
 | `prov.tool.result_preview` | First 512 chars of tool result |
-| `prov.parent_session_id` | Parent session ID (for subagents) |
+| `prov.parent.session.id` | Parent session ID (for subagents) |
 | `prov.agent.type` | Agent type (e.g., `subagent`) |

@@ -371,7 +371,7 @@ def _check_proxy_health(env: Mapping[str, str], proxy_url: str | None, timeout_s
             name="proxy.health",
             status=WARN,
             message=f"Proxy /health was not reachable: {exc.reason}.",
-            suggestion="Start the proxy with `agentweave proxy start` or pass the correct --proxy-url.",
+            suggestion="Start the proxy with `agentweave start` or pass the correct --proxy-url.",
             details={"url": health_url},
         )
     except OSError as exc:
@@ -379,7 +379,7 @@ def _check_proxy_health(env: Mapping[str, str], proxy_url: str | None, timeout_s
             name="proxy.health",
             status=WARN,
             message=f"Proxy /health was not reachable: {exc}.",
-            suggestion="Start the proxy with `agentweave proxy start` or pass the correct --proxy-url.",
+            suggestion="Start the proxy with `agentweave start` or pass the correct --proxy-url.",
             details={"url": health_url},
         )
 

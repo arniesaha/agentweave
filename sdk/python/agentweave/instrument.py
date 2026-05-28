@@ -81,6 +81,7 @@ def _make_llm_wrapper(
                 span.set_attribute(schema.AUTO_INSTRUMENTED, True)
                 # OTel gen_ai.* dual-emit
                 span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
+                span.set_attribute(schema.GEN_AI_PROVIDER_NAME, provider)
                 span.set_attribute(schema.GEN_AI_SYSTEM, provider)
                 for k, v in _get_config_attrs().items():
                     span.set_attribute(k, v)
@@ -117,6 +118,7 @@ def _make_llm_wrapper(
                 span.set_attribute(schema.AUTO_INSTRUMENTED, True)
                 # OTel gen_ai.* dual-emit
                 span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
+                span.set_attribute(schema.GEN_AI_PROVIDER_NAME, provider)
                 span.set_attribute(schema.GEN_AI_SYSTEM, provider)
                 for k, v in _get_config_attrs().items():
                     span.set_attribute(k, v)
