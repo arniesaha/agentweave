@@ -1,8 +1,9 @@
-"""AgentWeave CLI — ``agentweave trace show/list/export``."""
+"""AgentWeave CLI — local lifecycle, proxy, hooks, and trace helpers."""
 
 from __future__ import annotations
 
 import json
+import time
 from typing import Optional
 
 import typer
@@ -38,6 +39,123 @@ def _get_provider():
     if isinstance(provider, TracerProvider):
         return provider
     return None
+
+
+def _format_started_at(started_at: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(started_at))
+
+
+# ---------------------------------------------------------------------------
+# agentweave start / stop / status
+# ---------------------------------------------------------------------------
+
+
+@app.command("start")
+def start(
+    port: int = typer.Option(4000, "--port", "-p", help="Port to listen on."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to."),
+    endpoint: Optional[str] = typer.Option(
+        None,
+        "--endpoint",
+        "-e",
+        help="OTLP HTTP endpoint (e.g. http://localhost:4318). Overrides AGENTWEAVE_OTLP_ENDPOINT.",
+    ),
+    agent_id: Optional[str] = typer.Option(
+        None, "--agent-id", help="Default agent ID tag for all traced calls."
+    ),
+    capture_prompts: bool = typer.Option(
+        False,
+        "--capture-prompts",
+        help="Record first 512 chars of prompt and response in span attributes.",
+    ),
+    auth_token: Optional[str] = typer.Option(
+        None,
+        "--auth-token",
+        help="Bearer token required on incoming requests. Also reads from AGENTWEAVE_PROXY_TOKEN env var.",
+    ),
+) -> None:
+    """Start a CLI-managed local AgentWeave proxy in the background."""
+    from agentweave.lifecycle import start_proxy_process
+
+    try:
+        state = start_proxy_process(
+            host=host,
+            port=port,
+            endpoint=endpoint,
+            agent_id=agent_id,
+            capture_prompts=capture_prompts,
+            auth_token=auth_token,
+        )
+    except RuntimeError as exc:
+        console.print(f"[yellow]{exc}[/yellow]")
+        console.print("Run [bold]agentweave status[/bold] or [bold]agentweave stop[/bold].")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]AgentWeave proxy started[/green] pid=[bold]{state.pid}[/bold]")
+    console.print(f"  URL      : [cyan]{state.url}[/cyan]")
+    console.print(f"  Logs     : [dim]{state.log_file}[/dim]")
+    console.print(f"  Started  : [dim]{_format_started_at(state.started_at)}[/dim]")
+    console.print()
+    console.print(f"  Set in your agent: [bold]ANTHROPIC_BASE_URL={state.url}[/bold]")
+
+
+@app.command("stop")
+def stop(
+    timeout: float = typer.Option(
+        5.0,
+        "--timeout",
+        min=0.1,
+        help="Seconds to wait for graceful proxy shutdown.",
+    ),
+) -> None:
+    """Stop the CLI-managed local AgentWeave proxy."""
+    from agentweave.lifecycle import stop_proxy_process
+
+    result, state = stop_proxy_process(timeout_seconds=timeout)
+    if result == "stopped" and state:
+        console.print(f"[green]AgentWeave proxy stopped[/green] pid=[bold]{state.pid}[/bold]")
+        return
+    if result == "killed" and state:
+        console.print(f"[yellow]AgentWeave proxy was force-stopped[/yellow] pid=[bold]{state.pid}[/bold]")
+        return
+    if result == "stale" and state:
+        console.print(f"[yellow]Removed stale proxy state[/yellow] pid=[bold]{state.pid}[/bold]")
+        return
+    console.print("[yellow]AgentWeave proxy is not running.[/yellow]")
+
+
+@app.command("status")
+def status(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON instead of text.",
+    ),
+) -> None:
+    """Show status for the CLI-managed local AgentWeave proxy."""
+    from agentweave.lifecycle import current_status, state_file
+
+    current, state = current_status()
+    payload = {
+        "status": current,
+        "state_file": str(state_file()),
+        "proxy": state.to_dict() if state else None,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if current == "running" and state:
+        console.print(f"[green]AgentWeave proxy is running[/green] pid=[bold]{state.pid}[/bold]")
+        console.print(f"  URL      : [cyan]{state.url}[/cyan]")
+        console.print(f"  Logs     : [dim]{state.log_file}[/dim]")
+        console.print(f"  Started  : [dim]{_format_started_at(state.started_at)}[/dim]")
+        return
+    if current == "stale" and state:
+        console.print(f"[yellow]AgentWeave proxy state is stale[/yellow] pid=[bold]{state.pid}[/bold]")
+        console.print("Run [bold]agentweave stop[/bold] to remove the stale state file.")
+        return
+    console.print("[yellow]AgentWeave proxy is not running.[/yellow]")
 
 
 # ---------------------------------------------------------------------------

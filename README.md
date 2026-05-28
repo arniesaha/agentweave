@@ -132,9 +132,12 @@ quickstart.
 
 ```bash
 pip install "agentweave-sdk[proxy]"
-agentweave proxy start --port 4000 --endpoint http://localhost:4318
+agentweave start --port 4000 --endpoint http://localhost:4318
 export ANTHROPIC_BASE_URL=http://localhost:4000/v1
 ```
+
+Use `agentweave status` to inspect the local proxy and `agentweave stop` when
+you are done. `agentweave proxy start` remains available for foreground runs.
 
 Use your normal provider API key in the client environment. Proxy-side key
 injection and private NodePort URLs are dogfood-only conveniences, not required
