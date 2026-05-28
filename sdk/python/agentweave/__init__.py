@@ -7,7 +7,7 @@ from agentweave.exporter import add_console_exporter, get_tracer, shutdown
 from agentweave.instrument import auto_instrument, uninstrument
 from agentweave.prompts import fetch_prompt as prompt, PromptHandle
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "AgentWeaveConfig",

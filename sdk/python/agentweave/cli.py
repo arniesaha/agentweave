@@ -405,7 +405,9 @@ def hooks_uninstall(
 @app.command("version")
 def version() -> None:
     """Show the AgentWeave version."""
-    console.print("[bold]agentweave[/bold] v0.1.0")
+    from agentweave import __version__
+
+    console.print(f"[bold]agentweave[/bold] v{__version__}")
 
 
 if __name__ == "__main__":

@@ -52,8 +52,8 @@ dev = [
 agentweave = "agentweave.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/arnabsaha/agentweave"
-Issues = "https://github.com/arnabsaha/agentweave/issues"
+Homepage = "https://github.com/arniesaha/agentweave"
+Issues = "https://github.com/arniesaha/agentweave/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agentweave"]
