@@ -15,26 +15,23 @@ This directory contains two sets of examples:
 ## 🟡 Golden Path Scenarios
 
 These three demos each isolate a real production problem and show how
-AgentWeave makes it visible. Each runs against the live proxy at
-`http://192.168.1.70:30400/v1` and produces real traces in Grafana Tempo.
+AgentWeave makes it visible. Each can run against a local AgentWeave proxy and
+emit traces to any OpenTelemetry-compatible backend.
 
 ### Prerequisites
 
 ```bash
-# Point at the AgentWeave proxy (handles Anthropic auth internally)
-export ANTHROPIC_BASE_URL=http://192.168.1.70:30400/v1
-export ANTHROPIC_API_KEY=dummy   # proxy injects the real key — see note below
+# Point at the AgentWeave proxy.
+export ANTHROPIC_BASE_URL=http://localhost:4000/v1
+export ANTHROPIC_API_KEY=sk-ant-...
 
 # Python deps (from repo root)
 pip install anthropic
 pip install -e sdk/python/
 ```
 
-> **Proxy-side key injection:** Setting `ANTHROPIC_API_KEY=dummy` works when
-> the proxy operator has configured `AGENTWEAVE_ANTHROPIC_API_KEY` on the
-> proxy host. The proxy replaces the dummy value with the real credential
-> before forwarding to Anthropic. If you're running your own proxy without
-> this env var set, supply your real API key instead.
+If you are running your own proxy, use your normal provider API key. Private
+proxy-side credential injection is not required for these examples.
 
 ### Scenario overview
 
@@ -52,9 +49,8 @@ python examples/02-agent-delegation/main.py
 python examples/03-tool-failure/main.py
 ```
 
-After each run, traces appear in Grafana Tempo under
-`https://o11y.arnabsaha.com/explore`. Filter by `session.id` using the
-session ID printed at the end of each script.
+After each run, traces appear in your configured OTLP backend. Filter by
+`session.id` using the session ID printed at the end of each script.
 
 ### What to look for in the dashboard
 
@@ -102,6 +98,18 @@ python langgraph_example.py
 Traces are emitted via OTLP and visible in Grafana Tempo, Jaeger, Langfuse, or
 any OpenTelemetry-compatible backend.
 
+## Offline smoke checks
+
+From the repo root, run:
+
+```bash
+scripts/compatibility-smoke.sh
+```
+
+The smoke checks are offline-friendly: they validate the framework example
+files, Python syntax, local proxy defaults, and compatibility docs without
+calling provider APIs or requiring API keys.
+
 ## Framework examples
 
 | Framework | Directory | Description |
@@ -127,4 +135,4 @@ Your Agent ──base_url=http://localhost:4000/v1──> AgentWeave Proxy :4000
 ```
 
 Replace `http://localhost:4000/v1` with your proxy endpoint if deployed
-elsewhere (e.g. `http://192.168.1.70:30400/v1`).
+elsewhere.
