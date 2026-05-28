@@ -1,0 +1,322 @@
+{
+  "schema_version": "agentweave.demo_trace.v1",
+  "demo_id": "agentweave-public-dogfood-demo-2026-05-27",
+  "title": "AgentWeave building AgentWeave",
+  "description": "Sanitized dogfood fixture for public screenshots and local demos. The trace shows a maintainer agent delegating to child agents, attributing model cost, and surfacing a tool validation error without private prompt text.",
+  "privacy": {
+    "sanitized": true,
+    "contains_private_prompt_text": false,
+    "contains_private_file_paths": false,
+    "contains_private_urls": false,
+    "redaction_policy": [
+      "Prompt and completion bodies are replaced with intent summaries.",
+      "Hostnames use localhost or example.invalid only.",
+      "Repository paths are relative or generic.",
+      "Secrets, tokens, account ids, and user data are omitted."
+    ]
+  },
+  "screenshot_sources": {
+    "local_viewer": "http://localhost:8050/examples/05-dogfood-demo/",
+    "fixture_file": "examples/05-dogfood-demo/demo-trace.json",
+    "recommended_assets": [
+      "screenshots/public-demo-overview.png",
+      "screenshots/public-demo-session.png",
+      "screenshots/public-demo-replay.png"
+    ]
+  },
+  "trace": {
+    "trace_id": "demo-trace-agentweave-000001",
+    "root_session_id": "demo-session-maintainer-001",
+    "started_at": "2026-05-27T17:00:00.000Z",
+    "ended_at": "2026-05-27T17:00:21.820Z",
+    "project": "agentweave",
+    "summary": {
+      "agent_count": 4,
+      "span_count": 11,
+      "llm_call_count": 4,
+      "tool_call_count": 3,
+      "error_count": 1,
+      "total_tokens": 18940,
+      "total_cost_usd": 0.0867
+    }
+  },
+  "agents": [
+    {
+      "agent_id": "maintainer-agent",
+      "agent_type": "orchestrator",
+      "session_id": "demo-session-maintainer-001",
+      "parent_session_id": null,
+      "task_label": "prepare developer preview demo package"
+    },
+    {
+      "agent_id": "docs-worker",
+      "agent_type": "subagent",
+      "session_id": "demo-session-docs-001",
+      "parent_session_id": "demo-session-maintainer-001",
+      "task_label": "write public demo instructions"
+    },
+    {
+      "agent_id": "fixture-worker",
+      "agent_type": "subagent",
+      "session_id": "demo-session-fixture-001",
+      "parent_session_id": "demo-session-maintainer-001",
+      "task_label": "generate sanitized trace fixture"
+    },
+    {
+      "agent_id": "review-worker",
+      "agent_type": "subagent",
+      "session_id": "demo-session-review-001",
+      "parent_session_id": "demo-session-maintainer-001",
+      "task_label": "review privacy and screenshot readiness"
+    }
+  ],
+  "spans": [
+    {
+      "span_id": "span-001",
+      "parent_span_id": null,
+      "name": "agent.maintainer_agent",
+      "kind": "agent",
+      "status": "ok",
+      "started_at": "2026-05-27T17:00:00.000Z",
+      "duration_ms": 21820,
+      "attributes": {
+        "prov.agent.id": "maintainer-agent",
+        "prov.agent.type": "orchestrator",
+        "prov.session.id": "demo-session-maintainer-001",
+        "prov.project": "agentweave",
+        "prov.task.label": "prepare developer preview demo package"
+      },
+      "redacted_io": {
+        "input_summary": "User asks for a public dogfood demo package.",
+        "output_summary": "Creates sanitized fixture, docs, and screenshot checklist."
+      }
+    },
+    {
+      "span_id": "span-002",
+      "parent_span_id": "span-001",
+      "name": "llm.plan_demo_package",
+      "kind": "llm",
+      "status": "ok",
+      "started_at": "2026-05-27T17:00:01.050Z",
+      "duration_ms": 3120,
+      "attributes": {
+        "prov.agent.id": "maintainer-agent",
+        "prov.session.id": "demo-session-maintainer-001",
+        "prov.llm.provider": "anthropic",
+        "prov.llm.model": "claude-sonnet-4-6",
+        "prov.llm.prompt_tokens": 4820,
+        "prov.llm.completion_tokens": 930,
+        "prov.llm.total_tokens": 5750,
+        "cost.usd": 0.0335
+      },
+      "redacted_io": {
+        "input_summary": "Summarize requirements and split work among child agents.",
+        "output_summary": "Plan includes fixture, documentation, and screenshot checklist."
+      }
+    },
+    {
+      "span_id": "span-003",
+      "parent_span_id": "span-001",
+      "name": "tool.search_open_issues",
+      "kind": "tool",
+      "status": "ok",
+      "started_at": "2026-05-27T17:00:04.420Z",
+      "duration_ms": 740,
+      "attributes": {
+        "prov.agent.id": "maintainer-agent",
+        "prov.session.id": "demo-session-maintainer-001",
+        "tool.name": "github.search_issues",
+        "tool.input.redacted": true
+      },
+      "redacted_io": {
+        "input_summary": "Search for overlapping public demo and screenshot issues.",
+        "output_summary": "Finds issue 206 as the demo package owner."
+      }
+    },
+    {
+      "span_id": "span-004",
+      "parent_span_id": "span-001",
+      "name": "agent.docs_worker",
+      "kind": "agent",
+      "status": "ok",
+      "started_at": "2026-05-27T17:00:05.300Z",
+      "duration_ms": 8240,
+      "attributes": {
+        "prov.agent.id": "docs-worker",
+        "prov.agent.type": "subagent",
+        "prov.session.id": "demo-session-docs-001",
+        "prov.parent_session_id": "demo-session-maintainer-001",
+        "prov.project": "agentweave",
+        "prov.task.label": "write public demo instructions"
+      },
+      "redacted_io": {
+        "input_summary": "Draft instructions for running the demo without private infrastructure.",
+        "output_summary": "Produces README and screenshot checklist guidance."
+      }
+    },
+    {
+      "span_id": "span-005",
+      "parent_span_id": "span-004",
+      "name": "llm.write_demo_docs",
+      "kind": "llm",
+      "status": "ok",
+      "started_at": "2026-05-27T17:00:05.920Z",
+      "duration_ms": 2840,
+      "attributes": {
+        "prov.agent.id": "docs-worker",
+        "prov.session.id": "demo-session-docs-001",
+        "prov.parent_session_id": "demo-session-maintainer-001",
+        "prov.llm.provider": "openai",
+        "prov.llm.model": "gpt-4.1-mini",
+        "prov.llm.prompt_tokens": 3180,
+        "prov.llm.completion_tokens": 1210,
+        "prov.llm.total_tokens": 4390,
+        "cost.usd": 0.0044
+      },
+      "redacted_io": {
+        "input_summary": "Turn acceptance criteria into public docs.",
+        "output_summary": "Documents localhost viewer, fixture usage, and privacy checks."
+      }
+    },
+    {
+      "span_id": "span-006",
+      "parent_span_id": "span-001",
+      "name": "agent.fixture_worker",
+      "kind": "agent",
+      "status": "error",
+      "started_at": "2026-05-27T17:00:05.520Z",
+      "duration_ms": 10380,
+      "attributes": {
+        "prov.agent.id": "fixture-worker",
+        "prov.agent.type": "subagent",
+        "prov.session.id": "demo-session-fixture-001",
+        "prov.parent_session_id": "demo-session-maintainer-001",
+        "prov.project": "agentweave",
+        "prov.task.label": "generate sanitized trace fixture"
+      },
+      "redacted_io": {
+        "input_summary": "Create synthetic trace data that preserves causality and costs.",
+        "output_summary": "Initial fixture fails privacy validation, then is corrected."
+      }
+    },
+    {
+      "span_id": "span-007",
+      "parent_span_id": "span-006",
+      "name": "llm.generate_fixture",
+      "kind": "llm",
+      "status": "ok",
+      "started_at": "2026-05-27T17:00:06.180Z",
+      "duration_ms": 3920,
+      "attributes": {
+        "prov.agent.id": "fixture-worker",
+        "prov.session.id": "demo-session-fixture-001",
+        "prov.parent_session_id": "demo-session-maintainer-001",
+        "prov.llm.provider": "google",
+        "prov.llm.model": "gemini-2.5-pro",
+        "prov.llm.prompt_tokens": 6020,
+        "prov.llm.completion_tokens": 1640,
+        "prov.llm.total_tokens": 7660,
+        "cost.usd": 0.0388
+      },
+      "redacted_io": {
+        "input_summary": "Generate public demo spans with model and cost attribution.",
+        "output_summary": "Creates a fixture containing one invalid private URL placeholder."
+      }
+    },
+    {
+      "span_id": "span-008",
+      "parent_span_id": "span-006",
+      "name": "tool.validate_fixture_privacy",
+      "kind": "tool",
+      "status": "error",
+      "started_at": "2026-05-27T17:00:10.340Z",
+      "duration_ms": 410,
+      "attributes": {
+        "prov.agent.id": "fixture-worker",
+        "prov.session.id": "demo-session-fixture-001",
+        "tool.name": "fixture_privacy_validator",
+        "error.type": "SanitizationError",
+        "error.message": "Fixture contained a non-public host placeholder.",
+        "error.recoverable": true
+      },
+      "events": [
+        {
+          "name": "exception",
+          "timestamp": "2026-05-27T17:00:10.690Z",
+          "attributes": {
+            "exception.type": "SanitizationError",
+            "exception.message": "Replace private host placeholder with localhost or example.invalid."
+          }
+        }
+      ],
+      "redacted_io": {
+        "input_summary": "Validate fixture against public-demo privacy rules.",
+        "output_summary": "Rejects one host placeholder before any screenshot asset is produced."
+      }
+    },
+    {
+      "span_id": "span-009",
+      "parent_span_id": "span-006",
+      "name": "tool.rewrite_fixture_hosts",
+      "kind": "tool",
+      "status": "ok",
+      "started_at": "2026-05-27T17:00:11.010Z",
+      "duration_ms": 530,
+      "attributes": {
+        "prov.agent.id": "fixture-worker",
+        "prov.session.id": "demo-session-fixture-001",
+        "tool.name": "fixture_sanitizer",
+        "tool.output.changed_fields": 1
+      },
+      "redacted_io": {
+        "input_summary": "Replace rejected host placeholder.",
+        "output_summary": "Fixture now uses only localhost and example.invalid references."
+      }
+    },
+    {
+      "span_id": "span-010",
+      "parent_span_id": "span-001",
+      "name": "agent.review_worker",
+      "kind": "agent",
+      "status": "ok",
+      "started_at": "2026-05-27T17:00:13.860Z",
+      "duration_ms": 5140,
+      "attributes": {
+        "prov.agent.id": "review-worker",
+        "prov.agent.type": "subagent",
+        "prov.session.id": "demo-session-review-001",
+        "prov.parent_session_id": "demo-session-maintainer-001",
+        "prov.project": "agentweave",
+        "prov.task.label": "review privacy and screenshot readiness"
+      },
+      "redacted_io": {
+        "input_summary": "Review whether the demo fixture is safe to publish.",
+        "output_summary": "Approves fixture after checking causality, cost, and privacy boundaries."
+      }
+    },
+    {
+      "span_id": "span-011",
+      "parent_span_id": "span-010",
+      "name": "llm.review_public_readiness",
+      "kind": "llm",
+      "status": "ok",
+      "started_at": "2026-05-27T17:00:14.260Z",
+      "duration_ms": 2460,
+      "attributes": {
+        "prov.agent.id": "review-worker",
+        "prov.session.id": "demo-session-review-001",
+        "prov.parent_session_id": "demo-session-maintainer-001",
+        "prov.llm.provider": "anthropic",
+        "prov.llm.model": "claude-haiku-4-5",
+        "prov.llm.prompt_tokens": 920,
+        "prov.llm.completion_tokens": 220,
+        "prov.llm.total_tokens": 1140,
+        "cost.usd": 0.01
+      },
+      "redacted_io": {
+        "input_summary": "Check screenshot readiness and demo claims.",
+        "output_summary": "Confirms the fixture supports overview, session, and replay screenshots."
+      }
+    }
+  ]
+}
