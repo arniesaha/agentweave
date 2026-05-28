@@ -118,11 +118,27 @@ No cloud, no SaaS, no enterprise tier. Just the tool.
 
 ## Install
 
+AgentWeave is in developer preview. Start with a local proxy and a local OTLP
+collector; private dogfood deployments live in runbooks, not in the public
+quickstart.
+
 | SDK | Language | Install |
 |-----|----------|---------|
 | [sdk/python](./sdk/python) | Python | `pip install agentweave-sdk` |
 | [sdk/js](./sdk/js) | TypeScript / JavaScript | `npm install agentweave-sdk` |
 | [sdk/go](./sdk/go) | Go | `go get github.com/arniesaha/agentweave-go` |
+
+### Local proxy path
+
+```bash
+pip install "agentweave-sdk[proxy]"
+agentweave proxy start --port 4000 --endpoint http://localhost:4318
+export ANTHROPIC_BASE_URL=http://localhost:4000/v1
+```
+
+Use your normal provider API key in the client environment. Proxy-side key
+injection and private NodePort URLs are dogfood-only conveniences, not required
+for the public developer-preview path.
 
 ## Quickstart (Python)
 

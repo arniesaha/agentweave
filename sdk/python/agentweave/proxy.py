@@ -268,7 +268,7 @@ _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 app = FastAPI(
     title="AgentWeave Proxy",
     description="Multi-provider AI observability proxy (Anthropic + Google Gemini + OpenAI)",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 

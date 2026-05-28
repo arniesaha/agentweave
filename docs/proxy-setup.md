@@ -3,16 +3,17 @@
 The AgentWeave proxy is a transparent HTTP server that sits between your agents and the Anthropic API. Every LLM call gets an OTel span — no SDK changes required.
 
 ```
-Claude Code (Mac Mini) ──┐
-Claude Code (NAS)     ──┤
-OpenClaw/Nix          ──┤──→ agentweave-proxy :4000 ──→ api.anthropic.com
-Max / pi-agent        ──┤         │
-Nix A2A Server        ──┤    OTel spans → Tempo
-Max A2A Server        ──┘
+Claude Code ──┐
+OpenClaw    ──┤──→ agentweave-proxy :4000 ──→ api.anthropic.com
+Python app  ──┘         │
+                   OTel spans → Tempo / Jaeger / Langfuse
 ```
 
-All clients share a single proxy instance (k8s NodePort 30400). Per-request
-`X-AgentWeave-Agent-Id` headers handle attribution.
+For a local developer-preview install, run the proxy on `localhost:4000` and
+point clients at `http://localhost:4000`. Shared k8s NodePorts and proxy-side
+credential injection are private dogfood deployment choices, not requirements.
+Per-request `X-AgentWeave-Agent-Id` headers handle attribution when several
+agents share one proxy.
 
 ## Prerequisites
 
@@ -63,7 +64,7 @@ systemctl --user enable --now agentweave-proxy
 
 ## Wire up your agents
 
-### OpenClaw / Nix (NAS)
+### OpenClaw
 
 Add to `~/.openclaw/openclaw.json`:
 
@@ -72,7 +73,7 @@ Add to `~/.openclaw/openclaw.json`:
   "models": {
     "providers": {
       "anthropic": {
-        "baseUrl": "http://192.168.1.70:30400",
+        "baseUrl": "http://localhost:4000",
         "headers": {
           "X-AgentWeave-Agent-Id": "nix-v1",
           "X-AgentWeave-Agent-Type": "main"
@@ -86,14 +87,14 @@ Add to `~/.openclaw/openclaw.json`:
 
 Then reload: `openclaw gateway restart`
 
-### Claude Code (Mac Mini or NAS)
+### Claude Code
 
 Add to `~/.claude/settings.json`:
 
 ```json
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "http://192.168.1.70:30400",
+    "ANTHROPIC_BASE_URL": "http://localhost:4000",
     "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-mac\nX-AgentWeave-Session-Id: claude-code-main\nX-AgentWeave-Project: claude-code"
   }
 }
@@ -101,16 +102,16 @@ Add to `~/.claude/settings.json`:
 
 New Claude Code sessions will route through the proxy. See [claude-code-proxy.md](claude-code-proxy.md) for full details.
 
-### Max / pi-agent (Mac Mini)
+### Any shell-launched agent
 
-Set in `~/max/projects/agent-max/.env`:
+Set in the agent environment:
 
 ```bash
-ANTHROPIC_BASE_URL=http://192.168.1.70:30400
+ANTHROPIC_BASE_URL=http://localhost:4000
 ```
 
-The AgentWeave JS SDK handles per-request attribution headers automatically.
-Restart: `launchctl stop com.arnab.agent-max && launchctl start com.arnab.agent-max`
+The AgentWeave JS SDK or client default headers can add per-request attribution
+headers automatically.
 
 ### Any Python agent (Anthropic SDK)
 
@@ -128,7 +129,7 @@ With the single-proxy architecture, the `X-AgentWeave-Agent-Id` header is how ev
 
 ```python
 client = anthropic.Anthropic(
-    base_url="http://192.168.1.70:30400",
+    base_url="http://localhost:4000",
     default_headers={"X-AgentWeave-Agent-Id": "my-agent-v1"},
 )
 ```
@@ -192,7 +193,7 @@ Clients that already hold a valid API key or OAuth token send it directly. The p
 
 ```bash
 # Claude Code — key comes from ~/.claude/settings.json or ANTHROPIC_API_KEY
-curl http://192.168.1.70:30400/v1/messages \
+curl http://localhost:4000/v1/messages \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-sonnet-4-6","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
@@ -204,7 +205,7 @@ External clients that don't hold their own API key can send a dummy key (`dummy`
 
 ```bash
 # External script — no real key needed locally
-curl http://192.168.1.70:30400/v1/messages \
+curl http://localhost:4000/v1/messages \
   -H "x-api-key: dummy" \
   -H "X-AgentWeave-Agent-Id: gpu-pc-v1" \
   -H "Content-Type: application/json" \
@@ -229,7 +230,7 @@ kubectl rollout restart deployment/agentweave-proxy -n agentweave
 **Verify key injection is active:**
 
 ```bash
-curl http://192.168.1.70:30400/health
+curl http://localhost:4000/health
 # Should include: "key_injection": {"anthropic": true}
 ```
 

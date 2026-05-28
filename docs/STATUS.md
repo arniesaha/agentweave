@@ -1,75 +1,66 @@
-# AgentWeave — Project Status
-*Last updated: March 20, 2026*
+# AgentWeave Project Status
 
----
+Last updated: 2026-05-27
 
-## Current State (v0.2.x)
+## Current Release Line
 
-### Proxy
-- Multi-provider transparent proxy: Anthropic, OpenAI, Google Gemini
-- Deployed on k3s NAS: NodePort 30400 (nix-v1), 30401 (max-v1), 30402 (nix-subagent-v1)
-- Reads `AGENTWEAVE_AGENT_TYPE` from env — auto-tags spans with `prov.agent.type`
-- Session context via `POST /session` or env vars: `AGENTWEAVE_SESSION_ID`, `AGENTWEAVE_PARENT_SESSION_ID`, `AGENTWEAVE_TASK_LABEL`, `AGENTWEAVE_AGENT_TYPE`
-- Prefer per-session-key isolation for concurrent agents: include `session_key` in `POST /session` and send `x-agentweave-session-key` + optional `x-agentweave-task-label` on each proxied LLM request
-- Attribution precedence: explicit per-request headers beat legacy global forced context (issue #189). For delegated Claude Code launches, use `scripts/claude-delegate.sh`. See `docs/attribution-runbook.md`.
-- Sub-agent attribution: `prov.parent.session.id`, `prov.agent.type`, `prov.task.label`
-- traceparent passthrough: reads incoming `traceparent` header, sets `prov.trace.parent` on span, forwards downstream
-- Benchmarks: ~6ms p50 overhead on LLM calls (<2%)
+AgentWeave is in developer preview on the `0.3.x` line.
 
-### Dashboard (v25)
-- Live at agentweave.arnabsaha.com (NodePort 30896)
-- Overview tab: LLM calls, cost, latency by model over time
-- Session Explorer tab: interactive multi-level sub-agent graph with parent→child edges
-- Session replay: click any node → session ID auto-fills → "Open in Grafana" opens Tempo Explore
-- Nodes coloured by agent type (main = purple, subagent = teal)
-- Time range filter: 15m / 1h / 3h / 6h / 24h / 7d
-- Fullscreen mode with body scroll lock
-- Mobile-friendly stat cards (responsive font sizing)
+| Component | Current version/source | Status |
+|---|---:|---|
+| Python SDK / proxy | `0.3.0` in `sdk/python/pyproject.toml` | Active |
+| TypeScript SDK | `0.3.0` in `sdk/js/package.json` | Active |
+| Go SDK | tag-based module `github.com/arniesaha/agentweave-go` | Preview |
+| Dashboard | built from `dashboard/` | Dogfooded |
 
-### Python SDK (`agentweave-sdk==0.1.1` on PyPI)
-- `@trace_tool`, `@trace_agent`, `@trace_llm` decorators
-- `auto_instrument()` — zero-decorator patching for Anthropic + OpenAI SDKs
-- W3C PROV-O OTel spans, W3C TraceContext propagation
-- Sub-agent attribution parameters: `parent_session_id`, `agent_type`, `turn_depth`
-- 240 tests passing
+## Public Developer-Preview Path
 
-### TypeScript SDK (`agentweave-sdk` on npm)
-- Same decorator API as Python: `traceAgent`, `traceTool`, `traceLlm`
-- W3C trace context propagation
-- 10 tests passing
+The public quickstart should stay local-first:
 
-### Go SDK (`go get github.com/arniesaha/agentweave-go`)
-- `TraceTool`, `TraceAgent`, `TraceLlm`
-- 4 tests passing
+```bash
+pip install "agentweave-sdk[proxy]"
+agentweave proxy start --port 4000 --endpoint http://localhost:4318
+export ANTHROPIC_BASE_URL=http://localhost:4000/v1
+```
 
-### Dogfooding (Live)
-- Nix (NAS OpenClaw): all LLM calls traced via NodePort 30400, tagged `nix-v1 / main`
-- Max (Mac Mini): all LLM calls traced via NodePort 30401, tagged `max-v1 / main`
-- Sub-agents (Claude Code spawns): traced via NodePort 30402, tagged `nix-subagent-v1 / subagent`
-- Grafana + Tempo: `http://192.168.1.70:30300`
+Use normal provider API keys in the local environment. Private NAS NodePorts,
+tunnels, and proxy-side credential injection belong in dogfood runbooks rather
+than public setup docs.
 
----
+## What Works Today
 
-## Recently Closed Issues
-| # | Title | Closed |
-|---|-------|--------|
-| #100 | feat: session-level distributed tracing (#44) | Mar 20, 2026 |
-| #99 | fix: compute_cost called without cache token counts | Mar 19, 2026 |
-| #98 | docs: update stale docs | Mar 19, 2026 |
-| #97 | README: update screenshots + framework example backlinks | Mar 18, 2026 |
-| #96 | Dashboard: sub-agent edges not rendered | Mar 18, 2026 |
+- Multi-provider transparent proxy paths for Anthropic, OpenAI-compatible, and
+  Gemini-compatible APIs.
+- Python SDK decorators and `auto_instrument()` for Anthropic/OpenAI clients.
+- TypeScript and Go SDKs with basic tracing APIs.
+- OpenClaw bridge dogfooding with session, agent, model, token, and cost
+  attribution.
+- Dashboard views for overview, routing, session graph, and replay.
+- Framework examples for LangGraph, CrewAI, AutoGen, and OpenAI Agents SDK.
 
-## Open Issues
-| # | Title | Notes |
-|---|-------|-------|
-| #31 | feat: evals, prompt management, and review framework | Post-core — deferred |
-| #2 | ci: publish to PyPI on version tags via GitHub Actions | Nice-to-have |
-| #91 | ci: npm publish workflow for TypeScript SDK | Nice-to-have |
+## Launch-Readiness Focus
 
----
+The developer-preview milestone is about confidence before broader public
+distribution:
 
-## Repo
+1. Agentic install/debugging through `agentweave doctor`.
+2. Compatibility matrix and smoke checks for common agent frameworks.
+3. Docs/version/source-of-truth consistency.
+4. Dogfood trace data-quality gate.
+5. Sanitized dogfood demo traces and public screenshots.
+
+## Private Dogfood Deployment
+
+Arnab's live dogfood stack runs on private infrastructure and is intentionally
+not the public install path. Internal details such as LAN IPs, Kubernetes
+ClusterIPs, and Cloudflare tunnel hosts should stay in deployment runbooks.
+
+Useful private runbooks:
+
+- `docs/DEPLOYMENT-RUNBOOK.md`
+- `docs/attribution-runbook.md`
+- `docs/project-tracking.md`
+
+## Repository
+
 https://github.com/arniesaha/agentweave
-
-## Local Path
-`/home/Arnab/dev/agentweave`
