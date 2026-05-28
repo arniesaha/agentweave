@@ -95,13 +95,18 @@ jobs:
         working-directory: sdk/js
         run: npm ci
 
+      - name: Preflight npm publish access
+        run: bash scripts/npm-publish-preflight.sh --require-auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Build
         working-directory: sdk/js
         run: npm run build
 
       - name: Publish to npm
         working-directory: sdk/js
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -135,6 +140,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
       - name: Validate compatibility smoke script
         run: |
           bash -n scripts/compatibility-smoke.sh
@@ -145,6 +156,11 @@ jobs:
           python -m pip install pytest
           python -m py_compile scripts/trace_quality_gate.py tests/test_trace_quality_gate.py
           python -m pytest tests/test_trace_quality_gate.py
+
+      - name: Validate npm publish preflight script
+        run: |
+          bash -n scripts/npm-publish-preflight.sh
+          bash scripts/npm-publish-preflight.sh
 
   # ── Docker ──────────────────────────────────────────────
   docker:
