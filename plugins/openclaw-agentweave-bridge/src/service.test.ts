@@ -129,6 +129,56 @@ describe("createAgentWeaveBridgeService", () => {
     expect(process.env.AGENTWEAVE_SESSION_ID).toBe("agent:main:test-session")
   })
 
+  it("sets cwd and repository on message.queued when provided by the event", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:repo-session",
+      sessionId: "repo-session",
+      channel: "cli",
+      source: "user",
+      cwd: "/home/arnab/dev/agentweave",
+      repository: "arniesaha/agentweave",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.cwd", "/home/arnab/dev/agentweave")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.repository", "arniesaha/agentweave")
+  })
+
+  it("omits cwd and repository on message.queued when the event does not provide them", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:no-repo-session",
+      sessionId: "no-repo-session",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.cwd", expect.anything())
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.repository", expect.anything())
+  })
+
+  it("sets cwd and repository on session.state subagent roots when provided by the event", () => {
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:parent:subagent:worker-c",
+      sessionId: "worker-c",
+      state: "processing",
+      raw_data: {
+        cwd: "/home/arnab/dev/agentweave/plugins/openclaw-agentweave-bridge",
+        repository: "arniesaha/agentweave",
+      },
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.cwd", "/home/arnab/dev/agentweave/plugins/openclaw-agentweave-bridge")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.repository", "arniesaha/agentweave")
+  })
+
   it("ends span on message.processed (completed) and cleans env", () => {
     fire({ type: "message.queued", sessionKey: "agent:main:sk-2", sessionId: "sess-b", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
     fire({ type: "message.processed", sessionKey: "agent:main:sk-2", sessionId: "sess-b", channel: "cli", outcome: "completed", durationMs: 1200, ts: Date.now(), seq: 2 })

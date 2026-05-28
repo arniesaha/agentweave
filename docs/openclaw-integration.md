@@ -160,8 +160,9 @@ cd ~/.openclaw/plugins/agentweave-bridge && npm install
       "agentweave-bridge": {
         "path": "/home/user/clawd/plugins/openclaw-agentweave-bridge",
         "config": {
-          "otlpEndpoint": "http://192.168.1.70:30418",
-          "agentId": "nix-v1",
+          "otlpEndpoint": "http://localhost:4318",
+          "proxyUrl": "http://localhost:4000",
+          "agentId": "openclaw-v1",
           "project": "my-project",
           "enabled": true
         }
@@ -170,6 +171,22 @@ cd ~/.openclaw/plugins/agentweave-bridge && npm install
   }
 }
 ```
+
+Use hostnames or LAN addresses that are reachable from each OpenClaw machine.
+For fleet installs, give each machine a stable `agentId` such as
+`openclaw-laptop`, `openclaw-ci`, or `openclaw-worker-01`.
+
+3. Restart OpenClaw and verify the bridge on that machine:
+
+```bash
+AGENTWEAVE_PROXY_URL=http://localhost:4000 \
+AGENTWEAVE_OTLP_ENDPOINT=http://localhost:4318 \
+agentweave doctor
+```
+
+The `openclaw.bridge` check should pass when the plugin is registered and
+enabled. It warns when OpenClaw and AgentWeave configuration hints are present
+but the bridge is missing or disabled.
 
 ### What the plugin does
 
