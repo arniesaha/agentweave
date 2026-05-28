@@ -21,6 +21,14 @@ app.add_typer(hooks_app)
 console = Console()
 
 
+def _doctor_status_markup(status: str) -> str:
+    if status == "pass":
+        return "[green]PASS[/green]"
+    if status == "warn":
+        return "[yellow]WARN[/yellow]"
+    return "[red]FAIL[/red]"
+
+
 def _get_provider():
     """Return the current TracerProvider (if any)."""
     from opentelemetry import trace as otel_trace
@@ -395,6 +403,67 @@ def hooks_uninstall(
         console.print("[green]AgentWeave hooks uninstalled successfully![/green]")
         for change in changes_made:
             console.print(f"  - {change}")
+
+
+# ---------------------------------------------------------------------------
+# agentweave doctor
+# ---------------------------------------------------------------------------
+
+
+@app.command("doctor")
+def doctor(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON instead of a table.",
+    ),
+    check_proxy: bool = typer.Option(
+        False,
+        "--check-proxy",
+        help="Query the configured proxy /health endpoint.",
+    ),
+    proxy_url: Optional[str] = typer.Option(
+        None,
+        "--proxy-url",
+        help="Proxy URL to use with --check-proxy. Defaults to AGENTWEAVE_PROXY_URL or provider base URL.",
+    ),
+    timeout: float = typer.Option(
+        2.0,
+        "--timeout",
+        min=0.1,
+        help="Proxy health check timeout in seconds.",
+    ),
+) -> None:
+    """Run local install and configuration diagnostics."""
+    from agentweave.doctor import doctor_payload_json, has_failures, run_doctor
+
+    checks = run_doctor(check_proxy=check_proxy, proxy_url=proxy_url, timeout_seconds=timeout)
+
+    if json_output:
+        typer.echo(doctor_payload_json(checks))
+    else:
+        table = Table(title="AgentWeave Doctor")
+        table.add_column("Status", no_wrap=True)
+        table.add_column("Check", style="cyan")
+        table.add_column("Message")
+        table.add_column("Suggested fix", style="dim")
+
+        for check in checks:
+            table.add_row(
+                _doctor_status_markup(check.status),
+                check.name,
+                check.message,
+                check.suggestion or "",
+            )
+        console.print(table)
+
+        if has_failures(checks):
+            console.print("\n[red]Doctor found hard failures.[/red]")
+        else:
+            console.print("\n[green]No hard failures found.[/green]")
+
+    if has_failures(checks):
+        raise typer.Exit(code=1)
 
 
 # ---------------------------------------------------------------------------
