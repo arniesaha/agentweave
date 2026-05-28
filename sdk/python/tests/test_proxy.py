@@ -830,6 +830,13 @@ class TestSubAgentAttributionHeaders:
     def _call(self, monkeypatch, parent_session_id=None, agent_type=None, turn_depth=None):
         from agentweave.config import AgentWeaveConfig
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        for key in (
+            "AGENTWEAVE_PARENT_SESSION_ID",
+            "AGENTWEAVE_AGENT_TYPE",
+            "AGENTWEAVE_TURN_DEPTH",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr(proxy_module, "_session_context", {})
         span = _FakeSpan()
         _set_request_attrs(
             span, model="test-model", provider="anthropic",

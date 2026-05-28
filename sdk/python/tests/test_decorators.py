@@ -17,13 +17,21 @@ from agentweave.decorators import trace_agent, trace_llm, trace_tool
 
 
 @pytest.fixture(autouse=True)
-def _setup_test_tracer():
+def _setup_test_tracer(monkeypatch):
     """Set up an in-memory tracer for each test.
 
     Rather than fighting OTel's global provider (which refuses override after
     first set), inject our test provider directly into agentweave.exporter._provider.
     """
     import agentweave.exporter as _exporter_mod
+
+    for key in (
+        "AGENTWEAVE_SESSION_ID",
+        "AGENTWEAVE_PARENT_SESSION_ID",
+        "AGENTWEAVE_AGENT_TYPE",
+        "AGENTWEAVE_TURN_DEPTH",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
     AgentWeaveConfig.reset()
     exporter = InMemorySpanExporter()
