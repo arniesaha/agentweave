@@ -323,7 +323,9 @@ def evaluate(records: list[SpanRecord]) -> dict[str, Any]:
                 )
             )
 
-        if is_llm and model and (not record.prompt_tokens or not record.completion_tokens):
+        has_usable_model = model.lower() not in MODEL_MISSING_VALUES
+
+        if is_llm and has_usable_model and (not record.prompt_tokens or not record.completion_tokens):
             warnings.append(
                 issue(
                     "warn",
@@ -333,7 +335,7 @@ def evaluate(records: list[SpanRecord]) -> dict[str, Any]:
                 )
             )
 
-        if is_llm and model and not record.cost_usd and record.source.startswith("tempo:"):
+        if is_llm and has_usable_model and not record.cost_usd and record.source.startswith("tempo:"):
             warnings.append(
                 issue(
                     "warn",

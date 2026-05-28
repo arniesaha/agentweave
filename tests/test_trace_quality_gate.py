@@ -99,6 +99,28 @@ def test_model_label_on_lifecycle_span_is_not_llm_warning():
     assert not report["warnings"]
 
 
+def test_missing_model_failure_does_not_emit_token_or_cost_warnings():
+    report = trace_quality_gate.evaluate(
+        [
+            SpanRecord(
+                source="tempo:fixture",
+                service="agentweave-proxy",
+                span_name="llm.unknown",
+                activity_type="llm_call",
+                model="unknown",
+                agent_id="unattributed",
+            )
+        ]
+    )
+
+    assert report["status"] == "fail"
+    assert {item["code"] for item in report["failures"]} == {
+        "unattributed_llm_span",
+        "missing_llm_model",
+    }
+    assert report["warnings"] == []
+
+
 def test_tempo_fixture_parsing_preserves_attributes():
     payload = {
         "traces": [

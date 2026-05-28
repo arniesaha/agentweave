@@ -399,6 +399,15 @@ class TestHealthEndpoint:
         resp = client.get("/health", headers={"Authorization": "Bearer wrongtoken"})
         assert resp.status_code == 200
 
+    def test_provider_base_health_alias_no_auth(self):
+        """Clients using ANTHROPIC_BASE_URL=http://proxy/v1 may probe /v1/health."""
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+        client = TestClient(app)
+        resp = client.get("/v1/health", headers={"Authorization": "Bearer wrongtoken"})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
 
 # ---------------------------------------------------------------------------
 # Auth

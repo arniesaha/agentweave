@@ -404,6 +404,12 @@ async def health() -> dict:
     return resp
 
 
+@app.get("/v1/health", include_in_schema=False)
+async def provider_base_health() -> dict:
+    """Health alias for clients configured with provider base URLs ending in /v1."""
+    return await health()
+
+
 # When True, _session_context overrides request headers (used during sub-agent windows).
 # Kept for backward compatibility with callers that don't supply a session_key.
 _session_context_force: bool = False
