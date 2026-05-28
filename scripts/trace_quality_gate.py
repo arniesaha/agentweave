@@ -431,7 +431,8 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # pragma: no cover - exercised manually/live.
             errors.append(f"tempo query failed: {exc}")
 
-    if not records and not errors:
+    has_sources = bool(args.fixture or args.prometheus_url or args.tempo_url)
+    if not has_sources:
         parser.error("provide --fixture, --prometheus-url, or --tempo-url")
 
     report = evaluate(records)

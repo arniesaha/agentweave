@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -119,6 +120,17 @@ def test_missing_model_failure_does_not_emit_token_or_cost_warnings():
         "missing_llm_model",
     }
     assert report["warnings"] == []
+
+
+def test_main_allows_empty_live_window(monkeypatch, capsys):
+    monkeypatch.setattr(trace_quality_gate, "fetch_prometheus_records", lambda *args: [])
+
+    exit_code = trace_quality_gate.main(["--prometheus-url", "http://localhost:9090", "--range", "1m", "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["status"] == "pass"
+    assert payload["summary"]["records_checked"] == 0
 
 
 def test_tempo_fixture_parsing_preserves_attributes():
