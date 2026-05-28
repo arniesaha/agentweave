@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentWeave Public Dogfood Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f5ef;
+        --ink: #1b1f24;
+        --muted: #607080;
+        --line: #d8d1c2;
+        --panel: #fffdf8;
+        --accent: #2f6f73;
+        --blue: #365d9d;
+        --red: #b94b4b;
+        --gold: #a66b19;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 32px 24px 48px;
+      }
+
+      header {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 24px;
+        align-items: end;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 24px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 36px;
+        line-height: 1.05;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        font-size: 18px;
+        margin-bottom: 12px;
+      }
+
+      .subtitle {
+        margin-top: 10px;
+        max-width: 720px;
+        color: var(--muted);
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--panel);
+        padding: 7px 11px;
+        color: var(--accent);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .grid {
+        display: grid;
+        gap: 18px;
+      }
+
+      .stats {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        margin: 24px 0;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+      }
+
+      .stat-label {
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .stat-value {
+        display: block;
+        margin-top: 6px;
+        font-size: 25px;
+        font-weight: 760;
+      }
+
+      .section {
+        margin-top: 28px;
+      }
+
+      .agents {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .agent {
+        min-height: 150px;
+      }
+
+      .agent small,
+      .span small {
+        display: block;
+        margin-top: 6px;
+        color: var(--muted);
+      }
+
+      .agent-title {
+        font-weight: 760;
+      }
+
+      .agent-type {
+        margin-top: 10px;
+        color: var(--blue);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 10px;
+      }
+
+      .span {
+        display: grid;
+        grid-template-columns: 130px 1fr 120px 110px;
+        gap: 14px;
+        align-items: center;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-left: 5px solid var(--accent);
+        border-radius: 8px;
+        padding: 12px 14px;
+      }
+
+      .span.llm {
+        border-left-color: var(--blue);
+      }
+
+      .span.tool {
+        border-left-color: var(--gold);
+      }
+
+      .span.error {
+        border-left-color: var(--red);
+      }
+
+      .kind {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .cost {
+        font-variant-numeric: tabular-nums;
+        font-weight: 760;
+      }
+
+      code {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #f1ede3;
+        padding: 2px 5px;
+        font: 13px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .privacy {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 20px;
+      }
+
+      li + li {
+        margin-top: 6px;
+      }
+
+      @media (max-width: 860px) {
+        header,
+        .privacy {
+          grid-template-columns: 1fr;
+        }
+
+        .stats,
+        .agents {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .span {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>AgentWeave building AgentWeave</h1>
+          <p class="subtitle">
+            Sanitized dogfood trace fixture for public screenshots. It preserves
+            parent/child causality, model/cost attribution, and a recoverable
+            tool error without exposing private prompts, paths, or URLs.
+          </p>
+        </div>
+        <div class="badge">public demo fixture</div>
+      </header>
+
+      <section class="grid stats" id="stats"></section>
+
+      <section class="section">
+        <h2>Session Causality</h2>
+        <div class="grid agents" id="agents"></div>
+      </section>
+
+      <section class="section">
+        <h2>Replay Timeline</h2>
+        <div class="timeline" id="timeline"></div>
+      </section>
+
+      <section class="section privacy">
+        <div class="card">
+          <h2>Screenshot Targets</h2>
+          <ul>
+            <li>Overview: totals, agents, costs, and error count.</li>
+            <li>Session: maintainer to docs/fixture/review child agents.</li>
+            <li>Replay: LLM calls, tool call, and recoverable validation error.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h2>Privacy Boundary</h2>
+          <ul id="privacy"></ul>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const money = new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 4
+      });
+
+      function renderStats(summary) {
+        const stats = [
+          ["Agents", summary.agent_count],
+          ["Spans", summary.span_count],
+          ["LLM calls", summary.llm_call_count],
+          ["Errors", summary.error_count],
+          ["Cost", money.format(summary.total_cost_usd)]
+        ];
+        document.querySelector("#stats").innerHTML = stats
+          .map(([label, value]) => `<div class="card"><span class="stat-label">${label}</span><span class="stat-value">${value}</span></div>`)
+          .join("");
+      }
+
+      function renderAgents(agents) {
+        document.querySelector("#agents").innerHTML = agents
+          .map((agent) => `
+            <article class="card agent">
+              <div class="agent-title">${agent.agent_id}</div>
+              <small><code>${agent.session_id}</code></small>
+              <div class="agent-type">${agent.agent_type}</div>
+              <small>parent: ${agent.parent_session_id ? `<code>${agent.parent_session_id}</code>` : "none"}</small>
+              <small>${agent.task_label}</small>
+            </article>
+          `)
+          .join("");
+      }
+
+      function renderTimeline(spans) {
+        document.querySelector("#timeline").innerHTML = spans
+          .map((span) => {
+            const attrs = span.attributes || {};
+            const model = attrs["prov.llm.model"] || attrs["tool.name"] || attrs["prov.agent.type"] || "span";
+            const tokens = attrs["prov.llm.total_tokens"] ? `${attrs["prov.llm.total_tokens"]} tokens` : `${span.duration_ms} ms`;
+            const cost = typeof attrs["cost.usd"] === "number" ? money.format(attrs["cost.usd"]) : "";
+            return `
+              <article class="span ${span.kind} ${span.status === "error" ? "error" : ""}">
+                <div><div class="kind">${span.kind}</div><small>${span.status}</small></div>
+                <div><strong>${span.name}</strong><small>${span.redacted_io.output_summary}</small></div>
+                <div><code>${model}</code><small>${tokens}</small></div>
+                <div class="cost">${cost}</div>
+              </article>
+            `;
+          })
+          .join("");
+      }
+
+      async function main() {
+        const response = await fetch("./demo-trace.json");
+        const data = await response.json();
+        renderStats(data.trace.summary);
+        renderAgents(data.agents);
+        renderTimeline(data.spans);
+        document.querySelector("#privacy").innerHTML = data.privacy.redaction_policy
+          .map((item) => `<li>${item}</li>`)
+          .join("");
+      }
+
+      main().catch((error) => {
+        document.body.innerHTML = `<main><h1>Demo failed to load</h1><p>${error.message}</p></main>`;
+      });
+    </script>
+  </body>
+</html>
