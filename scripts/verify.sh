@@ -7,6 +7,7 @@ NODE_IP="${AGENTWEAVE_NODE_IP:-192.168.1.70}"
 PROXY_PORT="${AGENTWEAVE_PROXY_NODEPORT:-30400}"
 TEMPO_QUERY_PORT="${AGENTWEAVE_TEMPO_QUERY_PORT:-31989}"  # Tempo HTTP query port (NodePort)
 GRAFANA_PORT="${AGENTWEAVE_GRAFANA_PORT:-30300}"           # Grafana NodePort
+PROMETHEUS_URL="${AGENTWEAVE_PROMETHEUS_URL:-http://10.43.3.20:9090}"
 OPENCLAW_PORT="${AGENTWEAVE_OPENCLAW_PORT:-18789}"         # OpenClaw gateway (has Anthropic key)
 # Auto-fetch OpenClaw gateway token if not set explicitly
 OPENCLAW_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(openclaw config get gateway.auth.token 2>/dev/null || echo '')}"
@@ -116,6 +117,15 @@ if [ -z "${GRAFANA_RESP}" ] || ! echo "${GRAFANA_RESP}" | grep -q '"result"'; th
   # Fallback: query via Grafana's generic datasource proxy (datasource id=1)
   GRAFANA_RESP=$(curl -sf --max-time 10 -u "${GRAFANA_CREDS}" \
     "${GRAFANA_URL}/api/datasources/proxy/1/api/v1/query?query=${PROM_QUERY}" \
+    2>&1) || true
+fi
+
+if [ -z "${GRAFANA_RESP}" ] || ! echo "${GRAFANA_RESP}" | grep -q '"result"'; then
+  # Fallback for homelab runs from the NAS: query Prometheus directly via
+  # ClusterIP. This keeps verification useful when Grafana auth/proxy settings
+  # drift but Prometheus itself is reachable.
+  GRAFANA_RESP=$(curl -sf --max-time 10 \
+    "${PROMETHEUS_URL}/api/v1/query?query=${PROM_QUERY}" \
     2>&1) || true
 fi
 
