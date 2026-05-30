@@ -1,0 +1,51 @@
+# Apply this file only after Langfuse is upgraded to v3.22+ and a real
+# LANGFUSE_OTLP_AUTH_HEADER secret exists in the monitoring namespace.
+#
+# It intentionally uses the same resource names as otel-collector.yaml so that
+# `kubectl apply -f otel-collector-langfuse-fanout.yaml` switches the collector
+# from Tempo-only export to Tempo + Langfuse fanout.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentweave-otel-collector
+  namespace: monitoring
+  labels:
+    app: agentweave-otel-collector
+data:
+  collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+          grpc:
+            endpoint: 0.0.0.0:4317
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 256
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 384
+        spike_limit_mib: 128
+
+    exporters:
+      otlphttp/tempo:
+        endpoint: http://tempo.monitoring.svc.cluster.local:4318
+
+      otlphttp/langfuse:
+        endpoint: http://langfuse.apps.svc.cluster.local:3000/api/public/otel
+        headers:
+          Authorization: ${env:LANGFUSE_OTLP_AUTH_HEADER}
+          x-langfuse-ingestion-version: "4"
+
+      debug:
+        verbosity: basic
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlphttp/tempo, otlphttp/langfuse, debug]

@@ -4,8 +4,10 @@ metadata:
   name: agentweave-proxy
   namespace: agentweave
 data:
-  # OTLP HTTP endpoint for trace export
-  AGENTWEAVE_OTLP_ENDPOINT: "http://tempo.monitoring.svc.cluster.local:4318"
+  # OTLP HTTP endpoint for trace export.
+  # Dogfood deployments should send to the collector fanout, which keeps Tempo
+  # canonical and can optionally mirror selected spans to Langfuse.
+  AGENTWEAVE_OTLP_ENDPOINT: "http://agentweave-otel-collector.monitoring.svc.cluster.local:4318"
 
   # AGENTWEAVE_AGENT_ID intentionally unset. proxy.py already falls back to
   # "unattributed" (or "unattributed:<project>" when project is known, #199)

@@ -6,7 +6,7 @@ OpenClaw plugin that creates root OTel spans per user message, enabling full con
 
 - OpenClaw installed (`openclaw` CLI available)
 - AgentWeave proxy running, for example `http://localhost:4000`
-- An OTLP/Tempo collector reachable over HTTP, for example `http://localhost:4318`
+- An OTLP collector or Tempo endpoint reachable over HTTP, for example `http://localhost:4318`
 
 ## Step 1 — Install plugin dependencies
 
@@ -42,7 +42,7 @@ Edit `~/.openclaw/openclaw.json` and add the plugin under `plugins.entries`:
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `otlpEndpoint` | ✅ | — | OTLP HTTP endpoint for Grafana Tempo |
+| `otlpEndpoint` | ✅ | — | OTLP HTTP endpoint. In dogfood, point this at the AgentWeave collector; the dashboard still reads from Tempo. |
 | `proxyUrl` | ❌ | `AGENTWEAVE_PROXY_URL` | AgentWeave proxy URL injected into sub-agent provider env vars |
 | `agentId` | ❌ | `"nix-v1"` | Agent identifier stamped on all spans; set this explicitly per machine |
 | `project` | ❌ | — | Project tag for filtering in AgentWeave dashboard |

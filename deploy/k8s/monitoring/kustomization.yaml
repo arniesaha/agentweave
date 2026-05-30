@@ -4,6 +4,8 @@ kind: Kustomization
 namespace: monitoring
 
 resources:
+  - otel-collector-secret.yaml
+  - otel-collector.yaml
   - minio.yaml
   - minio-init-job.yaml
   - tempo-configmap-minio.yaml

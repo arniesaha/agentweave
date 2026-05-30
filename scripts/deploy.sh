@@ -6,6 +6,7 @@ set -euo pipefail
 REGISTRY="${AGENTWEAVE_REGISTRY:-localhost:5000}"
 IMAGE="${REGISTRY}/agentweave-proxy:latest"
 NAMESPACE="${AGENTWEAVE_NAMESPACE:-agentweave}"
+MONITORING_NAMESPACE="${AGENTWEAVE_MONITORING_NAMESPACE:-monitoring}"
 NODE_IP="${AGENTWEAVE_NODE_IP:-192.168.1.70}"
 PROXY_NODEPORT="${AGENTWEAVE_PROXY_NODEPORT:-30400}"
 HEALTH_URL="http://${NODE_IP}:${PROXY_NODEPORT}/health"
@@ -45,6 +46,15 @@ else
 fi
 
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/namespace.yaml"
+
+# Deploy the Tempo-only collector before repointing/restarting the proxy. The
+# Langfuse fanout overlay is applied manually after Langfuse v3 migration and a
+# real project API key are ready.
+kubectl apply -f "${REPO_ROOT}/deploy/k8s/monitoring/otel-collector.yaml"
+kubectl rollout status deployment/agentweave-otel-collector \
+  -n "${MONITORING_NAMESPACE}" --timeout="${ROLLOUT_TIMEOUT}" \
+  || fail "OTel collector rollout did not complete within ${ROLLOUT_TIMEOUT}"
+
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/configmap.yaml"
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/service.yaml"
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/deployment.yaml"

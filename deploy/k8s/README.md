@@ -15,7 +15,10 @@ All clients (Nix, Max, Claude Code, A2A servers)
 └───────────────────────────────┘
         │
         ▼ OTLP HTTP
-  tempo.monitoring.svc.cluster.local:4318
+  agentweave-otel-collector.monitoring.svc.cluster.local:4318
+        │
+        ├── Tempo (canonical raw traces)
+        └── Langfuse (optional eval/prompt sink after v3 migration)
         │
         ▼
    api.anthropic.com (upstream)
@@ -51,10 +54,18 @@ kubectl create secret generic agentweave-proxy \
 kubectl apply -f deploy/k8s/namespace.yaml
 kubectl apply -f deploy/k8s/configmap.yaml
 kubectl apply -f deploy/k8s/secret.yaml      # or use kubectl create secret above
+kubectl apply -f deploy/k8s/monitoring/otel-collector-secret.yaml
+kubectl apply -f deploy/k8s/monitoring/otel-collector.yaml
 kubectl apply -f deploy/k8s/deployment.yaml
 kubectl apply -f deploy/k8s/service.yaml
 kubectl apply -f deploy/k8s/dashboard-deployment.yaml
 ```
+
+The default collector manifest exports to Tempo only, so it is safe to place in
+front of the current proxy before the Langfuse upgrade. After Langfuse is on
+v3.22+ and a real `LANGFUSE_OTLP_AUTH_HEADER` secret exists, apply
+`deploy/k8s/monitoring/otel-collector-langfuse-fanout.yaml` and restart the
+collector to mirror traces to Langfuse.
 
 ### Dashboard nginx credentials
 
