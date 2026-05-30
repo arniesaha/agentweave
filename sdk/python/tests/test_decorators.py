@@ -411,6 +411,10 @@ class TestTraceLlm:
         assert attrs[schema.GEN_AI_USAGE_INPUT_TOKENS] == 150
         assert attrs[schema.GEN_AI_USAGE_OUTPUT_TOKENS] == 42
         assert list(attrs[schema.GEN_AI_RESPONSE_FINISH_REASONS]) == ["end_turn"]
+        assert attrs[schema.LANGFUSE_OBSERVATION_TYPE] == schema.LANGFUSE_OBS_TYPE_GENERATION
+        assert attrs[schema.LANGFUSE_OBSERVATION_MODEL_NAME] == "claude-sonnet-4-6"
+        assert attrs[schema.LANGFUSE_TRACE_METADATA_ACTIVITY_TYPE] == schema.ACTIVITY_LLM_CALL
+        assert attrs[schema.LANGFUSE_TRACE_METADATA_AGENT_ID] == "test-agent"
 
     def test_openai_token_convention(self, _setup_test_tracer):
         exporter, _ = _setup_test_tracer

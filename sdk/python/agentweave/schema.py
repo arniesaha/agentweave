@@ -148,6 +148,38 @@ GEN_AI_OP_CHAT = "chat"
 GEN_AI_OP_INVOKE_AGENT = "invoke_agent"
 
 # ---------------------------------------------------------------------------
+# Langfuse OpenTelemetry attributes
+# ---------------------------------------------------------------------------
+
+LANGFUSE_TRACE_NAME = "langfuse.trace.name"
+LANGFUSE_SESSION_ID = "langfuse.session.id"
+LANGFUSE_TRACE_TAGS = "langfuse.trace.tags"
+LANGFUSE_OBSERVATION_TYPE = "langfuse.observation.type"
+LANGFUSE_OBSERVATION_MODEL_NAME = "langfuse.observation.model.name"
+LANGFUSE_OBSERVATION_USAGE_DETAILS = "langfuse.observation.usage_details"
+LANGFUSE_OBSERVATION_COST_DETAILS = "langfuse.observation.cost_details"
+LANGFUSE_OBSERVATION_INPUT = "langfuse.observation.input"
+LANGFUSE_OBSERVATION_OUTPUT = "langfuse.observation.output"
+
+# Filterable Langfuse trace metadata. These mirror backend-neutral prov.*
+# fields without making Langfuse the AgentWeave source of truth.
+LANGFUSE_TRACE_METADATA_PROJECT = "langfuse.trace.metadata.project"
+LANGFUSE_TRACE_METADATA_AGENT_ID = "langfuse.trace.metadata.agent_id"
+LANGFUSE_TRACE_METADATA_AGENT_TYPE = "langfuse.trace.metadata.agent_type"
+LANGFUSE_TRACE_METADATA_PARENT_SESSION_ID = "langfuse.trace.metadata.parent_session_id"
+LANGFUSE_TRACE_METADATA_REPOSITORY = "langfuse.trace.metadata.repository"
+LANGFUSE_TRACE_METADATA_TASK_LABEL = "langfuse.trace.metadata.task_label"
+LANGFUSE_TRACE_METADATA_ACTIVITY_TYPE = "langfuse.trace.metadata.activity_type"
+
+# Observation type values supported by Langfuse's OTEL ingestion.
+LANGFUSE_OBS_TYPE_SPAN = "span"
+LANGFUSE_OBS_TYPE_GENERATION = "generation"
+LANGFUSE_OBS_TYPE_EVENT = "event"
+LANGFUSE_OBS_TYPE_AGENT = "agent"
+LANGFUSE_OBS_TYPE_TOOL = "tool"
+LANGFUSE_OBS_TYPE_EVALUATOR = "evaluator"
+
+# ---------------------------------------------------------------------------
 # Cache token tracking (Anthropic prompt caching)
 # ---------------------------------------------------------------------------
 

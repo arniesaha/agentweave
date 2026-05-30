@@ -35,7 +35,8 @@ data:
         endpoint: http://tempo.monitoring.svc.cluster.local:4318
 
       otlphttp/langfuse:
-        endpoint: http://langfuse.apps.svc.cluster.local:3000/api/public/otel
+        endpoint: http://langfuse-v3-web.apps.svc.cluster.local:3000/api/public/otel
+        compression: none
         headers:
           Authorization: ${env:LANGFUSE_OTLP_AUTH_HEADER}
           x-langfuse-ingestion-version: "4"

@@ -51,6 +51,17 @@ class TestProvAttributes:
         assert schema.PROV_CWD == "prov.cwd"
         assert schema.PROV_REPOSITORY == "prov.repository"
 
+    def test_langfuse_attributes(self):
+        assert schema.LANGFUSE_TRACE_NAME == "langfuse.trace.name"
+        assert schema.LANGFUSE_SESSION_ID == "langfuse.session.id"
+        assert schema.LANGFUSE_OBSERVATION_TYPE == "langfuse.observation.type"
+        assert schema.LANGFUSE_OBSERVATION_MODEL_NAME == "langfuse.observation.model.name"
+        assert schema.LANGFUSE_TRACE_METADATA_AGENT_ID == "langfuse.trace.metadata.agent_id"
+        assert schema.LANGFUSE_TRACE_METADATA_PROJECT == "langfuse.trace.metadata.project"
+        assert schema.LANGFUSE_OBS_TYPE_GENERATION == "generation"
+        assert schema.LANGFUSE_OBS_TYPE_AGENT == "agent"
+        assert schema.LANGFUSE_OBS_TYPE_TOOL == "tool"
+
     def test_all_prov_attributes_start_with_prov(self):
         """All PROV_ constants should have values starting with 'prov.'."""
         for attr_name in dir(schema):
