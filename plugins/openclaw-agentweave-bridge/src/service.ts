@@ -235,6 +235,19 @@ export function createAgentWeaveBridgeService() {
               span.setAttribute("session_id", sessionId)
               span.setAttribute("session.id", sessionId)
               span.setAttribute("prov.session.id", sessionId)
+              // Qualified route key kept separate from the (UUID-or-fallback)
+              // session id so Nexus can join native shipper rows by UUID while
+              // still seeing the route key (agentweave#187).
+              span.setAttribute("prov.session.key", sessionKey)
+              // Canonical OpenClaw session UUID, when the runtime supplies one
+              // distinct from the route key (cron/isolated path). Lets Nexus
+              // join AgentWeave spans to native-shipper rows by UUID without
+              // disturbing the route-key-based attribution above (agentweave#187).
+              const canonicalUuid = firstString(e.sessionId)
+              if (canonicalUuid && canonicalUuid !== sessionKey) {
+                span.setAttribute("prov.session.uuid", canonicalUuid)
+              }
+              span.setAttribute("prov.harness", "openclaw")
               span.setAttribute("prov.agent.id", agentId)
               span.setAttribute("prov.agent.type", agentType)
               span.setAttribute("prov.activity.type", "agent_turn")
@@ -375,6 +388,12 @@ export function createAgentWeaveBridgeService() {
                   span.setAttribute("session_id", sessionId)
                   span.setAttribute("session.id", sessionId)
                   span.setAttribute("prov.session.id", sessionId)
+                  span.setAttribute("prov.session.key", sessionKey)
+                  const canonicalUuid = firstString((e as any).sessionId)
+                  if (canonicalUuid && canonicalUuid !== sessionKey) {
+                    span.setAttribute("prov.session.uuid", canonicalUuid)
+                  }
+                  span.setAttribute("prov.harness", "openclaw")
                   span.setAttribute("prov.agent.id", subagentId)
                   span.setAttribute("prov.agent.type", "subagent")
                   span.setAttribute("prov.activity.type", "agent_turn")
