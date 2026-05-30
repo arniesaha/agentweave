@@ -1602,6 +1602,25 @@ def _extract_and_set_response(
         _set_anthropic_response_attrs(span, data, elapsed_ms, model=model)
 
 
+def _set_langfuse_generation_details(
+    span: Any,
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd: float | None = None,
+) -> None:
+    """Attach Langfuse-native generation usage/cost details as JSON strings."""
+    span.set_attribute(
+        schema.LANGFUSE_OBSERVATION_USAGE_DETAILS,
+        json.dumps({"input": input_tokens, "output": output_tokens}),
+    )
+    if cost_usd is not None:
+        span.set_attribute(
+            schema.LANGFUSE_OBSERVATION_COST_DETAILS,
+            json.dumps({"total": cost_usd}),
+        )
+
+
 def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int, model: str = "") -> None:
     usage = data.get("usage", {})
     raw_input = usage.get("input_tokens", 0)
@@ -1628,18 +1647,21 @@ def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int, model:
 
     # Cost tracking — pass cache breakdown so each bucket is priced correctly
     # (cache_read ~10x cheaper, cache_write slightly above regular input rate).
+    cost_usd = None
     if model and (pt > 0 or ct > 0):
-        span.set_attribute(schema.COST_USD, compute_cost(
+        cost_usd = compute_cost(
             model, pt, ct,
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
-        ))
+        )
+        span.set_attribute(schema.COST_USD, cost_usd)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
     span.set_attribute(schema.GEN_AI_USAGE_OUTPUT_TOKENS, ct)
     if stop:
         span.set_attribute(schema.GEN_AI_RESPONSE_FINISH_REASONS, [stop])
+    _set_langfuse_generation_details(span, input_tokens=pt, output_tokens=ct, cost_usd=cost_usd)
 
 
 def _set_google_response_attrs(span: Any, data: dict, elapsed_ms: int, model: str = "") -> None:
@@ -1664,14 +1686,17 @@ def _set_google_response_attrs(span: Any, data: dict, elapsed_ms: int, model: st
     span.set_attribute(schema.CACHE_HIT_RATE, 0.0)
 
     # Cost tracking
+    cost_usd = None
     if model and (pt > 0 or ct > 0):
-        span.set_attribute(schema.COST_USD, compute_cost(model, pt, ct))
+        cost_usd = compute_cost(model, pt, ct)
+        span.set_attribute(schema.COST_USD, cost_usd)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
     span.set_attribute(schema.GEN_AI_USAGE_OUTPUT_TOKENS, ct)
     if stop:
         span.set_attribute(schema.GEN_AI_RESPONSE_FINISH_REASONS, [stop])
+    _set_langfuse_generation_details(span, input_tokens=pt, output_tokens=ct, cost_usd=cost_usd)
 
 
 def _anthropic_response_text(data: dict) -> str:
@@ -1706,14 +1731,17 @@ def _set_openai_response_attrs(span: Any, data: dict, elapsed_ms: int, model: st
     span.set_attribute(schema.CACHE_HIT_RATE, 0.0)
 
     # Cost tracking
+    cost_usd = None
     if model and (pt > 0 or ct > 0):
-        span.set_attribute(schema.COST_USD, compute_cost(model, pt, ct))
+        cost_usd = compute_cost(model, pt, ct)
+        span.set_attribute(schema.COST_USD, cost_usd)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
     span.set_attribute(schema.GEN_AI_USAGE_OUTPUT_TOKENS, ct)
     if stop:
         span.set_attribute(schema.GEN_AI_RESPONSE_FINISH_REASONS, [stop])
+    _set_langfuse_generation_details(span, input_tokens=pt, output_tokens=ct, cost_usd=cost_usd)
 
 
 def _google_response_text(data: dict) -> str:
@@ -1769,7 +1797,9 @@ def _maybe_set_response_preview(span: Any, text: str) -> None:
     # body has no text (tool-use only, empty response). Without this the field
     # is NULL in Tempo and downstream lineage queries can't distinguish
     # "no text" from "preview never attempted" (issue #176).
-    span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, preview[:512] if preview else "")
+    preview_value = preview[:512] if preview else ""
+    span.set_attribute(schema.PROV_LLM_RESPONSE_PREVIEW, preview_value)
+    span.set_attribute(schema.LANGFUSE_OBSERVATION_OUTPUT, json.dumps(preview_value))
 
 
 # ---------------------------------------------------------------------------
@@ -1807,12 +1837,21 @@ def _set_request_attrs(
     span.set_attribute(schema.PROV_AGENT_MODEL, agent_model)
     span.set_attribute(schema.PROV_WAS_ASSOCIATED_WITH, agent_id)
     span.set_attribute("http.route", f"/{path}")
+    span.set_attribute(schema.LANGFUSE_OBSERVATION_TYPE, schema.LANGFUSE_OBS_TYPE_GENERATION)
+    span.set_attribute(schema.LANGFUSE_OBSERVATION_MODEL_NAME, model)
+    span.set_attribute(schema.LANGFUSE_TRACE_METADATA_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
+    span.set_attribute(schema.LANGFUSE_TRACE_METADATA_AGENT_ID, agent_id)
 
     if session_id is not None:
         span.set_attribute(schema.SESSION_ID, session_id)
         span.set_attribute(schema.PROV_SESSION_ID, session_id)
+        span.set_attribute(schema.LANGFUSE_SESSION_ID, session_id)
+        span.set_attribute(schema.LANGFUSE_TRACE_NAME, task_label or session_id)
+    else:
+        span.set_attribute(schema.LANGFUSE_TRACE_NAME, task_label or f"{agent_id}:{model}")
     if project is not None:
         span.set_attribute(schema.PROV_PROJECT, project)
+        span.set_attribute(schema.LANGFUSE_TRACE_METADATA_PROJECT, project)
     if turn is not None:
         span.set_attribute(schema.PROV_SESSION_TURN, turn)
     if det_trace_id_raw is not None:
@@ -1825,12 +1864,15 @@ def _set_request_attrs(
         repository = _detect_repository_name(cwd)
         if repository:
             span.set_attribute(schema.PROV_REPOSITORY, repository)
+            span.set_attribute(schema.LANGFUSE_TRACE_METADATA_REPOSITORY, repository)
 
     # Sub-agent attribution (issue #15)
     if parent_session_id is not None:
         span.set_attribute(schema.PROV_PARENT_SESSION_ID, parent_session_id)
+        span.set_attribute(schema.LANGFUSE_TRACE_METADATA_PARENT_SESSION_ID, parent_session_id)
     if agent_type is not None:
         span.set_attribute(schema.PROV_AGENT_TYPE, agent_type)
+        span.set_attribute(schema.LANGFUSE_TRACE_METADATA_AGENT_TYPE, agent_type)
     if turn_depth is not None:
         span.set_attribute(schema.PROV_SESSION_TURN, turn_depth)
 
@@ -1839,6 +1881,7 @@ def _set_request_attrs(
         span.set_attribute(schema.PROV_TRACE_PARENT, traceparent)
     if task_label is not None:
         span.set_attribute(schema.PROV_TASK_LABEL, task_label)
+        span.set_attribute(schema.LANGFUSE_TRACE_METADATA_TASK_LABEL, task_label)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
@@ -1899,6 +1942,7 @@ def _set_request_attrs(
 
         if _capture_prompts and preview:
             span.set_attribute(schema.PROV_LLM_PROMPT_PREVIEW, preview)
+            span.set_attribute(schema.LANGFUSE_OBSERVATION_INPUT, json.dumps(preview))
     except PIIBlockedError:
         raise  # propagate so the route handler can return 400
     except Exception:

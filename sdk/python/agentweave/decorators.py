@@ -97,6 +97,33 @@ def _get_config_attrs() -> dict:
     return {}
 
 
+def _set_langfuse_trace_attrs(
+    span: Any,
+    *,
+    trace_name: str,
+    activity_type: str,
+    session_id: Optional[str] = None,
+    parent_session_id: Optional[str] = None,
+    agent_type: Optional[str] = None,
+) -> None:
+    """Set Langfuse-native metadata without changing AgentWeave's prov.* contract."""
+    span.set_attribute(schema.LANGFUSE_TRACE_NAME, trace_name)
+    span.set_attribute(schema.LANGFUSE_TRACE_METADATA_ACTIVITY_TYPE, activity_type)
+    if session_id:
+        span.set_attribute(schema.LANGFUSE_SESSION_ID, session_id)
+    if parent_session_id:
+        span.set_attribute(schema.LANGFUSE_TRACE_METADATA_PARENT_SESSION_ID, parent_session_id)
+    if agent_type:
+        span.set_attribute(schema.LANGFUSE_TRACE_METADATA_AGENT_TYPE, agent_type)
+    try:
+        from agentweave.config import AgentWeaveConfig
+        cfg = AgentWeaveConfig.get_or_none()
+        if cfg and cfg.agent_id:
+            span.set_attribute(schema.LANGFUSE_TRACE_METADATA_AGENT_ID, cfg.agent_id)
+    except Exception:
+        pass
+
+
 # ── Span lifecycle tracking & graceful shutdown ───────────────────────────────
 
 # Maps a unique key → open (not-yet-ended) span instance.
@@ -179,6 +206,7 @@ def _make_tool_wrapper(fn: Callable, name: str, captures_input: bool, captures_o
                 _open_spans[_span_key] = span
                 try:
                     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_TOOL_CALL)
+                    span.set_attribute(schema.LANGFUSE_OBSERVATION_TYPE, schema.LANGFUSE_OBS_TYPE_TOOL)
                     for k, v in _get_config_attrs().items():
                         span.set_attribute(k, v)
                     _sid = current_session_id()
@@ -187,6 +215,12 @@ def _make_tool_wrapper(fn: Callable, name: str, captures_input: bool, captures_o
                         span.set_attribute(schema.PROV_SESSION_ID, _sid)
                     else:
                         warn_missing_session_id_once()
+                    _set_langfuse_trace_attrs(
+                        span,
+                        trace_name=_sid or span_name,
+                        activity_type=schema.ACTIVITY_TOOL_CALL,
+                        session_id=_sid,
+                    )
                     if captures_input:
                         span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
                     try:
@@ -212,6 +246,7 @@ def _make_tool_wrapper(fn: Callable, name: str, captures_input: bool, captures_o
                 _open_spans[_span_key] = span
                 try:
                     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_TOOL_CALL)
+                    span.set_attribute(schema.LANGFUSE_OBSERVATION_TYPE, schema.LANGFUSE_OBS_TYPE_TOOL)
                     for k, v in _get_config_attrs().items():
                         span.set_attribute(k, v)
                     _sid = current_session_id()
@@ -220,6 +255,12 @@ def _make_tool_wrapper(fn: Callable, name: str, captures_input: bool, captures_o
                         span.set_attribute(schema.PROV_SESSION_ID, _sid)
                     else:
                         warn_missing_session_id_once()
+                    _set_langfuse_trace_attrs(
+                        span,
+                        trace_name=_sid or span_name,
+                        activity_type=schema.ACTIVITY_TOOL_CALL,
+                        session_id=_sid,
+                    )
                     if captures_input:
                         span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
                     try:
@@ -311,6 +352,7 @@ def _make_agent_wrapper(
                 _open_spans[_span_key] = span
                 try:
                     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
+                    span.set_attribute(schema.LANGFUSE_OBSERVATION_TYPE, schema.LANGFUSE_OBS_TYPE_AGENT)
                     # OTel gen_ai.* dual-emit
                     span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_INVOKE_AGENT)
                     for k, v in _get_config_attrs().items():
@@ -324,6 +366,14 @@ def _make_agent_wrapper(
                     else:
                         warn_missing_session_id_once()
                     _set_subagent_attrs(span)
+                    _set_langfuse_trace_attrs(
+                        span,
+                        trace_name=_sid or span_name,
+                        activity_type=schema.ACTIVITY_AGENT_TURN,
+                        session_id=_sid,
+                        parent_session_id=_parent_session_id,
+                        agent_type=_agent_type,
+                    )
                     if captures_input:
                         span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
                     if _sid:
@@ -350,6 +400,7 @@ def _make_agent_wrapper(
                 _open_spans[_span_key] = span
                 try:
                     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_AGENT_TURN)
+                    span.set_attribute(schema.LANGFUSE_OBSERVATION_TYPE, schema.LANGFUSE_OBS_TYPE_AGENT)
                     # OTel gen_ai.* dual-emit
                     span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_INVOKE_AGENT)
                     for k, v in _get_config_attrs().items():
@@ -363,6 +414,14 @@ def _make_agent_wrapper(
                     else:
                         warn_missing_session_id_once()
                     _set_subagent_attrs(span)
+                    _set_langfuse_trace_attrs(
+                        span,
+                        trace_name=_sid or span_name,
+                        activity_type=schema.ACTIVITY_AGENT_TURN,
+                        session_id=_sid,
+                        parent_session_id=_parent_session_id,
+                        agent_type=_agent_type,
+                    )
                     if captures_input:
                         span.set_attribute(schema.PROV_USED, str(args[0]) if args else str(kwargs))
                     if _sid:
@@ -543,14 +602,23 @@ def trace_llm(
                     _open_spans[_span_key] = span
                     try:
                         span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
+                        span.set_attribute(schema.LANGFUSE_OBSERVATION_TYPE, schema.LANGFUSE_OBS_TYPE_GENERATION)
                         span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
                         span.set_attribute(schema.PROV_LLM_MODEL, model)
+                        span.set_attribute(schema.LANGFUSE_OBSERVATION_MODEL_NAME, model)
                         # OTel gen_ai.* dual-emit
                         span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
                         span.set_attribute(schema.GEN_AI_PROVIDER_NAME, provider)
                         span.set_attribute(schema.GEN_AI_SYSTEM, provider)
                         for k, v in _get_config_attrs().items():
                             span.set_attribute(k, v)
+                        _sid = current_session_id()
+                        _set_langfuse_trace_attrs(
+                            span,
+                            trace_name=_sid or span_name,
+                            activity_type=schema.ACTIVITY_LLM_CALL,
+                            session_id=_sid,
+                        )
                         # Set after config attrs so explicit model param wins over cfg.agent_model
                         span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
                         # Increment per-session turn counter and record on span
@@ -574,14 +642,23 @@ def trace_llm(
                     _open_spans[_span_key] = span
                     try:
                         span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
+                        span.set_attribute(schema.LANGFUSE_OBSERVATION_TYPE, schema.LANGFUSE_OBS_TYPE_GENERATION)
                         span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
                         span.set_attribute(schema.PROV_LLM_MODEL, model)
+                        span.set_attribute(schema.LANGFUSE_OBSERVATION_MODEL_NAME, model)
                         # OTel gen_ai.* dual-emit
                         span.set_attribute(schema.GEN_AI_OPERATION_NAME, schema.GEN_AI_OP_CHAT)
                         span.set_attribute(schema.GEN_AI_PROVIDER_NAME, provider)
                         span.set_attribute(schema.GEN_AI_SYSTEM, provider)
                         for k, v in _get_config_attrs().items():
                             span.set_attribute(k, v)
+                        _sid = current_session_id()
+                        _set_langfuse_trace_attrs(
+                            span,
+                            trace_name=_sid or span_name,
+                            activity_type=schema.ACTIVITY_LLM_CALL,
+                            session_id=_sid,
+                        )
                         # Set after config attrs so explicit model param wins over cfg.agent_model
                         span.set_attribute(schema.GEN_AI_REQUEST_MODEL, model)
                         # Increment per-session turn counter and record on span

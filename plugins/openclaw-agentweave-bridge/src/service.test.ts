@@ -129,6 +129,89 @@ describe("createAgentWeaveBridgeService", () => {
     expect(process.env.AGENTWEAVE_SESSION_ID).toBe("agent:main:test-session")
   })
 
+  it("sets prov.harness=openclaw on message.queued root span", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:harness-session",
+      sessionId: "018f-openclaw-main-0001",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.harness", "openclaw")
+  })
+
+  it("sets prov.session.key to the qualified sessionKey on message.queued root span", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:key-session",
+      sessionId: "018f-openclaw-main-0002",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:key-session")
+  })
+
+  it("sets prov.harness=openclaw on session.state subagent root span", () => {
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:parent:subagent:worker-h",
+      sessionId: "018f-openclaw-sub-0001",
+      state: "processing",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.harness", "openclaw")
+  })
+
+  it("sets prov.session.key to the qualified sessionKey on session.state subagent root span", () => {
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:parent:subagent:worker-k",
+      sessionId: "018f-openclaw-sub-0002",
+      state: "processing",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:parent:subagent:worker-k")
+  })
+
+  it("sets prov.session.uuid to the canonical sessionId when it differs from sessionKey", () => {
+    // cron/isolated path: OpenClaw passes both a UUID sessionId and a route key.
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:uuid-session",
+      sessionId: "018f-openclaw-main-0009",
+      channel: "cron",
+      source: "cron-isolated",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.uuid", "018f-openclaw-main-0009")
+  })
+
+  it("omits prov.session.uuid when the event carries no distinct canonical sessionId", () => {
+    // interactive dispatch path: OpenClaw passes only sessionKey, no UUID.
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:no-uuid-session",
+      channel: "telegram",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.session.uuid", expect.anything())
+  })
+
   it("sets cwd and repository on message.queued when provided by the event", () => {
     fire({
       type: "message.queued",
@@ -159,6 +242,19 @@ describe("createAgentWeaveBridgeService", () => {
 
     expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.cwd", expect.anything())
     expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.repository", expect.anything())
+  })
+
+  it("sets prov.session.uuid on session.state subagent roots when the event carries a distinct canonical id", () => {
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:parent:subagent:worker-u",
+      sessionId: "018f-openclaw-sub-0009",
+      state: "processing",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.uuid", "018f-openclaw-sub-0009")
   })
 
   it("sets cwd and repository on session.state subagent roots when provided by the event", () => {

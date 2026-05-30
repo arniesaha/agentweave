@@ -40,8 +40,42 @@ keeps the working system intact.
 AgentWeave SDK/proxy/bridge
   -> agentweave-otel-collector.monitoring.svc.cluster.local:4318
       -> tempo.monitoring.svc.cluster.local:4318
-      -> langfuse.apps.svc.cluster.local:3000/api/public/otel
-         (enabled only after Langfuse v3.22+ migration)
+      -> langfuse-v3-web.apps.svc.cluster.local:3000/api/public/otel
+```
+
+## Current v3 State
+
+Checked on 2026-05-30:
+
+- Langfuse v2 remains live and untouched at `langfuse.arnabsaha.com`.
+- Langfuse v3 is live side-by-side as Helm release `langfuse-v3` in `apps`.
+- LAN URL is `http://192.168.1.70:30894`.
+- Public URL is `https://langfuse-v3.arnabsaha.com` behind Cloudflare Access.
+- v3 health reports `3.175.0`.
+- The AgentWeave collector exports to both Tempo and Langfuse v3.
+- Langfuse v3 ClickHouse contains fresh AgentWeave traces and `GENERATION`
+  observations.
+
+## OpenClaw/Mux Runtime Wiring
+
+When dogfooding from OpenClaw, make sure every runtime exporter points at the
+collector, not Tempo directly. Direct Tempo export bypasses Langfuse fanout.
+
+Current NAS runtime wiring:
+
+```bash
+# Mux uses the TypeScript AgentWeave SDK, which expects the full OTLP traces URL.
+AGENTWEAVE_OTLP_ENDPOINT=http://10.43.221.47:4318/v1/traces
+
+# openclaw-agentweave-bridge appends /v1/traces itself, so use the collector base.
+otlpEndpoint=http://10.43.221.47:4318
+```
+
+The collector ClusterIP can change if the Kubernetes Service is recreated, so
+verify it before debugging missing Langfuse traces:
+
+```bash
+kubectl get svc -n monitoring agentweave-otel-collector
 ```
 
 ## Langfuse Upgrade Constraint
@@ -116,13 +150,16 @@ For context-handoff reviews, score:
 These scores belong in Langfuse. Raw trace trees and service-level metrics stay
 in Tempo.
 
+Detailed mapping: [Langfuse Eval Mapping](./langfuse-eval-mapping.md).
+
 ## Rollout Sequence
 
 1. Apply the Tempo-only collector and point AgentWeave proxy at it.
 2. Verify traces still land in Tempo and the dashboard stays healthy.
-3. Upgrade Langfuse from v2 to v3 using a staged migration.
+3. Upgrade Langfuse from v2 to v3 using a staged migration. Done side-by-side
+   via `langfuse-v3`.
 4. Create a Langfuse project API key and update
-   `secret/agentweave-otel-collector` in `monitoring`.
-5. Apply `deploy/k8s/monitoring/otel-collector-langfuse-fanout.yaml`.
+   `secret/agentweave-otel-collector` in `monitoring`. Done.
+5. Apply `deploy/k8s/monitoring/otel-collector-langfuse-fanout.yaml`. Done.
 6. Restart the collector and verify the same trace appears in Tempo and
-   Langfuse.
+   Langfuse. Done.
