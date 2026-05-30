@@ -6,7 +6,9 @@ LLM call tracing in the AgentWeave dashboard alongside all other agent spans.
 ## Prerequisites
 
 - Single `agentweave-proxy` k8s service deployed on NAS (`192.168.1.70:30400`)
-- Tempo OTLP endpoint reachable at `192.168.1.70:30418`
+- OTLP endpoint reachable by the proxy/bridge. Dogfood proxy traffic now routes
+  to `agentweave-otel-collector.monitoring.svc.cluster.local:4318`, which
+  forwards to Tempo and can mirror to Langfuse after the Langfuse v3 migration.
 
 ## Setup — Mac Mini (192.168.1.149)
 

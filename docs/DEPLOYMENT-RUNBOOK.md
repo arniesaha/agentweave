@@ -6,15 +6,17 @@
 
 ## The Big Picture
 
-AgentWeave is a **transparent LLM observability layer**. It sits between your AI agents and the LLM APIs, recording every call as an OpenTelemetry span in Tempo, then visualizing them on a React dashboard backed by Prometheus spanmetrics.
+AgentWeave is a **transparent LLM observability layer**. It sits between your AI agents and the LLM APIs, recording every call as an OpenTelemetry span. Dogfood traffic routes through an OpenTelemetry Collector so Tempo can remain the canonical trace backend while optional sinks such as Langfuse receive mirrored traces for eval workflows.
 
 ```
 Your Agent Code (with per-request X-AgentWeave-* headers)
     ↓
 AgentWeave Proxy (single instance, port 30400)
     ├── forwards request to Anthropic/OpenAI/Gemini
-    ├── writes OTel span → Tempo (:30418 OTLP)
-    └── Tempo → Prometheus remote_write → Grafana
+    ├── writes OTel span → OTel Collector (:4318 OTLP)
+    └── Collector
+        ├── Tempo → Prometheus remote_write → Grafana
+        └── Langfuse (optional, after v3 migration)
 ```
 
 ---
@@ -53,6 +55,7 @@ Tempo is the exception: it uses the official `grafana/tempo` image (public), so 
 ### Namespace: `monitoring`
 | Deployment | Purpose |
 |------------|---------|
+| `agentweave-otel-collector` | OTLP fanout for AgentWeave traces |
 | `tempo` | Trace storage (on Mac Mini node) |
 | `minio` | S3-compatible storage (unused — MinIO config exists but we use local-path) |
 | `kube-prometheus-stack` | Grafana + Prometheus (pre-existing, not AgentWeave-managed) |
@@ -117,7 +120,15 @@ kubectl delete pod -n agentweave -l app=agentweave-proxy
 
 ---
 
-## Tempo Configuration
+## Collector + Tempo Configuration
+
+The proxy writes to `agentweave-otel-collector.monitoring.svc.cluster.local:4318`.
+The default collector config exports to Tempo only. After Langfuse is upgraded
+to v3.22+ and a project API key is available, apply
+`deploy/k8s/monitoring/otel-collector-langfuse-fanout.yaml` to mirror traces
+to Langfuse.
+
+Tempo remains the canonical raw trace backend and the dashboard query source.
 
 Config lives in `ConfigMap/tempo-config` in `monitoring` namespace. Key lessons from today:
 

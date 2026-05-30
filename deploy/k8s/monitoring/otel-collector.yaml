@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentweave-otel-collector
+  namespace: monitoring
+  labels:
+    app: agentweave-otel-collector
+spec:
+  type: ClusterIP
+  selector:
+    app: agentweave-otel-collector
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentweave-otel-collector
+  namespace: monitoring
+  labels:
+    app: agentweave-otel-collector
+data:
+  collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+          grpc:
+            endpoint: 0.0.0.0:4317
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 256
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 384
+        spike_limit_mib: 128
+
+    exporters:
+      otlphttp/tempo:
+        endpoint: http://tempo.monitoring.svc.cluster.local:4318
+
+      debug:
+        verbosity: basic
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlphttp/tempo, debug]
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentweave-otel-collector
+  namespace: monitoring
+  labels:
+    app: agentweave-otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentweave-otel-collector
+  template:
+    metadata:
+      labels:
+        app: agentweave-otel-collector
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.126.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config=/conf/collector.yaml
+          env:
+            - name: LANGFUSE_OTLP_AUTH_HEADER
+              valueFrom:
+                secretKeyRef:
+                  name: agentweave-otel-collector
+                  key: LANGFUSE_OTLP_AUTH_HEADER
+                  optional: true
+          ports:
+            - containerPort: 4318
+              name: otlp-http
+            - containerPort: 4317
+              name: otlp-grpc
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /conf
+      volumes:
+        - name: config
+          configMap:
+            name: agentweave-otel-collector

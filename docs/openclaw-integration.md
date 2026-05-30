@@ -160,7 +160,7 @@ cd ~/.openclaw/plugins/agentweave-bridge && npm install
       "agentweave-bridge": {
         "path": "/home/user/clawd/plugins/openclaw-agentweave-bridge",
         "config": {
-          "otlpEndpoint": "http://localhost:4318",
+          "otlpEndpoint": "http://agentweave-otel-collector.monitoring.svc.cluster.local:4318",
           "proxyUrl": "http://localhost:4000",
           "agentId": "openclaw-v1",
           "project": "my-project",
