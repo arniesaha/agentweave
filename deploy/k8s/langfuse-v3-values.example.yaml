@@ -1,0 +1,174 @@
+# Side-by-side Langfuse v3 spike values.
+#
+# This file is intentionally safe to commit: it references externally-created
+# Kubernetes Secrets and does not contain live credentials. Use it as the base
+# for a local, uncommitted values file when installing `langfuse-v3`.
+#
+# Target release:
+#   helm upgrade --install langfuse-v3 langfuse/langfuse \
+#     --namespace apps \
+#     --values deploy/k8s/langfuse-v3-values.example.yaml \
+#     --values /tmp/langfuse-v3-secrets.values.yaml
+
+global:
+  security:
+    allowInsecureImages: true
+
+langfuse:
+  image:
+    # v3.29.0 is the Langfuse-recommended bridge version for running v2 and v3
+    # in parallel during migration. Upgrade to the latest v3 only after traffic
+    # has moved and background migrations have completed.
+    tag: "3.29.0"
+
+  nextauth:
+    url: "http://192.168.1.70:30894"
+    secret:
+      secretKeyRef:
+        name: langfuse-v3-secrets
+        key: NEXTAUTH_SECRET
+
+  salt:
+    secretKeyRef:
+      name: langfuse-v3-secrets
+      key: SALT
+
+  encryptionKey:
+    secretKeyRef:
+      name: langfuse-v3-secrets
+      key: ENCRYPTION_KEY
+
+  features:
+    telemetryEnabled: false
+    signUpDisabled: false
+    experimentalFeaturesEnabled: false
+
+  # Keep v3 isolated from the public v2 service until validation is complete.
+  web:
+    service:
+      type: NodePort
+      port: 3000
+      nodePort: 30894
+    pod:
+      nodeSelector:
+        host: mac-mini
+      additionalEnv:
+        - name: LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS
+          value: "false"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+  worker:
+    pod:
+      nodeSelector:
+        host: mac-mini
+      additionalEnv:
+        - name: LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS
+          value: "false"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+postgresql:
+  # For the side-by-side spike, create a separate v3 Postgres and restore the
+  # v2 logical backup into it when ready. Do not point this release at the live
+  # v2 Postgres unless taking an intentional migration window.
+  deploy: true
+  auth:
+    username: langfuse
+    database: langfuse
+    existingSecret: langfuse-v3-secrets
+    secretKeys:
+      userPasswordKey: POSTGRES_PASSWORD
+      adminPasswordKey: POSTGRES_PASSWORD
+  primary:
+    nodeSelector:
+      host: mac-mini
+    persistence:
+      size: 3Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 768Mi
+
+redis:
+  deploy: true
+  architecture: standalone
+  auth:
+    existingSecret: langfuse-v3-secrets
+    existingSecretPasswordKey: REDIS_PASSWORD
+  primary:
+    nodeSelector:
+      host: mac-mini
+    persistence:
+      size: 2Gi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+clickhouse:
+  deploy: true
+  shards: 1
+  replicaCount: 1
+  clusterEnabled: false
+  resourcesPreset: none
+  auth:
+    existingSecret: langfuse-v3-secrets
+    existingSecretKey: CLICKHOUSE_PASSWORD
+  nodeSelector:
+    host: mac-mini
+  persistence:
+    size: 8Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  zookeeper:
+    enabled: false
+
+s3:
+  # Reuse the existing local MinIO instance in monitoring instead of deploying
+  # another object store.
+  deploy: false
+  bucket: langfuse
+  region: auto
+  endpoint: "http://minio.monitoring.svc.cluster.local:9000"
+  forcePathStyle: true
+  accessKeyId:
+    secretKeyRef:
+      name: langfuse-v3-secrets
+      key: MINIO_ROOT_USER
+  secretAccessKey:
+    secretKeyRef:
+      name: langfuse-v3-secrets
+      key: MINIO_ROOT_PASSWORD
+  eventUpload:
+    bucket: langfuse
+    prefix: events/
+  batchExport:
+    enabled: true
+    bucket: langfuse
+    prefix: exports/
+  mediaUpload:
+    enabled: true
+    bucket: langfuse
+    prefix: media/
