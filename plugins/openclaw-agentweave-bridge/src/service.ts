@@ -142,6 +142,16 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined
 }
 
+function resolveOpenClawSessionId(sessionKey: string, eventSessionId: unknown): { sessionId: string; canonicalUuid?: string } {
+  const candidate = firstString(eventSessionId)
+  const keyLeaf = sessionKey.split(":").pop()
+  // Some older OpenClaw diagnostic events used the bare route leaf ("main",
+  // "worker-a") as sessionId. That is not the canonical transcript UUID.
+  const isBareRouteAlias = Boolean(candidate && sessionKey && candidate === keyLeaf && candidate !== sessionKey)
+  const canonicalUuid = candidate && !isBareRouteAlias ? candidate : undefined
+  return { sessionId: canonicalUuid ?? sessionKey, canonicalUuid }
+}
+
 function truncatePreview(value: string, maxChars = 1000): string {
   const normalized = value.replace(/\s+/g, " ").trim()
   if (normalized.length <= maxChars) return normalized
@@ -164,6 +174,7 @@ function resolveInputPreview(evt: Record<string, unknown>, fallback?: string): s
 
 function applyLangfuseAgentTurnAttrs(span: Span, params: {
   sessionId?: string
+  sessionKey?: string
   project?: string
   agentId?: string
   agentType?: string
@@ -183,6 +194,7 @@ function applyLangfuseAgentTurnAttrs(span: Span, params: {
   if (params.project) span.setAttribute("langfuse.trace.metadata.project", params.project)
   if (params.agentId) span.setAttribute("langfuse.trace.metadata.agent_id", params.agentId)
   if (params.agentType) span.setAttribute("langfuse.trace.metadata.agent_type", params.agentType)
+  if (params.sessionKey) span.setAttribute("langfuse.trace.metadata.session_key", params.sessionKey)
   if (params.parentSessionId) span.setAttribute("langfuse.trace.metadata.parent_session_id", params.parentSessionId)
   if (params.repository) span.setAttribute("langfuse.trace.metadata.repository", params.repository)
   span.setAttribute("langfuse.trace.metadata.activity_type", "agent_turn")
@@ -272,10 +284,7 @@ export function createAgentWeaveBridgeService() {
           switch (e.type) {
             case "message.queued": {
               const sessionKey = e.sessionKey ?? ""
-              // Use sessionKey (e.g. "agent:main:main") as the session ID, not
-              // sessionId (which is just "main" — the bare agent name).
-              // sessionKey is the fully qualified identifier across OpenClaw.
-              const sessionId = e.sessionKey || e.sessionId || ""
+              const { sessionId, canonicalUuid } = resolveOpenClawSessionId(sessionKey, e.sessionId)
               if (!sessionKey) break
 
               const { agentId, agentType, parentSessionKey } = resolveAgentId(sessionKey, config, activeTurns, e.source)
@@ -285,15 +294,10 @@ export function createAgentWeaveBridgeService() {
               span.setAttribute("session_id", sessionId)
               span.setAttribute("session.id", sessionId)
               span.setAttribute("prov.session.id", sessionId)
-              // Qualified route key kept separate from the (UUID-or-fallback)
-              // session id so Nexus can join native shipper rows by UUID while
-              // still seeing the route key (agentweave#187).
+              // Qualified route key stays available for attribution and
+              // parent/session heuristics after session.id switches to the
+              // OpenClaw UUID used by the native JSONL shipper.
               span.setAttribute("prov.session.key", sessionKey)
-              // Canonical OpenClaw session UUID, when the runtime supplies one
-              // distinct from the route key (cron/isolated path). Lets Nexus
-              // join AgentWeave spans to native-shipper rows by UUID without
-              // disturbing the route-key-based attribution above (agentweave#187).
-              const canonicalUuid = firstString(e.sessionId)
               if (canonicalUuid && canonicalUuid !== sessionKey) {
                 span.setAttribute("prov.session.uuid", canonicalUuid)
               }
@@ -326,6 +330,7 @@ export function createAgentWeaveBridgeService() {
               }
               applyLangfuseAgentTurnAttrs(span, {
                 sessionId,
+                sessionKey,
                 project: config.project,
                 agentId,
                 agentType,
@@ -390,6 +395,7 @@ export function createAgentWeaveBridgeService() {
                 if (config.project) sessionPayload.project = config.project
                 if (parentSid) sessionPayload.parent_session_id = parentSid
                 if (taskLabel) sessionPayload.task_label = taskLabel
+                if (canonicalUuid) sessionPayload.session_uuid = canonicalUuid
                 if (parentTraceIdHex && parentSpanIdHex) {
                   sessionPayload.parent_trace_id = parentTraceIdHex
                   sessionPayload.parent_span_id = parentSpanIdHex
@@ -444,14 +450,13 @@ export function createAgentWeaveBridgeService() {
               if (sessionKey.includes(":subagent:") && !activeTurns.has(sessionKey)) {
                 if (state === "processing") {
                   const subagentId = config.subagentId ?? `${config.agentId ?? "nix"}-subagent-v1`
-                  const sessionId = (e as any).sessionId || sessionKey
+                  const { sessionId, canonicalUuid } = resolveOpenClawSessionId(sessionKey, (e as any).sessionId)
                   const tracer = trace.getTracer("openclaw-agentweave-bridge")
                   const span = tracer.startSpan("openclaw.subagent")
                   span.setAttribute("session_id", sessionId)
                   span.setAttribute("session.id", sessionId)
                   span.setAttribute("prov.session.id", sessionId)
                   span.setAttribute("prov.session.key", sessionKey)
-                  const canonicalUuid = firstString((e as any).sessionId)
                   if (canonicalUuid && canonicalUuid !== sessionKey) {
                     span.setAttribute("prov.session.uuid", canonicalUuid)
                   }
@@ -479,6 +484,7 @@ export function createAgentWeaveBridgeService() {
                   }
                   applyLangfuseAgentTurnAttrs(span, {
                     sessionId,
+                    sessionKey,
                     project: config.project,
                     agentId: subagentId,
                     agentType: "subagent",
@@ -503,6 +509,7 @@ export function createAgentWeaveBridgeService() {
                     body: JSON.stringify({
                       session_key: sessionKey,
                       session_id: sessionId,
+                      ...(canonicalUuid ? { session_uuid: canonicalUuid } : {}),
                       parent_session_id: mainSessionId,
                       agent_id: subagentId,
                       agent_type: "subagent",
