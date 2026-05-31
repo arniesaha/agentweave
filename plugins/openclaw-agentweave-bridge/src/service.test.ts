@@ -106,11 +106,10 @@ describe("createAgentWeaveBridgeService", () => {
   })
 
   it("creates root span on message.queued and injects traceparent", () => {
-    // service.ts uses sessionKey as the canonical session ID
     fire({
       type: "message.queued",
       sessionKey: "agent:main:test-session",
-      sessionId: "test-session",
+      sessionId: "018f-openclaw-main-test",
       channel: "telegram",
       source: "user",
       queueDepth: 0,
@@ -118,22 +117,25 @@ describe("createAgentWeaveBridgeService", () => {
       seq: 1,
     })
 
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session_id", "agent:main:test-session")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "agent:main:test-session")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "agent:main:test-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session_id", "018f-openclaw-main-test")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "018f-openclaw-main-test")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "018f-openclaw-main-test")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:test-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "018f-openclaw-main-test")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.trace.metadata.session_key", "agent:main:test-session")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "nix-v1")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "main")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.activity.type", "agent_turn")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("channel", "telegram")
     expect(process.env.AGENTWEAVE_TRACEPARENT).toBeTruthy()
-    expect(process.env.AGENTWEAVE_SESSION_ID).toBe("agent:main:test-session")
+    expect(process.env.AGENTWEAVE_SESSION_ID).toBe("018f-openclaw-main-test")
   })
 
   it("sets Langfuse input preview on message.queued when OpenClaw provides one", () => {
     fire({
       type: "message.queued",
       sessionKey: "agent:main:preview-session",
-      sessionId: "preview-session",
+      sessionId: "018f-openclaw-preview-0001",
       channel: "telegram",
       source: "user",
       inputPreview: "  summarize   the deployment\nstatus  ",
@@ -142,7 +144,7 @@ describe("createAgentWeaveBridgeService", () => {
     })
 
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.observation.type", "agent")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "agent:main:preview-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "018f-openclaw-preview-0001")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.observation.input", "summarize the deployment status")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.input.preview", "summarize the deployment status")
   })
@@ -230,11 +232,14 @@ describe("createAgentWeaveBridgeService", () => {
       seq: 1,
     })
 
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "018f-openclaw-main-0009")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "018f-openclaw-main-0009")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.uuid", "018f-openclaw-main-0009")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:uuid-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "018f-openclaw-main-0009")
   })
 
-  it("omits prov.session.uuid when the event carries no distinct canonical sessionId", () => {
-    // interactive dispatch path: OpenClaw passes only sessionKey, no UUID.
+  it("falls back to sessionKey when the event carries no canonical sessionId", () => {
     fire({
       type: "message.queued",
       sessionKey: "agent:main:no-uuid-session",
@@ -244,7 +249,28 @@ describe("createAgentWeaveBridgeService", () => {
       seq: 1,
     })
 
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "agent:main:no-uuid-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "agent:main:no-uuid-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:no-uuid-session")
     expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.session.uuid", expect.anything())
+  })
+
+  it("does not treat a bare route alias sessionId as the canonical UUID", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:main",
+      sessionId: "main",
+      channel: "telegram",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "agent:main:main")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "agent:main:main")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:main")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.session.uuid", "main")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("langfuse.session.id", "main")
   })
 
   it("sets cwd and repository on message.queued when provided by the event", () => {
@@ -289,7 +315,11 @@ describe("createAgentWeaveBridgeService", () => {
       seq: 1,
     })
 
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "018f-openclaw-sub-0009")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "018f-openclaw-sub-0009")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.uuid", "018f-openclaw-sub-0009")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:parent:subagent:worker-u")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "018f-openclaw-sub-0009")
   })
 
   it("sets cwd and repository on session.state subagent roots when provided by the event", () => {
@@ -314,7 +344,7 @@ describe("createAgentWeaveBridgeService", () => {
     fire({
       type: "session.state",
       sessionKey: "agent:main:parent:subagent:worker-preview",
-      sessionId: "worker-preview",
+      sessionId: "018f-openclaw-sub-preview",
       state: "processing",
       taskLabel: "Review pull request #227",
       inputPreview: "Review pull request #227 and patch failures",
@@ -323,7 +353,7 @@ describe("createAgentWeaveBridgeService", () => {
     })
 
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.observation.type", "agent")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "worker-preview")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "018f-openclaw-sub-preview")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.trace.name", "Review pull request #227")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.observation.input", "Review pull request #227 and patch failures")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.input.preview", "Review pull request #227 and patch failures")
