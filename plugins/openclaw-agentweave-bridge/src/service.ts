@@ -142,6 +142,56 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined
 }
 
+function truncatePreview(value: string, maxChars = 1000): string {
+  const normalized = value.replace(/\s+/g, " ").trim()
+  if (normalized.length <= maxChars) return normalized
+  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`
+}
+
+function resolveInputPreview(evt: Record<string, unknown>, fallback?: string): string | undefined {
+  const rawData = (evt.raw_data ?? evt.rawData) as Record<string, unknown> | undefined
+  const preview = firstString(
+    evt.inputPreview,
+    evt.inputSummary,
+    evt.promptPreview,
+    rawData?.inputPreview,
+    rawData?.inputSummary,
+    rawData?.promptPreview,
+    fallback,
+  )
+  return preview ? truncatePreview(preview) : undefined
+}
+
+function applyLangfuseAgentTurnAttrs(span: Span, params: {
+  sessionId?: string
+  project?: string
+  agentId?: string
+  agentType?: string
+  parentSessionId?: string
+  repository?: string
+  taskLabel?: string
+  inputPreview?: string
+}): void {
+  span.setAttribute("langfuse.observation.type", "agent")
+  if (params.sessionId) span.setAttribute("langfuse.session.id", params.sessionId)
+  if (params.taskLabel) {
+    span.setAttribute("langfuse.trace.name", params.taskLabel)
+    span.setAttribute("langfuse.trace.metadata.task_label", params.taskLabel)
+  } else if (params.sessionId) {
+    span.setAttribute("langfuse.trace.name", params.sessionId)
+  }
+  if (params.project) span.setAttribute("langfuse.trace.metadata.project", params.project)
+  if (params.agentId) span.setAttribute("langfuse.trace.metadata.agent_id", params.agentId)
+  if (params.agentType) span.setAttribute("langfuse.trace.metadata.agent_type", params.agentType)
+  if (params.parentSessionId) span.setAttribute("langfuse.trace.metadata.parent_session_id", params.parentSessionId)
+  if (params.repository) span.setAttribute("langfuse.trace.metadata.repository", params.repository)
+  span.setAttribute("langfuse.trace.metadata.activity_type", "agent_turn")
+  if (params.inputPreview) {
+    span.setAttribute("prov.input.preview", params.inputPreview)
+    span.setAttribute("langfuse.observation.input", params.inputPreview)
+  }
+}
+
 function applyExecutionContextAttrs(span: Span, evt: Record<string, unknown>): void {
   const rawData = (evt.raw_data ?? evt.rawData) as Record<string, unknown> | undefined
   const cwd = firstString(evt.cwd, rawData?.cwd)
@@ -216,7 +266,7 @@ export function createAgentWeaveBridgeService() {
       initSdk(config)
 
       unsubscribe = subscribeToDiagnosticEvents((evt: unknown) => {
-        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string; cwd?: string; repository?: string; raw_data?: { cwd?: string; repository?: string }; rawData?: { cwd?: string; repository?: string } }
+        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string; cwd?: string; repository?: string; raw_data?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string }; rawData?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string } }
         console.log("[agentweave-bridge] event:", e.type, "sessionKey:", e.sessionKey, "source:", e.source)
         try {
           switch (e.type) {
@@ -256,8 +306,11 @@ export function createAgentWeaveBridgeService() {
               const taskLabel = e.taskLabel?.trim()
               if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
               applyExecutionContextAttrs(span, e as Record<string, unknown>)
+              const repository = firstString(e.repository, e.raw_data?.repository, e.rawData?.repository)
+              const inputPreview = resolveInputPreview(e as Record<string, unknown>, taskLabel)
 
               // Link sub-agent to parent session
+              let parentSid: string | undefined
               if (agentType === "subagent") {
                 // Use parentSessionKey from concurrent-turn heuristic, or find any active main turn
                 const parentKey = parentSessionKey
@@ -265,13 +318,22 @@ export function createAgentWeaveBridgeService() {
                 if (parentKey) {
                   const parentTurn = activeTurns.get(parentKey)
                   if (parentTurn) {
-                    // Get the parent's session ID from its span attributes
-                    const parentSid = parentTurn.span.spanContext?.()
                     span.setAttribute("prov.parent.session.id", parentKey)
                     process.env.AGENTWEAVE_PARENT_SESSION_ID = parentKey
                   }
+                  parentSid = parentKey
                 }
               }
+              applyLangfuseAgentTurnAttrs(span, {
+                sessionId,
+                project: config.project,
+                agentId,
+                agentType,
+                parentSessionId: parentSid,
+                repository,
+                taskLabel,
+                inputPreview,
+              })
 
               const spanCtx = trace.setSpan(context.active(), span)
               const carrier: Record<string, string> = {}
@@ -399,16 +461,32 @@ export function createAgentWeaveBridgeService() {
                   span.setAttribute("prov.activity.type", "agent_turn")
                   if (config.project) span.setAttribute("prov.project", config.project)
                   applyExecutionContextAttrs(span, e as Record<string, unknown>)
+                  const taskLabel = firstString((e as any).taskLabel)
+                  if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
+                  const inputPreview = resolveInputPreview(e as Record<string, unknown>, taskLabel)
+                  const repository = firstString((e as any).repository, (e as any).raw_data?.repository, (e as any).rawData?.repository)
                   // Link to active main session as parent
                   const mainKey = Array.from(activeTurns.keys()).find(k =>
                     k.startsWith("agent:main:") && !k.includes(":subagent:"))
+                  let parentSessionId: string | undefined
                   if (mainKey) {
                     const mainTurn = activeTurns.get(mainKey)
                     if (mainTurn) {
                       const mainSessionId = (mainTurn.span as any)._attributes?.["session.id"] || mainKey
                       span.setAttribute("prov.parent.session.id", mainSessionId)
+                      parentSessionId = mainSessionId
                     }
                   }
+                  applyLangfuseAgentTurnAttrs(span, {
+                    sessionId,
+                    project: config.project,
+                    agentId: subagentId,
+                    agentType: "subagent",
+                    parentSessionId,
+                    repository,
+                    taskLabel,
+                    inputPreview,
+                  })
                   const spanCtx = trace.setSpan(context.active(), span)
                   activeTurns.set(sessionKey, { span, ctx: spanCtx })
 
@@ -428,7 +506,7 @@ export function createAgentWeaveBridgeService() {
                       parent_session_id: mainSessionId,
                       agent_id: subagentId,
                       agent_type: "subagent",
-                      task_label: `subagent ${sessionKey.split(":")[1] || "unknown"}`,
+                      task_label: taskLabel ?? `subagent ${sessionKey.split(":")[1] || "unknown"}`,
                       force: true,
                     }),
                   }).then(() => console.log(`[agentweave-bridge] proxy session forced to subagent: ${sessionId}`))

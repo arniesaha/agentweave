@@ -129,6 +129,41 @@ describe("createAgentWeaveBridgeService", () => {
     expect(process.env.AGENTWEAVE_SESSION_ID).toBe("agent:main:test-session")
   })
 
+  it("sets Langfuse input preview on message.queued when OpenClaw provides one", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:preview-session",
+      sessionId: "preview-session",
+      channel: "telegram",
+      source: "user",
+      inputPreview: "  summarize   the deployment\nstatus  ",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.observation.type", "agent")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "agent:main:preview-session")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.observation.input", "summarize the deployment status")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.input.preview", "summarize the deployment status")
+  })
+
+  it("uses task labels as a safe input fallback for lifecycle spans", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:task-session",
+      sessionId: "task-session",
+      channel: "cron",
+      source: "cron-isolated",
+      taskLabel: "Daily portfolio briefing",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.trace.name", "Daily portfolio briefing")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.trace.metadata.task_label", "Daily portfolio briefing")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.observation.input", "Daily portfolio briefing")
+  })
+
   it("sets prov.harness=openclaw on message.queued root span", () => {
     fire({
       type: "message.queued",
@@ -273,6 +308,25 @@ describe("createAgentWeaveBridgeService", () => {
 
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.cwd", "/home/arnab/dev/agentweave/plugins/openclaw-agentweave-bridge")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.repository", "arniesaha/agentweave")
+  })
+
+  it("sets Langfuse input preview on session.state subagent roots", () => {
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:parent:subagent:worker-preview",
+      sessionId: "worker-preview",
+      state: "processing",
+      taskLabel: "Review pull request #227",
+      inputPreview: "Review pull request #227 and patch failures",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.observation.type", "agent")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "worker-preview")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.trace.name", "Review pull request #227")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.observation.input", "Review pull request #227 and patch failures")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.input.preview", "Review pull request #227 and patch failures")
   })
 
   it("ends span on message.processed (completed) and cleans env", () => {
