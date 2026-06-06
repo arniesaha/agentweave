@@ -427,6 +427,7 @@ AgentWeave emits standard OTLP HTTP — works with any compatible backend:
 | Topic | Doc |
 |-------|-----|
 | Claude Code proxy setup | [docs/claude-code-proxy.md](./docs/claude-code-proxy.md) |
+| OpenClaw bridge install | [plugins/openclaw-agentweave-bridge/INSTALL.md](./plugins/openclaw-agentweave-bridge/INSTALL.md) |
 | Session grouping | [docs/session-grouping.md](./docs/session-grouping.md) |
 | Proxy setup | [docs/proxy-setup.md](./docs/proxy-setup.md) |
 | Production hardening | [docs/production-hardening.md](./docs/production-hardening.md) |

@@ -99,6 +99,18 @@ Repeat these steps on every OpenClaw machine:
 5. Restart OpenClaw.
 6. Run `agentweave doctor` and confirm `openclaw.bridge` passes.
 
+Developer-preview fleet guidance:
+
+- Keep the plugin path local to each OpenClaw install; `agentweave doctor`
+  warns if `plugins.entries.agentweave-bridge.path` points at a missing
+  directory.
+- Treat this as a per-machine rollout checklist, not full automation. Hosts
+  with AgentWeave proxy or OTLP settings but no registered bridge will report
+  an `openclaw.bridge` warning so they can be fixed before comparing Tempo
+  coverage against the lakehouse session count.
+- After updating a host, send one OpenClaw message and confirm a fresh
+  `openclaw.turn` span appears before moving to the next machine.
+
 ## How it works
 
 ```

@@ -316,6 +316,19 @@ def _check_openclaw_bridge(env: Mapping[str, str]) -> DoctorCheck:
             details={"config_path": str(config_path)},
         )
 
+    bridge_path = _bridge_entry_path(bridge_entry, config_path)
+    if bridge_path and not bridge_path.exists():
+        return DoctorCheck(
+            name="openclaw.bridge",
+            status=WARN,
+            message="OpenClaw agentweave-bridge plugin is configured, but the plugin path does not exist.",
+            suggestion=(
+                "Copy or install plugins/openclaw-agentweave-bridge on this machine, "
+                "then update plugins.entries.agentweave-bridge.path and restart OpenClaw."
+            ),
+            details={"config_path": str(config_path), "plugin_path": str(bridge_path)},
+        )
+
     return DoctorCheck(
         name="openclaw.bridge",
         status=PASS,
@@ -473,6 +486,18 @@ def _bridge_entry_disabled(entry: object) -> bool:
         return True
     config = entry.get("config")
     return isinstance(config, dict) and config.get("enabled") is False
+
+
+def _bridge_entry_path(entry: object, config_path: Path) -> Path | None:
+    if not isinstance(entry, dict):
+        return None
+    raw_path = str(entry.get("path", "")).strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    return (config_path.parent / path).resolve()
 
 
 def _proxy_root_url(value: str) -> str:
