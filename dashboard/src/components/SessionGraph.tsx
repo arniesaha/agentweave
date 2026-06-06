@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useMemo, useRef, useEffect, useCallback, useId } from 'react'
 import { Maximize2, RotateCcw } from 'lucide-react'
 import { SessionNode, SessionEdge } from '../lib/queries'
 
@@ -28,10 +28,12 @@ interface DragState {
 
 const NODE_RADIUS_BASE = 28
 const NODE_RADIUS_SESSION = 30
-const H_GAP_BASE = 100
-const H_GAP_SESSION = 90   // tighter horizontal — keeps deep trees narrower
-const V_GAP = 100
+const H_GAP_BASE = 120
+const H_GAP_SESSION = 130
+const V_GAP = 120
 const PADDING = 60
+const EDGE_DELEGATION = '#00E5CC'
+const EDGE_CALLBACK = '#FFBF47'
 
 function shortId(id: string, mode: GraphMode): string {
   if (mode === 'session') {
@@ -186,8 +188,8 @@ function layoutTree(
   const maxX = Math.max(...layoutNodes.map((n) => n.x), 0)
   const maxY = Math.max(...layoutNodes.map((n) => n.y), 0)
 
-  // Slightly wider spacing for readability in screenshots.
-  const effectiveGap = hGap + 15
+  // Keep causality chains readable in screenshots without changing the graph model.
+  const effectiveGap = hGap + 20
   const width = (maxX + 1) * (nodeRadius * 2 + effectiveGap) + PADDING * 2
   const height = (maxY + 1) * (nodeRadius * 2 + V_GAP) + PADDING * 2
 
@@ -217,9 +219,12 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
   const [mode, setMode] = useState<GraphMode>(fixedMode ?? 'agent')
   const svgRef = useRef<SVGSVGElement>(null)
+  const reactId = useId()
+  const delegationGlowId = `delegation-glow-${reactId.replace(/:/g, '')}`
 
   const [nodePositions, setNodePositions] = useState<NodePositions>({})
   const [dragState, setDragState] = useState<DragState | null>(null)
+  const dragMovedRef = useRef(false)
 
   // Agent mode: aggregate session nodes by agentId
   const agentNodes = useMemo(() => {
@@ -313,6 +318,17 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
     [renderedNodes]
   )
 
+  const graphBounds = useMemo(() => {
+    if (renderedNodes.length === 0) return { width, height }
+    const margin = nodeRadius + 72
+    const maxX = Math.max(...renderedNodes.map((n) => n.x + margin), width)
+    const maxY = Math.max(...renderedNodes.map((n) => n.y + margin), height)
+    return {
+      width: Math.ceil(maxX + PADDING),
+      height: Math.ceil(maxY + PADDING),
+    }
+  }, [renderedNodes, width, height, nodeRadius])
+
   const positionedIdsKey = useMemo(
     () => renderedNodes.map((n) => n.sessionId).sort().join('|'),
     [renderedNodes]
@@ -360,10 +376,11 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
       setNodePositions((prev) => ({
         ...prev,
         [dragState.id]: {
-          x: pointer.x - dragState.pointerOffsetX,
-          y: pointer.y - dragState.pointerOffsetY,
+          x: Math.max(PADDING, pointer.x - dragState.pointerOffsetX),
+          y: Math.max(PADDING, pointer.y - dragState.pointerOffsetY),
         },
       }))
+      dragMovedRef.current = true
       setDragState((prev) => (prev ? { ...prev, moved: true } : prev))
       setTooltip(null)
     }
@@ -409,6 +426,7 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
       pointerOffsetY: pointerY - node.y,
       pointerId: e.pointerId,
     })
+    dragMovedRef.current = false
   }, [])
 
   if (loading) {
@@ -444,8 +462,8 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
     )
   }
 
-  const svgWidth = Math.max(width, 400)
-  const svgHeight = Math.max(height, 200)
+  const svgWidth = Math.max(graphBounds.width, 400)
+  const svgHeight = Math.max(graphBounds.height, 240)
 
   return (
     <div className="relative overflow-auto">
@@ -474,11 +492,11 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           </button>
           <span className="text-[10px] text-ink-faint">drag nodes to explore causality paths</span>
           <span className="flex items-center gap-1.5">
-            <svg width="28" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="#00E5CC" strokeWidth="1.5" strokeDasharray="6 4" opacity="0.6"/><polygon points="22,2 22,8 28,5" fill="#00E5CC" opacity="0.7"/></svg>
+            <svg width="28" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke={EDGE_DELEGATION} strokeWidth="2" strokeDasharray="6 4" opacity="0.8"/><polygon points="22,2 22,8 28,5" fill={EDGE_DELEGATION} opacity="0.9"/></svg>
             <span>delegates to</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <svg width="28" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="#FFBF47" strokeWidth="1.5" strokeDasharray="5 3" opacity="0.7"/><polygon points="22,2 22,8 28,5" fill="#FFBF47" opacity="0.8"/></svg>
+            <svg width="28" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke={EDGE_CALLBACK} strokeWidth="2" strokeDasharray="5 3" opacity="0.8"/><polygon points="22,2 22,8 28,5" fill={EDGE_CALLBACK} opacity="0.9"/></svg>
             <span>callback</span>
           </span>
         </div>
@@ -504,6 +522,12 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
         className="block"
         onClick={(e) => e.stopPropagation()}
       >
+        <defs>
+          <filter id={delegationGlowId} x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="0" stdDeviation="2" floodColor={EDGE_DELEGATION} floodOpacity="0.32" />
+          </filter>
+        </defs>
+
         {/* Forward edges — teal dashed line with arrowhead */}
         {displayEdges.map((edge) => {
           const from = nodeMap.get(edge.from)
@@ -521,15 +545,37 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           const labelY = from.y + fromR + (ey - from.y - fromR) * 0.45
           return (
             <g key={`fwd-${edge.from}->${edge.to}`}>
-              <path d={path} fill="none" stroke="#00E5CC" strokeWidth="1.8" strokeDasharray="6 4" opacity="0.65" />
+              <path d={path} fill="none" stroke={EDGE_DELEGATION} strokeWidth="6" opacity="0.12" />
+              <path
+                d={path}
+                fill="none"
+                stroke={EDGE_DELEGATION}
+                strokeWidth="2.4"
+                strokeDasharray="8 5"
+                opacity="0.88"
+                filter={`url(#${delegationGlowId})`}
+              />
               <polygon
                 points={`${ex - 4},${ey - 7} ${ex + 4},${ey - 7} ${ex},${ey}`}
-                fill="#00E5CC" opacity="0.7" />
+                fill={EDGE_DELEGATION} opacity="0.95" />
               {edge.taskLabel && (
-                <text x={labelX} y={labelY} textAnchor="end" fontSize="7.5" fill="#00E5CC" opacity="0.7"
-                  fontFamily="'DM Sans', system-ui">
-                  {edge.taskLabel.length > 22 ? edge.taskLabel.slice(0, 21) + '...' : edge.taskLabel}
-                </text>
+                <g transform={`translate(${labelX},${labelY - 8})`}>
+                  <rect
+                    x={-118}
+                    y={-6}
+                    width={112}
+                    height={16}
+                    rx={4}
+                    fill="#071A1A"
+                    stroke={EDGE_DELEGATION}
+                    strokeOpacity="0.28"
+                    opacity="0.92"
+                  />
+                  <text x={-10} y={5} textAnchor="end" fontSize="8" fill={EDGE_DELEGATION} opacity="0.95"
+                    fontFamily="'DM Sans', system-ui">
+                    {edge.taskLabel.length > 22 ? edge.taskLabel.slice(0, 21) + '...' : edge.taskLabel}
+                  </text>
+                </g>
               )}
             </g>
           )
@@ -547,23 +593,24 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
           const arrowRotation = arrowAngle !== undefined ? (arrowAngle * 180) / Math.PI : 180
           return (
             <g key={`back-${edge.from}->${edge.to}`}>
-              <path d={path} fill="none" stroke="#FFBF47" strokeWidth="1.8" strokeDasharray="5 3" opacity="0.72" />
+              <path d={path} fill="none" stroke={EDGE_CALLBACK} strokeWidth="5" opacity="0.12" />
+              <path d={path} fill="none" stroke={EDGE_CALLBACK} strokeWidth="2.2" strokeDasharray="5 3" opacity="0.82" />
               {selfLoop ? (
                 <polygon
                   points="0,0 -8,-4 -8,4"
                   transform={`translate(${arrowX},${arrowY}) rotate(${arrowRotation})`}
-                  fill="#FFBF47"
-                  opacity="0.8"
+                  fill={EDGE_CALLBACK}
+                  opacity="0.9"
                 />
               ) : (
                 <polygon
                   points={`${arrowX + 8},${arrowY - 4} ${arrowX + 8},${arrowY + 4} ${arrowX},${arrowY}`}
-                  fill="#FFBF47"
-                  opacity="0.8"
+                  fill={EDGE_CALLBACK}
+                  opacity="0.9"
                 />
               )}
               {edge.taskLabel && (
-                <text x={labelX} y={labelY} textAnchor={selfLoop ? 'start' : 'end'} fontSize="8" fill="#FFBF47" opacity="0.7"
+                <text x={labelX} y={labelY} textAnchor={selfLoop ? 'start' : 'end'} fontSize="8" fill={EDGE_CALLBACK} opacity="0.82"
                   fontFamily="'DM Sans', system-ui">
                   {edge.taskLabel.length > 24 ? edge.taskLabel.slice(0, 23) + '...' : edge.taskLabel}
                 </text>
@@ -589,9 +636,10 @@ export function SessionGraph({ nodes, edges, selectedId, onSelect, loading, erro
               onPointerDown={(e) => handlePointerDownNode(e, node)}
               onClick={(e) => {
                 e.stopPropagation()
-                if (!dragState?.moved) {
+                if (!dragMovedRef.current) {
                   onSelect(node.sessionId)
                 }
+                dragMovedRef.current = false
                 setTooltip(null)
               }}
               onMouseEnter={(e) => {
