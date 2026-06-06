@@ -1337,6 +1337,17 @@ async def _request_and_trace(
 # Streaming handler
 # ---------------------------------------------------------------------------
 
+_STREAM_RESPONSE_PREVIEW_BUFFER_CHARS = 4096
+
+
+def _append_stream_response_text(current: str, delta: str) -> str:
+    """Append a streamed text delta while bounding memory use."""
+    if not delta or len(current) >= _STREAM_RESPONSE_PREVIEW_BUFFER_CHARS:
+        return current
+    remaining = _STREAM_RESPONSE_PREVIEW_BUFFER_CHARS - len(current)
+    return current + delta[:remaining]
+
+
 async def _stream_and_trace(
     upstream_url: str, method: str, headers: dict, body: dict, body_bytes: bytes,
     model: str, provider: str, agent_id: str, agent_model: str, path: str,
@@ -1369,6 +1380,7 @@ async def _stream_and_trace(
     input_tokens = output_tokens = 0
     cache_read = cache_write = 0  # Anthropic prompt-caching counters
     stop_reason = None
+    response_text = ""
     start = time.perf_counter()
 
     try:
@@ -1390,6 +1402,9 @@ async def _stream_and_trace(
                             input_tokens, output_tokens, stop_reason = _parse_anthropic_sse(
                                 line, input_tokens, output_tokens, stop_reason
                             )
+                            response_text = _append_stream_response_text(
+                                response_text, _anthropic_sse_text_delta(line)
+                            )
                             cw, cr = _extract_anthropic_cache_tokens(line)
                             if cw > cache_write:
                                 cache_write = cw
@@ -1399,9 +1414,15 @@ async def _stream_and_trace(
                             input_tokens, output_tokens, stop_reason = _parse_openai_sse(
                                 line, input_tokens, output_tokens, stop_reason
                             )
+                            response_text = _append_stream_response_text(
+                                response_text, _openai_sse_text_delta(line)
+                            )
                         else:  # google
                             input_tokens, output_tokens, stop_reason = _parse_google_stream(
                                 line, input_tokens, output_tokens, stop_reason
+                            )
+                            response_text = _append_stream_response_text(
+                                response_text, _google_stream_text_delta(line)
                             )
                 except httpx.RemoteProtocolError as exc:
                     logger.warning("upstream closed mid-stream: %s", exc)
@@ -1415,6 +1436,7 @@ async def _stream_and_trace(
         if stop_reason:
             span.set_attribute(schema.PROV_LLM_STOP_REASON, stop_reason)
         span.set_attribute("agentweave.latency_ms", elapsed_ms)
+        _maybe_set_response_preview(span, response_text)
 
         # Cache token breakdown — Anthropic-specific; emit zeros for other providers
         # so Grafana queries never encounter missing fields.
@@ -1533,6 +1555,22 @@ def _extract_anthropic_cache_tokens(line: str) -> tuple[int, int]:
     return 0, 0
 
 
+def _anthropic_sse_text_delta(line: str) -> str:
+    if not line.startswith("data: "):
+        return ""
+    payload = line[6:]
+    if payload == "[DONE]":
+        return ""
+    try:
+        event = json.loads(payload)
+        delta = event.get("delta", {})
+        if event.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
+            return delta.get("text", "") or ""
+    except (json.JSONDecodeError, AttributeError, KeyError):
+        pass
+    return ""
+
+
 def _parse_google_stream(
     line: str, input_tokens: int, output_tokens: int, stop_reason: str | None
 ) -> tuple[int, int, str | None]:
@@ -1554,6 +1592,25 @@ def _parse_google_stream(
     except (json.JSONDecodeError, KeyError, IndexError):
         pass
     return input_tokens, output_tokens, stop_reason
+
+
+def _google_stream_text_delta(line: str) -> str:
+    payload = line[6:] if line.startswith("data: ") else line
+    if not payload or payload == "[DONE]":
+        return ""
+    try:
+        chunk = json.loads(payload)
+        text_parts = []
+        for candidate in chunk.get("candidates", []):
+            content = candidate.get("content", {})
+            for part in content.get("parts", []):
+                text = part.get("text")
+                if text:
+                    text_parts.append(text)
+        return "".join(text_parts)
+    except (json.JSONDecodeError, AttributeError, KeyError):
+        pass
+    return ""
 
 
 def _parse_openai_sse(
@@ -1585,6 +1642,29 @@ def _parse_openai_sse(
     except (json.JSONDecodeError, KeyError, IndexError):
         pass
     return input_tokens, output_tokens, stop_reason
+
+
+def _openai_sse_text_delta(line: str) -> str:
+    if not line.startswith("data: "):
+        return ""
+    payload = line[6:]
+    if payload == "[DONE]":
+        return ""
+    try:
+        chunk = json.loads(payload)
+        text_parts = []
+        for choice in chunk.get("choices", []):
+            content = choice.get("delta", {}).get("content")
+            if content:
+                text_parts.append(content)
+        if chunk.get("type") == "response.output_text.delta":
+            delta = chunk.get("delta")
+            if delta:
+                text_parts.append(delta)
+        return "".join(text_parts)
+    except (json.JSONDecodeError, AttributeError, KeyError):
+        pass
+    return ""
 
 
 # ---------------------------------------------------------------------------
