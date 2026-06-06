@@ -170,6 +170,8 @@ def test_doctor_warns_when_openclaw_bridge_missing_with_agentweave_hints(monkeyp
 def test_doctor_passes_when_openclaw_bridge_is_configured(monkeypatch, tmp_path):
     import agentweave.doctor as doctor_module
 
+    bridge_path = tmp_path / "plugins" / "openclaw-agentweave-bridge"
+    bridge_path.mkdir(parents=True)
     config_path = tmp_path / "openclaw.json"
     config_path.write_text(
         json.dumps(
@@ -177,7 +179,7 @@ def test_doctor_passes_when_openclaw_bridge_is_configured(monkeypatch, tmp_path)
                 "plugins": {
                     "entries": {
                         "agentweave-bridge": {
-                            "path": "/opt/openclaw/plugins/openclaw-agentweave-bridge",
+                            "path": str(bridge_path),
                             "config": {"enabled": True},
                         }
                     }
@@ -197,3 +199,38 @@ def test_doctor_passes_when_openclaw_bridge_is_configured(monkeypatch, tmp_path)
     bridge_check = next(check for check in checks if check.name == "openclaw.bridge")
     assert bridge_check.status == "pass"
     assert "is configured" in bridge_check.message
+
+
+def test_doctor_warns_when_openclaw_bridge_path_is_missing(monkeypatch, tmp_path):
+    import agentweave.doctor as doctor_module
+
+    missing_bridge_path = tmp_path / "plugins" / "openclaw-agentweave-bridge"
+    config_path = tmp_path / "openclaw.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "plugins": {
+                    "entries": {
+                        "agentweave-bridge": {
+                            "path": str(missing_bridge_path),
+                            "config": {"enabled": True},
+                        }
+                    }
+                }
+            }
+        )
+    )
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.3.0")
+    checks = doctor_module.run_doctor(
+        env={
+            **_healthy_env(),
+            "OPENCLAW_CONFIG_PATH": str(config_path),
+        }
+    )
+
+    bridge_check = next(check for check in checks if check.name == "openclaw.bridge")
+    assert bridge_check.status == "warn"
+    assert "plugin path does not exist" in bridge_check.message
+    assert bridge_check.details["plugin_path"] == str(missing_bridge_path)
+    assert not doctor_module.has_failures(checks)
