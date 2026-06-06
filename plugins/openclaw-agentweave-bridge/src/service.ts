@@ -41,6 +41,7 @@ export interface BridgeConfig {
   project?: string
   enabled?: boolean
   proxyUrl?: string
+  captureInputPreviews?: boolean
 }
 
 /** Sources that indicate a spawned sub-agent (not a user-initiated message). */
@@ -345,6 +346,7 @@ export function createAgentWeaveBridgeService() {
         proxyUrl: fileConfig.proxyUrl
           ?? process.env.AGENTWEAVE_PROXY_URL
           ?? undefined,
+        captureInputPreviews: fileConfig.captureInputPreviews ?? true,
       }
 
       if (config.enabled === false) return
@@ -703,7 +705,9 @@ export function createAgentWeaveBridgeService() {
               if (!provider && !model) break
               if (provider) match.turn.span.setAttribute("prov.llm.provider", provider)
               if (model) match.turn.span.setAttribute("prov.llm.model", model)
-              const privateInputPreview = resolvePrivateInputPreview(privateData)
+              const privateInputPreview = config.captureInputPreviews
+                ? resolvePrivateInputPreview(privateData)
+                : undefined
               if (privateInputPreview) {
                 match.turn.span.setAttribute("prov.input.preview", privateInputPreview)
                 match.turn.span.setAttribute("langfuse.observation.input", privateInputPreview)

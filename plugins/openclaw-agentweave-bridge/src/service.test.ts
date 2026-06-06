@@ -220,6 +220,49 @@ describe("createAgentWeaveBridgeService", () => {
     )
   })
 
+  it("does not capture private input preview when captureInputPreviews is false", async () => {
+    await service.stop()
+    const harness = makeCtxWithInternalDiagnostics({ captureInputPreviews: false })
+    service = createAgentWeaveBridgeService()
+    await service.start(harness.ctx)
+
+    harness.fireInternal({
+      type: "message.queued",
+      sessionKey: "agent:main:no-capture-session",
+      sessionId: "018f-openclaw-no-capture-0001",
+      channel: "telegram",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    harness.fireInternal(
+      {
+        type: "model.call.completed",
+        sessionKey: "agent:main:no-capture-session",
+        sessionId: "018f-openclaw-no-capture-0001",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        durationMs: 12,
+        ts: Date.now(),
+        seq: 2,
+      },
+      {
+        modelContent: {
+          inputMessages: [
+            { role: "system", content: "system instructions stay out" },
+            {
+              role: "user",
+              content: "Please summarize deployment status",
+            },
+          ],
+        },
+      },
+    )
+
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("langfuse.observation.input", expect.anything())
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.input.preview", expect.anything())
+  })
+
   it("uses task labels as a safe input fallback for lifecycle spans", () => {
     fire({
       type: "message.queued",
