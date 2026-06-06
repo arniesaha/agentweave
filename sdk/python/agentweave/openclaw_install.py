@@ -217,3 +217,55 @@ def install(
         created_entry=created,
         actions=[f"{'created' if created else 'updated'} plugins.entries.{BRIDGE_ENTRY_KEY}"],
     )
+
+
+def uninstall(
+    env: Mapping[str, str],
+    *,
+    config_path: str | None = None,
+    purge: bool = False,
+) -> InstallResult:
+    resolved_config = resolve_config_path(env, config_path)
+    config = _read_config(resolved_config)
+    entries = _entries(config)
+
+    entry = entries.pop(BRIDGE_ENTRY_KEY, None)
+    removed = entry is not None
+
+    if not removed:
+        return InstallResult(
+            config_path=resolved_config,
+            plugin_dir=None,
+            removed_entry=False,
+            actions=["no agentweave-bridge entry found"],
+        )
+
+    # If purging, validate the target BEFORE mutating the config so a dangerous
+    # (hand-edited) path aborts the whole operation rather than removing the
+    # config entry and then refusing to delete files.
+    purge_dir: Path | None = None
+    if purge and isinstance(entry, dict) and isinstance(entry.get("path"), str):
+        candidate = Path(entry["path"]).expanduser()
+        if candidate.name != DEFAULT_PLUGIN_DIRNAME:
+            raise OpenClawInstallError(
+                f"Refusing to purge {candidate}: expected the plugin directory "
+                f"basename to be '{DEFAULT_PLUGIN_DIRNAME}', got '{candidate.name}'. "
+                "Remove the directory manually if this was intended."
+            )
+        purge_dir = candidate
+
+    backup = _write_config_atomic(resolved_config, config)
+
+    plugin_dir = None
+    if purge_dir is not None:
+        if purge_dir.exists():
+            shutil.rmtree(purge_dir)
+        plugin_dir = purge_dir
+
+    return InstallResult(
+        config_path=resolved_config,
+        plugin_dir=plugin_dir,
+        backup_path=backup,
+        removed_entry=True,
+        actions=[f"removed plugins.entries.{BRIDGE_ENTRY_KEY}"],
+    )

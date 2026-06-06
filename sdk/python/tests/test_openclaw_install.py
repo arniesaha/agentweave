@@ -217,3 +217,61 @@ def test_install_raises_on_malformed_entries(tmp_path):
 
     with pytest.raises(oi.OpenClawInstallError):
         oi.install({}, dist_dir=dist, config_path=str(config_path), agent_id="a")
+
+
+def test_uninstall_removes_entry_and_optionally_purges(tmp_path):
+    from agentweave import openclaw_install as oi
+
+    config_path = tmp_path / "openclaw.json"
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in oi.BUNDLE_FILES:
+        (dist / name).write_text("x", encoding="utf-8")
+    _write_config(config_path, {"plugins": {"entries": {}}, "keep": 1})
+
+    installed = oi.install({}, dist_dir=dist, config_path=str(config_path), agent_id="a")
+    plugin_dir = installed.plugin_dir
+
+    result = oi.uninstall({}, config_path=str(config_path), purge=True)
+
+    config = json.loads(config_path.read_text())
+    assert "agentweave-bridge" not in config["plugins"]["entries"]
+    assert config["keep"] == 1
+    assert result.removed_entry is True
+    assert not plugin_dir.exists()  # purged
+
+
+def test_uninstall_missing_entry_is_noop(tmp_path):
+    from agentweave import openclaw_install as oi
+
+    config_path = tmp_path / "openclaw.json"
+    _write_config(config_path, {"plugins": {"entries": {}}})
+    mtime_before = config_path.stat().st_mtime
+
+    result = oi.uninstall({}, config_path=str(config_path))
+
+    assert result.removed_entry is False
+    assert config_path.stat().st_mtime == mtime_before
+    assert not config_path.with_suffix(".json.bak").exists()
+
+
+def test_uninstall_purge_refuses_unexpected_basename(tmp_path):
+    from agentweave import openclaw_install as oi
+
+    config_path = tmp_path / "openclaw.json"
+    danger = tmp_path / "not-the-bridge"
+    danger.mkdir()
+    (danger / "important.txt").write_text("keep me", encoding="utf-8")
+    _write_config(
+        config_path,
+        {"plugins": {"entries": {"agentweave-bridge": {"path": str(danger), "config": {}}}}},
+    )
+
+    with pytest.raises(oi.OpenClawInstallError):
+        oi.uninstall({}, config_path=str(config_path), purge=True)
+
+    # The config was not mutated and the directory was not deleted.
+    config = json.loads(config_path.read_text())
+    assert "agentweave-bridge" in config["plugins"]["entries"]
+    assert danger.exists()
+    assert (danger / "important.txt").exists()
