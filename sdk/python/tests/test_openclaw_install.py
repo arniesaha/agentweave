@@ -275,3 +275,95 @@ def test_uninstall_purge_refuses_unexpected_basename(tmp_path):
     assert "agentweave-bridge" in config["plugins"]["entries"]
     assert danger.exists()
     assert (danger / "important.txt").exists()
+
+
+def test_cli_install_reports_and_writes_entry(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    from agentweave import openclaw_install as oi
+    from agentweave.cli import app
+
+    config_path = tmp_path / "openclaw.json"
+    _write_config(config_path, {"plugins": {"entries": {}}})
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in oi.BUNDLE_FILES:
+        (dist / name).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(oi, "resolve_packaged_dist", lambda: dist)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "openclaw", "install",
+            "--openclaw-config", str(config_path),
+            "--agent-id", "cli-host",
+            "--no-restart",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    entry = json.loads(config_path.read_text())["plugins"]["entries"]["agentweave-bridge"]
+    assert entry["config"]["agentId"] == "cli-host"
+    assert "openclaw gateway restart" in result.output
+
+
+def test_cli_install_missing_config_exits_nonzero(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    from agentweave import openclaw_install as oi
+    from agentweave.cli import app
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in oi.BUNDLE_FILES:
+        (dist / name).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(oi, "resolve_packaged_dist", lambda: dist)
+
+    result = CliRunner().invoke(
+        app, ["openclaw", "install", "--openclaw-config", str(tmp_path / "nope.json")]
+    )
+    assert result.exit_code != 0
+    assert "not found" in result.output.lower()
+
+
+def test_cli_uninstall_noop_when_absent(tmp_path):
+    from typer.testing import CliRunner
+    from agentweave.cli import app
+
+    config_path = tmp_path / "openclaw.json"
+    _write_config(config_path, {"plugins": {"entries": {}}})
+
+    result = CliRunner().invoke(
+        app, ["openclaw", "uninstall", "--openclaw-config", str(config_path)]
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_cli_install_restart_handles_missing_openclaw(tmp_path, monkeypatch):
+    import subprocess
+
+    from typer.testing import CliRunner
+    from agentweave import openclaw_install as oi
+    from agentweave.cli import app
+
+    config_path = tmp_path / "openclaw.json"
+    _write_config(config_path, {"plugins": {"entries": {}}})
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in oi.BUNDLE_FILES:
+        (dist / name).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(oi, "resolve_packaged_dist", lambda: dist)
+
+    def _boom(*args, **kwargs):
+        raise FileNotFoundError("openclaw")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "openclaw", "install",
+            "--openclaw-config", str(config_path),
+            "--agent-id", "j",
+            "--restart",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "not found on PATH" in result.output
