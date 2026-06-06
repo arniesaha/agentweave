@@ -95,3 +95,125 @@ def resolve_config_values(
         if chosen:
             values[key] = chosen
     return values
+
+
+def copy_bundle(dist_dir, plugin_dir: Path) -> None:
+    try:
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        for name in BUNDLE_FILES:
+            src = dist_dir.joinpath(name) if hasattr(dist_dir, "joinpath") else Path(dist_dir) / name
+            if isinstance(src, Path):
+                shutil.copyfile(src, plugin_dir / name)
+            else:
+                with resources.as_file(src) as real:
+                    shutil.copyfile(real, plugin_dir / name)
+    except OSError as exc:
+        raise OpenClawInstallError(
+            f"Could not write plugin files to {plugin_dir}: {exc}."
+        ) from exc
+
+
+def _read_config(config_path: Path) -> dict:
+    if not config_path.exists():
+        raise OpenClawInstallError(
+            f"OpenClaw config not found at {config_path}. Install OpenClaw or pass "
+            "--openclaw-config."
+        )
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise OpenClawInstallError(
+            f"OpenClaw config at {config_path} is not valid JSON: {exc.msg}."
+        ) from exc
+    if not isinstance(data, dict):
+        raise OpenClawInstallError(f"OpenClaw config at {config_path} is not a JSON object.")
+    return data
+
+
+def _write_config_atomic(config_path: Path, config: dict) -> Path:
+    """Back up, then write atomically. Returns the backup path.
+
+    Note: the ``.bak`` reflects the config as it was at the start of THIS call,
+    not necessarily the original pre-install config across repeated runs.
+    """
+    backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+    tmp = config_path.with_suffix(config_path.suffix + ".tmp")
+    try:
+        shutil.copyfile(config_path, backup_path)
+    except OSError as exc:
+        raise OpenClawInstallError(
+            f"Could not create a backup of {config_path}: {exc}."
+        ) from exc
+    try:
+        tmp.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(config_path)
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        shutil.copyfile(backup_path, config_path)
+        raise OpenClawInstallError(
+            f"Failed to write OpenClaw config at {config_path}: {exc}. Restored from backup."
+        ) from exc
+    return backup_path
+
+
+def _entries(config: dict) -> dict:
+    plugins = config.setdefault("plugins", {})
+    if not isinstance(plugins, dict):
+        raise OpenClawInstallError("openclaw.json `plugins` is not an object.")
+    entries = plugins.setdefault("entries", {})
+    if not isinstance(entries, dict):
+        raise OpenClawInstallError("openclaw.json `plugins.entries` is not an object.")
+    return entries
+
+
+def install(
+    env: Mapping[str, str],
+    *,
+    config_path: str | None = None,
+    plugin_dir: str | None = None,
+    dist_dir=None,
+    proxy_url: str | None = None,
+    otlp_endpoint: str | None = None,
+    agent_id: str | None = None,
+    project: str | None = None,
+    enabled: bool = True,
+    force: bool = False,
+) -> InstallResult:
+    resolved_config = resolve_config_path(env, config_path)
+    config = _read_config(resolved_config)  # raises if missing/invalid
+
+    dist = dist_dir if dist_dir is not None else resolve_packaged_dist()
+    target_dir = Path(plugin_dir).expanduser() if plugin_dir else default_plugin_dir(resolved_config)
+
+    copy_bundle(dist, target_dir)
+
+    entries = _entries(config)
+    existing = entries.get(BRIDGE_ENTRY_KEY)
+    created = not isinstance(existing, dict)
+
+    resolved_values = resolve_config_values(
+        env,
+        proxy_url=proxy_url,
+        otlp_endpoint=otlp_endpoint,
+        agent_id=agent_id,
+        project=project,
+    )
+
+    merged_config: dict = {}
+    if isinstance(existing, dict) and isinstance(existing.get("config"), dict):
+        merged_config.update(existing["config"])
+    for key, value in resolved_values.items():
+        if force or key not in merged_config:
+            merged_config[key] = value
+    merged_config["enabled"] = enabled
+
+    entries[BRIDGE_ENTRY_KEY] = {"path": str(target_dir), "config": merged_config}
+
+    backup = _write_config_atomic(resolved_config, config)
+    return InstallResult(
+        config_path=resolved_config,
+        plugin_dir=target_dir,
+        backup_path=backup,
+        created_entry=created,
+        actions=[f"{'created' if created else 'updated'} plugins.entries.{BRIDGE_ENTRY_KEY}"],
+    )

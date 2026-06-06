@@ -73,3 +73,147 @@ def test_resolve_config_path_raises_when_unresolvable():
 
     with pytest.raises(OpenClawInstallError):
         resolve_config_path({}, None)
+
+
+def _write_config(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_install_writes_files_and_entry(tmp_path):
+    from agentweave import openclaw_install as oi
+
+    config_path = tmp_path / ".openclaw" / "openclaw.json"
+    config_path.parent.mkdir(parents=True)
+    _write_config(config_path, {"plugins": {"entries": {}}})
+
+    # Fake the packaged dist so the test does not depend on a built wheel.
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in oi.BUNDLE_FILES:
+        (dist / name).write_text(f"// {name}", encoding="utf-8")
+
+    result = oi.install(
+        {},
+        dist_dir=dist,
+        config_path=str(config_path),
+        proxy_url="http://p:4000",
+        otlp_endpoint="http://o:4318",
+        agent_id="host-a",
+        project="proj-a",
+    )
+
+    assert result.created_entry is True
+    plugin_dir = result.plugin_dir
+    assert (plugin_dir / "index.js").exists()
+    assert (plugin_dir / "openclaw.plugin.json").exists()
+    assert (plugin_dir / "package.json").exists()
+
+    config = json.loads(config_path.read_text())
+    entry = config["plugins"]["entries"]["agentweave-bridge"]
+    assert entry["path"] == str(plugin_dir)
+    assert entry["config"] == {
+        "proxyUrl": "http://p:4000",
+        "otlpEndpoint": "http://o:4318",
+        "agentId": "host-a",
+        "project": "proj-a",
+        "enabled": True,
+    }
+
+
+def test_install_is_idempotent_and_backs_up(tmp_path):
+    from agentweave import openclaw_install as oi
+
+    config_path = tmp_path / "openclaw.json"
+    _write_config(config_path, {"plugins": {"entries": {}}, "other": "keep"})
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in oi.BUNDLE_FILES:
+        (dist / name).write_text("x", encoding="utf-8")
+
+    oi.install({}, dist_dir=dist, config_path=str(config_path), agent_id="a")
+    result2 = oi.install({}, dist_dir=dist, config_path=str(config_path), agent_id="a")
+
+    config = json.loads(config_path.read_text())
+    assert config["other"] == "keep"
+    assert list(config["plugins"]["entries"].keys()) == ["agentweave-bridge"]
+    assert result2.created_entry is False
+    assert (config_path.parent / "openclaw.json.bak").exists()
+
+
+def test_install_preserves_user_config_unless_force(tmp_path):
+    from agentweave import openclaw_install as oi
+
+    config_path = tmp_path / "openclaw.json"
+    _write_config(
+        config_path,
+        {
+            "plugins": {
+                "entries": {
+                    "agentweave-bridge": {
+                        "path": "/old",
+                        "config": {"agentId": "hand-set", "extra": "keep"},
+                    }
+                }
+            }
+        },
+    )
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in oi.BUNDLE_FILES:
+        (dist / name).write_text("x", encoding="utf-8")
+
+    oi.install({}, dist_dir=dist, config_path=str(config_path), agent_id="new")
+    entry = json.loads(config_path.read_text())["plugins"]["entries"]["agentweave-bridge"]
+    assert entry["config"]["agentId"] == "hand-set"
+    assert entry["config"]["extra"] == "keep"
+    assert entry["path"] != "/old"
+
+    oi.install({}, dist_dir=dist, config_path=str(config_path), agent_id="new", force=True)
+    entry = json.loads(config_path.read_text())["plugins"]["entries"]["agentweave-bridge"]
+    assert entry["config"]["agentId"] == "new"
+    assert entry["config"]["extra"] == "keep"
+
+
+def test_install_missing_config_errors(tmp_path):
+    from agentweave import openclaw_install as oi
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in oi.BUNDLE_FILES:
+        (dist / name).write_text("x", encoding="utf-8")
+
+    with pytest.raises(oi.OpenClawInstallError):
+        oi.install(
+            {}, dist_dir=dist, config_path=str(tmp_path / "nope.json"), agent_id="a"
+        )
+
+
+def test_install_enabled_false_overrides_existing(tmp_path):
+    from agentweave import openclaw_install as oi
+
+    config_path = tmp_path / "openclaw.json"
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in oi.BUNDLE_FILES:
+        (dist / name).write_text("x", encoding="utf-8")
+    _write_config(config_path, {"plugins": {"entries": {}}})
+
+    oi.install({}, dist_dir=dist, config_path=str(config_path), agent_id="a", enabled=True)
+    oi.install({}, dist_dir=dist, config_path=str(config_path), agent_id="a", enabled=False)
+
+    entry = json.loads(config_path.read_text())["plugins"]["entries"]["agentweave-bridge"]
+    assert entry["config"]["enabled"] is False
+
+
+def test_install_raises_on_malformed_entries(tmp_path):
+    from agentweave import openclaw_install as oi
+
+    config_path = tmp_path / "openclaw.json"
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in oi.BUNDLE_FILES:
+        (dist / name).write_text("x", encoding="utf-8")
+    _write_config(config_path, {"plugins": {"entries": "not-a-dict"}})
+
+    with pytest.raises(oi.OpenClawInstallError):
+        oi.install({}, dist_dir=dist, config_path=str(config_path), agent_id="a")
