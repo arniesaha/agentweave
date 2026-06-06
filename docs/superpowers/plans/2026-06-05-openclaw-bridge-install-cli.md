@@ -92,7 +92,7 @@ In `plugins/openclaw-agentweave-bridge/package.json`, replace the `"scripts"` bl
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc",
-    "build:bundle": "esbuild index.ts --bundle --platform=node --format=esm --target=node20 --outfile=bundle/index.js",
+    "build:bundle": "esbuild index.ts --bundle --platform=node --format=esm --target=node18 --outfile=bundle/index.js",
     "verify:bundle": "node scripts/verify-bundle.mjs"
   },
 ```
@@ -132,7 +132,7 @@ npm run verify:bundle
 Expected: `verify-bundle: OK (loads, exports bridge plugin, self-contained)`.
 
 If `--format=esm` fails the self-contained or load check due to the protobuf exporter (see spec Risks), fall back to:
-`esbuild index.ts --bundle --platform=node --format=cjs --target=node20 --outfile=bundle/index.js` and rename the artifact handling in Task 2 to `index.cjs` with the staged `package.json` pointing `openclaw.extensions` at `./index.cjs`. Re-run Step 5 until it passes.
+`esbuild index.ts --bundle --platform=node --format=cjs --target=node18 --outfile=bundle/index.js` and rename the artifact handling in Task 2 to `index.cjs` with the staged `package.json` pointing `openclaw.extensions` at `./index.cjs`. Re-run Step 5 until it passes.
 
 - [ ] **Step 6: Commit**
 
