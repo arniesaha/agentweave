@@ -493,6 +493,12 @@ async def set_session_context(body: dict):
     else:
         # Legacy path (no session_key): update global context and force flag.
         # Not concurrent-safe — callers should migrate to session_key.
+        if force:
+            logger.warning(
+                "deprecated legacy global force session context used: "
+                "POST /session with force=true and no session_key; "
+                "migrate caller to session_key before this path is removed"
+            )
         _session_context = ctx
         _session_context_force = force
 

@@ -1445,20 +1445,24 @@ class TestForcedSessionContextRace:
         assert captured[0]["agent_id"] == "legacy-fallback-agent"
         assert captured[0]["session_id"] == "legacy-fallback-sess"
 
-    def test_legacy_force_without_key_still_works(self, monkeypatch):
-        """Backward compat: POST /session with force:true and no session_key sets global flag."""
+    def test_legacy_force_without_key_warns_and_still_works(self, monkeypatch, caplog):
+        """Backward compat: warn on legacy force while keeping the global flag path."""
         from fastapi.testclient import TestClient
         from agentweave.proxy import app
         monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
         monkeypatch.setattr(proxy_module, "_session_context_force", False)
 
         client = TestClient(app)
-        resp = client.post("/session", json={
-            "session_id": "legacy-sess",
-            "force": True,
-            # no session_key
-        })
+        with caplog.at_level(logging.WARNING, logger="agentweave.proxy"):
+            resp = client.post("/session", json={
+                "session_id": "legacy-sess",
+                "force": True,
+                # no session_key
+            })
         assert resp.status_code == 200
+        warning_messages = [record.message for record in caplog.records]
+        assert any("legacy global force" in msg for msg in warning_messages)
+        assert any("session_key" in msg for msg in warning_messages)
         # Legacy path: global flag should be set
         assert proxy_module._session_context_force is True
         assert len(proxy_module._forced_session_contexts) == 0

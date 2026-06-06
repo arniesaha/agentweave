@@ -23,7 +23,9 @@ order — first non-empty value wins:
    globally (legacy callers that POST `/session` without `session_key`),
    the stored value is used as a low-priority fallback. This intentionally
    ranks BELOW explicit headers so unrelated callers are not hijacked
-   (issue #189).
+   (issue #189). This path is deprecated: `force:true` without
+   `session_key` logs a "legacy global force" warning so callers can be
+   found before the fallback is removed.
 5. **Proxy process env** — `AGENTWEAVE_<ATTR>` without subagent mode.
 6. **Static config** — `agentweave.yaml`.
 7. **Sentinel** — `"unattributed"` for `agent_id`; `None` for the rest.
