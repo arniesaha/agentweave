@@ -2,6 +2,29 @@
 
 OpenClaw plugin that creates root OTel spans per user message, enabling full conversation traces in AgentWeave.
 
+## Quick install (recommended)
+
+On any host with the AgentWeave CLI:
+
+```bash
+pip install agentweave
+agentweave openclaw install \
+  --proxy-url http://localhost:4000 \
+  --otlp-endpoint http://localhost:4318 \
+  --agent-id "$(hostname)" \
+  --project my-project
+openclaw gateway restart
+agentweave doctor          # openclaw.bridge should PASS
+```
+
+This copies a prebuilt, self-contained bundle into
+`~/.openclaw/user-plugins/agentweave-bridge` and registers it in
+`~/.openclaw/openclaw.json`. Re-running is safe (idempotent); hand-edited config
+values are preserved unless you pass `--force`. Remove with
+`agentweave openclaw uninstall --purge`.
+
+The manual steps below remain available for custom layouts.
+
 ## Prerequisites
 
 - OpenClaw installed (`openclaw` CLI available)
