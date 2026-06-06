@@ -12,6 +12,28 @@ interface ActiveTurn {
   ctx: Context
 }
 
+interface DiagnosticPrivateData {
+  modelContent?: {
+    inputMessages?: unknown
+    outputMessages?: unknown
+    systemPrompt?: string
+    toolDefinitions?: unknown
+  }
+}
+
+interface BridgeServiceContext {
+  config: Record<string, unknown>
+  internalDiagnostics?: {
+    onEvent?: (
+      listener: (
+        event: unknown,
+        metadata: unknown,
+        privateData: DiagnosticPrivateData,
+      ) => void,
+    ) => () => void
+  }
+}
+
 export interface BridgeConfig {
   otlpEndpoint: string
   agentId?: string
@@ -97,7 +119,18 @@ function initSdk(config: BridgeConfig): void {
   console.log("[agentweave-bridge] OTel SDK started, exporting to:", `${config.otlpEndpoint}/v1/traces`)
 }
 
-function subscribeToDiagnosticEvents(listener: (evt: unknown) => void): () => void {
+function subscribeToDiagnosticEvents(
+  ctx: BridgeServiceContext,
+  listener: (evt: unknown, privateData?: DiagnosticPrivateData) => void,
+): () => void {
+  if (ctx.internalDiagnostics?.onEvent) {
+    const unsubInternal = ctx.internalDiagnostics.onEvent((evt, _metadata, privateData) => {
+      listener(evt, privateData)
+    })
+    console.log("[agentweave-bridge] subscribed to internal diagnostic events")
+    return unsubInternal
+  }
+
   // Two openclaw plugin-sdk subscriptions:
   //
   // 1. `onDiagnosticEvent` covers the public (untrusted) event stream —
@@ -112,11 +145,11 @@ function subscribeToDiagnosticEvents(listener: (evt: unknown) => void): () => vo
   // `onModelDiagnosticEvent` was added to the plugin-sdk in a separate
   // openclaw PR; older runtimes export only `onDiagnosticEvent`, so we
   // guard the call to keep the bridge compatible.
-  const unsubMain = (onDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(listener)
+  const unsubMain = (onDiagnosticEvent as (l: (evt: unknown) => void) => () => void)((evt) => listener(evt))
   console.log("[agentweave-bridge] subscribed to diagnostic events via plugin-sdk")
   let unsubModel: (() => void) | undefined
   if (typeof onModelDiagnosticEvent === "function") {
-    unsubModel = (onModelDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(listener)
+    unsubModel = (onModelDiagnosticEvent as (l: (evt: unknown) => void) => () => void)((evt) => listener(evt))
     console.log("[agentweave-bridge] subscribed to model.* trusted events via plugin-sdk")
   } else {
     console.warn(
@@ -156,6 +189,46 @@ function truncatePreview(value: string, maxChars = 1000): string {
   const normalized = value.replace(/\s+/g, " ").trim()
   if (normalized.length <= maxChars) return normalized
   return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`
+}
+
+function redactPreview(value: string): string {
+  return value
+    .replace(/\b(Authorization\s*:\s*Bearer\s+)[^\s,;]+/giu, "$1[REDACTED]")
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gu, "$1[REDACTED]")
+    .replace(/\b([A-Z][A-Z0-9_]{2,}(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Z0-9_]*\s*=\s*)[^\s,;]+/gu, "$1[REDACTED]")
+    .replace(/\b(api[_-]?key|token|secret|password|credential)(["']?\s*[:=]\s*["']?)[^"'\s,;]+/giu, "$1$2[REDACTED]")
+}
+
+function textFromMessagePart(part: unknown): string | undefined {
+  if (typeof part === "string") return part
+  if (!part || typeof part !== "object") return undefined
+  const record = part as Record<string, unknown>
+  return firstString(record.text, record.content, record.value)
+}
+
+function textFromMessageContent(content: unknown): string | undefined {
+  if (typeof content === "string") return content
+  if (Array.isArray(content)) {
+    return content.map(textFromMessagePart).filter(Boolean).join(" ")
+  }
+  return textFromMessagePart(content)
+}
+
+function resolvePrivateInputPreview(privateData?: DiagnosticPrivateData): string | undefined {
+  const messages = privateData?.modelContent?.inputMessages
+  if (!Array.isArray(messages)) return undefined
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (!message || typeof message !== "object") continue
+    const record = message as Record<string, unknown>
+    const role = typeof record.role === "string" ? record.role.toLowerCase() : ""
+    if (role && role !== "user") continue
+    const text = textFromMessageContent(record.content ?? record.text ?? record.message)
+    if (text?.trim()) return truncatePreview(redactPreview(text))
+  }
+
+  return undefined
 }
 
 function resolveInputPreview(evt: Record<string, unknown>, fallback?: string): string | undefined {
@@ -254,7 +327,7 @@ export function createAgentWeaveBridgeService() {
   return {
     id: "agentweave-bridge",
 
-    async start(ctx: { config: Record<string, unknown> }) {
+    async start(ctx: BridgeServiceContext) {
       const pluginEntry = (ctx.config as Record<string, unknown>)?.plugins as Record<string, unknown> | undefined
       const pluginConfig = (pluginEntry?.entries as Record<string, unknown>)?.["agentweave-bridge"] as Record<string, unknown> | undefined
       const fileConfig = pluginConfig?.config as Partial<BridgeConfig> ?? {}
@@ -277,7 +350,7 @@ export function createAgentWeaveBridgeService() {
       if (config.enabled === false) return
       initSdk(config)
 
-      unsubscribe = subscribeToDiagnosticEvents((evt: unknown) => {
+      unsubscribe = subscribeToDiagnosticEvents(ctx, (evt: unknown, privateData?: DiagnosticPrivateData) => {
         const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string; cwd?: string; repository?: string; raw_data?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string }; rawData?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string } }
         console.log("[agentweave-bridge] event:", e.type, "sessionKey:", e.sessionKey, "source:", e.source)
         try {
@@ -630,6 +703,11 @@ export function createAgentWeaveBridgeService() {
               if (!provider && !model) break
               if (provider) match.turn.span.setAttribute("prov.llm.provider", provider)
               if (model) match.turn.span.setAttribute("prov.llm.model", model)
+              const privateInputPreview = resolvePrivateInputPreview(privateData)
+              if (privateInputPreview) {
+                match.turn.span.setAttribute("prov.input.preview", privateInputPreview)
+                match.turn.span.setAttribute("langfuse.observation.input", privateInputPreview)
+              }
               break
             }
 
