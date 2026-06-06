@@ -207,7 +207,13 @@ def install(
             merged_config[key] = value
     merged_config["enabled"] = enabled
 
-    entries[BRIDGE_ENTRY_KEY] = {"path": str(target_dir), "config": merged_config}
+    # OpenClaw discovers user-plugins by directory name (entry key) and its
+    # config schema rejects a per-entry `path` field, so we never write one;
+    # strip any pre-existing path to repair an entry that has it.
+    existing_entry = existing if isinstance(existing, dict) else {}
+    new_entry = {k: v for k, v in existing_entry.items() if k != "path"}
+    new_entry["config"] = merged_config
+    entries[BRIDGE_ENTRY_KEY] = new_entry
 
     backup = _write_config_atomic(resolved_config, config)
     return InstallResult(
@@ -243,9 +249,16 @@ def uninstall(
     # If purging, validate the target BEFORE mutating the config so a dangerous
     # (hand-edited) path aborts the whole operation rather than removing the
     # config entry and then refusing to delete files.
+    # Entries no longer carry a `path` field (OpenClaw rejects it); fall back to
+    # the default convention.  Legacy entries that still have `path` are honoured
+    # so hand-edited configs with a custom location continue to work.
     purge_dir: Path | None = None
-    if purge and isinstance(entry, dict) and isinstance(entry.get("path"), str):
-        candidate = Path(entry["path"]).expanduser()
+    if purge and isinstance(entry, dict):
+        entry_path = entry.get("path")
+        if isinstance(entry_path, str):
+            candidate = Path(entry_path).expanduser()
+        else:
+            candidate = default_plugin_dir(resolved_config)
         if candidate.name != DEFAULT_PLUGIN_DIRNAME:
             raise OpenClawInstallError(
                 f"Refusing to purge {candidate}: expected the plugin directory "

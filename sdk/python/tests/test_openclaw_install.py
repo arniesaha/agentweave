@@ -110,7 +110,7 @@ def test_install_writes_files_and_entry(tmp_path):
 
     config = json.loads(config_path.read_text())
     entry = config["plugins"]["entries"]["agentweave-bridge"]
-    assert entry["path"] == str(plugin_dir)
+    assert "path" not in entry  # OpenClaw rejects per-entry path; discovery is by dir name
     assert entry["config"] == {
         "proxyUrl": "http://p:4000",
         "otlpEndpoint": "http://o:4318",
@@ -166,7 +166,7 @@ def test_install_preserves_user_config_unless_force(tmp_path):
     entry = json.loads(config_path.read_text())["plugins"]["entries"]["agentweave-bridge"]
     assert entry["config"]["agentId"] == "hand-set"
     assert entry["config"]["extra"] == "keep"
-    assert entry["path"] != "/old"
+    assert "path" not in entry  # pre-existing path is stripped
 
     oi.install({}, dist_dir=dist, config_path=str(config_path), agent_id="new", force=True)
     entry = json.loads(config_path.read_text())["plugins"]["entries"]["agentweave-bridge"]
