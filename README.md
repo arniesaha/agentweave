@@ -437,6 +437,12 @@ AgentWeave emits standard OTLP HTTP — works with any compatible backend:
 | Proxy benchmarks | [docs/benchmarks.md](./docs/benchmarks.md) |
 | Versioning policy | [docs/versioning.md](./docs/versioning.md) |
 
+Install the OpenClaw bridge on any host with one command:
+
+```bash
+agentweave openclaw install --proxy-url <proxy> --otlp-endpoint <otlp> --agent-id "$(hostname)"
+```
+
 ## Development
 
 ```bash

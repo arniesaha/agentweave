@@ -18,6 +18,8 @@ hooks_app = typer.Typer(name="hooks", help="Claude Code hooks integration.")
 app.add_typer(trace_app)
 app.add_typer(proxy_app)
 app.add_typer(hooks_app)
+openclaw_app = typer.Typer(name="openclaw", help="Install the AgentWeave bridge into OpenClaw.")
+app.add_typer(openclaw_app)
 
 console = Console()
 
@@ -582,6 +584,113 @@ def doctor(
 
     if has_failures(checks):
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# agentweave openclaw install / uninstall
+# ---------------------------------------------------------------------------
+
+
+@openclaw_app.command("install")
+def openclaw_install_cmd(
+    proxy_url: Optional[str] = typer.Option(None, "--proxy-url", help="AgentWeave proxy URL injected into sub-agent provider env vars."),
+    otlp_endpoint: Optional[str] = typer.Option(None, "--otlp-endpoint", help="OTLP HTTP endpoint for trace export."),
+    agent_id: Optional[str] = typer.Option(None, "--agent-id", help="Agent identifier stamped on this host's spans."),
+    project: Optional[str] = typer.Option(None, "--project", help="Project tag for dashboard filtering."),
+    openclaw_config: Optional[str] = typer.Option(None, "--openclaw-config", help="Path to openclaw.json (else OPENCLAW_CONFIG_PATH / ~/.openclaw/openclaw.json)."),
+    path: Optional[str] = typer.Option(None, "--path", help="Plugin install dir (default: <openclaw>/user-plugins/agentweave-bridge)."),
+    enabled: bool = typer.Option(True, "--enable/--no-enable", help="Set the plugin entry enabled flag."),
+    restart: bool = typer.Option(False, "--restart/--no-restart", help="Run `openclaw gateway restart` after install."),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing bridge config values."),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Install and register the AgentWeave bridge plugin in OpenClaw."""
+    import os
+    import subprocess
+
+    from agentweave.doctor import _check_openclaw_bridge
+    from agentweave.openclaw_install import OpenClawInstallError, install
+
+    try:
+        result = install(
+            os.environ,
+            config_path=openclaw_config,
+            plugin_dir=path,
+            proxy_url=proxy_url,
+            otlp_endpoint=otlp_endpoint,
+            agent_id=agent_id,
+            project=project,
+            enabled=enabled,
+            force=force,
+        )
+    except OpenClawInstallError as exc:
+        if as_json:
+            console.print_json(json.dumps({"ok": False, "error": str(exc)}))
+        else:
+            console.print(f"[red]Install failed:[/red] {exc}")
+        raise typer.Exit(code=1)
+
+    verify = _check_openclaw_bridge({**os.environ, "OPENCLAW_CONFIG_PATH": str(result.config_path)})
+
+    if as_json:
+        console.print_json(json.dumps({
+            "ok": True,
+            "config_path": str(result.config_path),
+            "plugin_dir": str(result.plugin_dir),
+            "created_entry": result.created_entry,
+            "backup_path": str(result.backup_path) if result.backup_path else None,
+            "doctor": verify.to_dict(),
+        }))
+    else:
+        verb = "Installed" if result.created_entry else "Updated"
+        console.print(f"[green]{verb}[/green] agentweave-bridge → {result.plugin_dir}")
+        backup_note = f" (backup: {result.backup_path})" if result.backup_path else ""
+        console.print(f"Config: {result.config_path}{backup_note}")
+        console.print(f"doctor openclaw.bridge: {_doctor_status_markup(verify.status)} — {verify.message}")
+        if restart:
+            console.print("Restarting OpenClaw gateway…")
+            try:
+                subprocess.run(["openclaw", "gateway", "restart"], check=False)
+            except FileNotFoundError:
+                console.print(
+                    "[yellow]Warning:[/yellow] `openclaw` was not found on PATH — "
+                    "restart manually: [bold]openclaw gateway restart[/bold]"
+                )
+        else:
+            console.print("Next: restart OpenClaw to load the plugin → [bold]openclaw gateway restart[/bold]")
+
+
+@openclaw_app.command("uninstall")
+def openclaw_uninstall_cmd(
+    openclaw_config: Optional[str] = typer.Option(None, "--openclaw-config", help="Path to openclaw.json."),
+    purge: bool = typer.Option(False, "--purge", help="Also delete the installed plugin files."),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Remove the AgentWeave bridge plugin entry from OpenClaw."""
+    import os
+
+    from agentweave.openclaw_install import OpenClawInstallError, uninstall
+
+    try:
+        result = uninstall(os.environ, config_path=openclaw_config, purge=purge)
+    except OpenClawInstallError as exc:
+        if as_json:
+            console.print_json(json.dumps({"ok": False, "error": str(exc)}))
+        else:
+            console.print(f"[red]Uninstall failed:[/red] {exc}")
+        raise typer.Exit(code=1)
+
+    if as_json:
+        console.print_json(json.dumps({
+            "ok": True,
+            "removed_entry": result.removed_entry,
+            "config_path": str(result.config_path),
+        }))
+    elif result.removed_entry:
+        console.print(f"[green]Removed[/green] agentweave-bridge from {result.config_path}")
+        console.print("Restart OpenClaw to apply → [bold]openclaw gateway restart[/bold]")
+    else:
+        console.print("No agentweave-bridge entry found; nothing to do.")
 
 
 # ---------------------------------------------------------------------------

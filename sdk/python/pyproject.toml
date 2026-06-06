@@ -57,6 +57,11 @@ Issues = "https://github.com/arniesaha/agentweave/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agentweave"]
+artifacts = [
+    "agentweave/openclaw_bridge_dist/index.js",
+    "agentweave/openclaw_bridge_dist/openclaw.plugin.json",
+    "agentweave/openclaw_bridge_dist/package.json",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
