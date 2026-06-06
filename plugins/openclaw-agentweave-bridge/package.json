@@ -6,7 +6,9 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "tsc"
+    "build": "tsc",
+    "build:bundle": "esbuild index.ts --bundle --platform=node --format=esm --target=node18 --external:openclaw --outfile=bundle/index.js",
+    "verify:bundle": "node scripts/verify-bundle.mjs"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -18,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
     "typescript": "^5.0.0",
     "vitest": "^3.0.0"
   },
