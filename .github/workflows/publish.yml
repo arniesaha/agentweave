@@ -46,6 +46,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build and stage OpenClaw bridge bundle
+        run: bash scripts/build-openclaw-bridge-dist.sh
+
       - name: Build package
         working-directory: sdk/python
         run: |
@@ -161,6 +169,13 @@ jobs:
         run: |
           bash -n scripts/npm-publish-preflight.sh
           bash scripts/npm-publish-preflight.sh
+
+      - name: Validate OpenClaw bridge bundle is self-contained
+        run: |
+          bash scripts/build-openclaw-bridge-dist.sh
+          test -f sdk/python/agentweave/openclaw_bridge_dist/index.js
+          test -f sdk/python/agentweave/openclaw_bridge_dist/openclaw.plugin.json
+          test -f sdk/python/agentweave/openclaw_bridge_dist/package.json
 
   # ── Docker ──────────────────────────────────────────────
   docker:
