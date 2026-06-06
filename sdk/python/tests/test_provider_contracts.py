@@ -14,6 +14,11 @@ from agentweave.proxy import (
     _detect_provider,
     _parse_anthropic_sse,
     _extract_anthropic_cache_tokens,
+    _anthropic_sse_text_delta,
+    _append_stream_response_text,
+    _google_stream_text_delta,
+    _openai_sse_text_delta,
+    _STREAM_RESPONSE_PREVIEW_BUFFER_CHARS,
     _parse_openai_sse,
     _parse_google_stream,
 )
@@ -146,6 +151,13 @@ class TestAnthropicStream:
         input_tokens, output_tokens, stop_reason = _parse_anthropic_sse(line, 0, 0, None)
         assert input_tokens == 1710  # 10 + 200 + 1500
 
+    def test_extracts_text_delta_for_stream_preview(self):
+        line = (
+            'data: {"type":"content_block_delta","delta":'
+            '{"type":"text_delta","text":"Hello Claude"}}'
+        )
+        assert _anthropic_sse_text_delta(line) == "Hello Claude"
+
 
 # ---------------------------------------------------------------------------
 # OpenAI non-streaming
@@ -212,6 +224,14 @@ class TestOpenAIStream:
         assert input_tokens == 5
         assert output_tokens == 3
 
+    def test_extracts_chat_completion_text_delta_for_stream_preview(self):
+        line = 'data: {"choices": [{"delta": {"content": "Hello OpenAI"}}]}'
+        assert _openai_sse_text_delta(line) == "Hello OpenAI"
+
+    def test_extracts_responses_api_text_delta_for_stream_preview(self):
+        line = 'data: {"type":"response.output_text.delta","delta":"Hello Responses"}'
+        assert _openai_sse_text_delta(line) == "Hello Responses"
+
 
 # ---------------------------------------------------------------------------
 # Google non-streaming
@@ -250,3 +270,16 @@ class TestGoogleNonStream:
         input_tokens, output_tokens, stop_reason = _parse_google_stream("", 7, 3, "STOP")
         assert input_tokens == 7
         assert output_tokens == 3
+
+    def test_extracts_text_parts_for_stream_preview(self):
+        line = 'data: {"candidates":[{"content":{"parts":[{"text":"Hello "},{"text":"Gemini"}]}}]}'
+        assert _google_stream_text_delta(line) == "Hello Gemini"
+
+
+class TestStreamingResponsePreviewBuffer:
+    def test_caps_accumulated_text(self):
+        full = _append_stream_response_text("", "x" * (_STREAM_RESPONSE_PREVIEW_BUFFER_CHARS + 10))
+        assert len(full) == _STREAM_RESPONSE_PREVIEW_BUFFER_CHARS
+
+        unchanged = _append_stream_response_text(full, "more")
+        assert unchanged == full
