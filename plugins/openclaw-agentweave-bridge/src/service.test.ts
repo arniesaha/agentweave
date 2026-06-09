@@ -544,4 +544,82 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "nix-v1")
     expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.agent.id", "X")
   })
+
+  // Gateway `agent` runs (Paperclip) emit session.state + model.call.* but NOT
+  // message.queued for the initial turn, so the root span must be started from
+  // session.state when upstream context is seeded onto the session.
+  it("starts an upstream-attributed root span from session.state on a main gateway-agent session", () => {
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:paperclip-conductor",
+      sessionId: "018f-openclaw-main-pc2",
+      state: "processing",
+      clientContext: {
+        schemaVersion: "agentweave.context.v1",
+        source: "paperclip",
+        sessionId: "0fafebf4-8c84-45e4-9583-8149f2bdd16e",
+        agentId: "Conductor",
+        agentType: "paperclip",
+        taskLabel: "AGE-10 dry run",
+        paperclip: { runId: "0fafebf4-8c84-45e4-9583-8149f2bdd16e", issueId: "AGE-10" },
+      },
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "paperclip")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "0fafebf4-8c84-45e4-9583-8149f2bdd16e")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "0fafebf4-8c84-45e4-9583-8149f2bdd16e")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:paperclip-conductor")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.run_id", "0fafebf4-8c84-45e4-9583-8149f2bdd16e")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.issue_id", "AGE-10")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.harness", "openclaw")
+  })
+
+  it("ends the session.state-created upstream root span on idle", () => {
+    const ctx = {
+      schemaVersion: "agentweave.context.v1",
+      source: "paperclip",
+      sessionId: "run-end",
+      agentId: "Conductor",
+      agentType: "paperclip",
+      paperclip: { runId: "run-end", issueId: "AGE-10" },
+    }
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:paperclip-conductor",
+      sessionId: "018f-openclaw-main-pc3",
+      state: "processing",
+      clientContext: ctx,
+      ts: Date.now(),
+      seq: 1,
+    })
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:paperclip-conductor",
+      sessionId: "018f-openclaw-main-pc3",
+      state: "idle",
+      clientContext: ctx,
+      ts: Date.now(),
+      seq: 2,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("outcome", "completed")
+    expect(mockSpan.end).toHaveBeenCalled()
+  })
+
+  it("does not start a root span from session.state for a main session without upstream context", () => {
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:main",
+      sessionId: "018f-openclaw-main-plain",
+      state: "processing",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    // No upstream context + not a subagent key → no span created from session.state.
+    expect(mockSpan.setAttribute).not.toHaveBeenCalled()
+  })
 })
