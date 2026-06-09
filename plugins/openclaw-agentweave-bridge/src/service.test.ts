@@ -445,4 +445,103 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("outcome", "interrupted")
     expect(mockSpan.end).toHaveBeenCalled()
   })
+
+  it("prefers upstream agentweave context for attribution on message.queued", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:paperclip-conductor",
+      sessionId: "018f-openclaw-main-pc",
+      channel: "cli",
+      source: "user",
+      clientContext: {
+        schemaVersion: "agentweave.context.v1",
+        source: "paperclip",
+        sessionId: "ea03270f-e02c-4afc-b893-862dcb51b05d",
+        agentId: "Conductor",
+        agentType: "paperclip",
+        taskLabel: "AGE-8: fix attribution",
+        parentSessionId: "paperclip-root",
+        paperclip: {
+          runId: "ea03270f-e02c-4afc-b893-862dcb51b05d",
+          issueId: "AGE-8",
+          taskId: "task-1",
+        },
+      },
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    // Upstream identity wins over the local nix-v1 fallback.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "paperclip")
+    // session.id becomes the upstream run/session id so spans are findable by it.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "ea03270f-e02c-4afc-b893-862dcb51b05d")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "ea03270f-e02c-4afc-b893-862dcb51b05d")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.task.label", "AGE-8: fix attribution")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.parent.session.id", "paperclip-root")
+    // Paperclip ids retained for filtering/debugging.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.source", "paperclip")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.run_id", "ea03270f-e02c-4afc-b893-862dcb51b05d")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.issue_id", "AGE-8")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.task_id", "task-1")
+    // The qualified OpenClaw route key is still preserved for correlation.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:paperclip-conductor")
+  })
+
+  it("maps partial upstream context without inventing missing fields", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:paperclip-partial",
+      sessionId: "018f-openclaw-main-partial",
+      channel: "cli",
+      source: "user",
+      clientContext: {
+        schemaVersion: "agentweave.context.v1",
+        source: "paperclip",
+        agentId: "Conductor",
+        agentType: "conductor",
+      },
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "conductor")
+    // No upstream sessionId provided → keep the OpenClaw canonical id.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "018f-openclaw-main-partial")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.parent.session.id", expect.anything())
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.upstream.run_id", expect.anything())
+  })
+
+  it("falls back to nix-v1 attribution when no upstream context is present", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:plain",
+      sessionId: "sess-plain",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "nix-v1")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "main")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.upstream.source", expect.anything())
+  })
+
+  it("ignores clientContext with an unrecognized schemaVersion", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:other",
+      sessionId: "sess-other",
+      channel: "cli",
+      source: "user",
+      clientContext: { schemaVersion: "something.else.v9", agentId: "X" },
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "nix-v1")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.agent.id", "X")
+  })
 })

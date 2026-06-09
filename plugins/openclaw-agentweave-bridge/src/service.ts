@@ -142,6 +142,61 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined
 }
 
+/** Schema discriminator for the upstream context the gateway forwards. */
+const AGENTWEAVE_CONTEXT_SCHEMA = "agentweave.context.v1"
+
+/** Upstream attribution forwarded by an orchestrator (e.g. Paperclip/Conductor). */
+interface UpstreamAgentContext {
+  source?: string
+  sessionId?: string
+  agentId?: string
+  agentType?: string
+  taskLabel?: string
+  parentSessionId?: string
+  paperclip?: { runId?: string; issueId?: string; taskId?: string }
+}
+
+/**
+ * Read upstream attribution from an opaque OpenClaw diagnostic `clientContext`
+ * bag. Returns undefined unless the bag declares the recognized schema, so
+ * unrelated client context never hijacks attribution. Parses defensively — the
+ * bag is plugin-trusted but still externally supplied data.
+ */
+function resolveUpstreamContext(clientContext: unknown): UpstreamAgentContext | undefined {
+  if (!clientContext || typeof clientContext !== "object") return undefined
+  const ctx = clientContext as Record<string, unknown>
+  if (ctx.schemaVersion !== AGENTWEAVE_CONTEXT_SCHEMA) return undefined
+  const paperclipRaw =
+    ctx.paperclip && typeof ctx.paperclip === "object"
+      ? (ctx.paperclip as Record<string, unknown>)
+      : undefined
+  const paperclip = paperclipRaw
+    ? {
+        runId: firstString(paperclipRaw.runId),
+        issueId: firstString(paperclipRaw.issueId),
+        taskId: firstString(paperclipRaw.taskId),
+      }
+    : undefined
+  return {
+    source: firstString(ctx.source),
+    sessionId: firstString(ctx.sessionId),
+    agentId: firstString(ctx.agentId),
+    agentType: firstString(ctx.agentType),
+    taskLabel: firstString(ctx.taskLabel),
+    parentSessionId: firstString(ctx.parentSessionId),
+    paperclip,
+  }
+}
+
+/** Stamp upstream run/issue ids onto a span for filtering/debugging in Tempo. */
+function applyUpstreamContextAttrs(span: Span, upstream: UpstreamAgentContext | undefined): void {
+  if (!upstream) return
+  if (upstream.source) span.setAttribute("prov.upstream.source", upstream.source)
+  if (upstream.paperclip?.runId) span.setAttribute("prov.upstream.run_id", upstream.paperclip.runId)
+  if (upstream.paperclip?.issueId) span.setAttribute("prov.upstream.issue_id", upstream.paperclip.issueId)
+  if (upstream.paperclip?.taskId) span.setAttribute("prov.upstream.task_id", upstream.paperclip.taskId)
+}
+
 function resolveOpenClawSessionId(sessionKey: string, eventSessionId: unknown): { sessionId: string; canonicalUuid?: string } {
   const candidate = firstString(eventSessionId)
   const keyLeaf = sessionKey.split(":").pop()
@@ -289,11 +344,19 @@ export function createAgentWeaveBridgeService() {
 
               const { agentId, agentType, parentSessionKey } = resolveAgentId(sessionKey, config, activeTurns, e.source)
 
+              // Prefer upstream attribution (e.g. Paperclip/Conductor) when the
+              // gateway forwarded an agentweave.context.v1 bag; otherwise keep
+              // the local nix-v1 fallback derived above.
+              const upstream = resolveUpstreamContext((e as { clientContext?: unknown }).clientContext)
+              const effectiveSessionId = upstream?.sessionId ?? sessionId
+              const effectiveAgentId = upstream?.agentId ?? agentId
+              const effectiveAgentType = upstream?.agentType ?? agentType
+
               const tracer = trace.getTracer("openclaw-agentweave-bridge")
               const span = tracer.startSpan("openclaw.turn")
-              span.setAttribute("session_id", sessionId)
-              span.setAttribute("session.id", sessionId)
-              span.setAttribute("prov.session.id", sessionId)
+              span.setAttribute("session_id", effectiveSessionId)
+              span.setAttribute("session.id", effectiveSessionId)
+              span.setAttribute("prov.session.id", effectiveSessionId)
               // Qualified route key stays available for attribution and
               // parent/session heuristics after session.id switches to the
               // OpenClaw UUID used by the native JSONL shipper.
@@ -302,20 +365,26 @@ export function createAgentWeaveBridgeService() {
                 span.setAttribute("prov.session.uuid", canonicalUuid)
               }
               span.setAttribute("prov.harness", "openclaw")
-              span.setAttribute("prov.agent.id", agentId)
-              span.setAttribute("prov.agent.type", agentType)
+              span.setAttribute("prov.agent.id", effectiveAgentId)
+              span.setAttribute("prov.agent.type", effectiveAgentType)
               span.setAttribute("prov.activity.type", "agent_turn")
               if (e.channel) span.setAttribute("channel", e.channel)
               if (config.project) span.setAttribute("prov.project", config.project)
-              const taskLabel = e.taskLabel?.trim()
+              applyUpstreamContextAttrs(span, upstream)
+              const taskLabel = upstream?.taskLabel ?? e.taskLabel?.trim()
               if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
               applyExecutionContextAttrs(span, e as Record<string, unknown>)
               const repository = firstString(e.repository, e.raw_data?.repository, e.rawData?.repository)
               const inputPreview = resolveInputPreview(e as Record<string, unknown>, taskLabel)
 
-              // Link sub-agent to parent session
+              // Link to parent session: an explicit upstream parent wins;
+              // otherwise fall back to the sub-agent concurrent-turn heuristic.
               let parentSid: string | undefined
-              if (agentType === "subagent") {
+              if (upstream?.parentSessionId) {
+                parentSid = upstream.parentSessionId
+                span.setAttribute("prov.parent.session.id", parentSid)
+                process.env.AGENTWEAVE_PARENT_SESSION_ID = parentSid
+              } else if (agentType === "subagent") {
                 // Use parentSessionKey from concurrent-turn heuristic, or find any active main turn
                 const parentKey = parentSessionKey
                   ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:"))
@@ -329,11 +398,11 @@ export function createAgentWeaveBridgeService() {
                 }
               }
               applyLangfuseAgentTurnAttrs(span, {
-                sessionId,
+                sessionId: effectiveSessionId,
                 sessionKey,
                 project: config.project,
-                agentId,
-                agentType,
+                agentId: effectiveAgentId,
+                agentType: effectiveAgentType,
                 parentSessionId: parentSid,
                 repository,
                 taskLabel,
@@ -362,9 +431,9 @@ export function createAgentWeaveBridgeService() {
                 process.env.AGENTWEAVE_PARENT_TRACE_ID = parentTraceIdHex
                 process.env.AGENTWEAVE_PARENT_SPAN_ID = parentSpanIdHex
               }
-              process.env.AGENTWEAVE_SESSION_ID = sessionId
-              process.env.AGENTWEAVE_AGENT_ID = agentId
-              process.env.AGENTWEAVE_AGENT_TYPE = agentType
+              process.env.AGENTWEAVE_SESSION_ID = effectiveSessionId
+              process.env.AGENTWEAVE_AGENT_ID = effectiveAgentId
+              process.env.AGENTWEAVE_AGENT_TYPE = effectiveAgentType
               const proxyBaseUrl = normalizeProxyBaseUrl(config.proxyUrl)
               if (proxyBaseUrl) {
                 process.env.ANTHROPIC_BASE_URL = proxyBaseUrl
@@ -373,7 +442,7 @@ export function createAgentWeaveBridgeService() {
               }
 
               activeTurns.set(sessionKey, { span, ctx: spanCtx })
-              console.log(`[agentweave-bridge] started root span for ${agentType} session:`, sessionId, "agent:", agentId)
+              console.log(`[agentweave-bridge] started root span for ${effectiveAgentType} session:`, effectiveSessionId, "agent:", effectiveAgentId)
 
               // Push session context into the proxy so its _session_context dict
               // includes session_id / agent_id / project / task_label for the
@@ -381,21 +450,27 @@ export function createAgentWeaveBridgeService() {
               // snapshots env only at startup — POST /session is the live path.
               const proxyBaseUrlForSession = normalizeProxyBaseUrl(config.proxyUrl)
               if (proxyBaseUrlForSession) {
-                const parentSid = agentType === "subagent"
-                  ? (parentSessionKey
-                    ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:")))
-                  : undefined
+                // Upstream parent wins; else the sub-agent concurrent-turn heuristic.
+                const proxyParentSid = upstream?.parentSessionId
+                  ?? (effectiveAgentType === "subagent"
+                    ? (parentSessionKey
+                      ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:")))
+                    : undefined)
                 const sessionPayload: Record<string, unknown> = {
-                  session_id: sessionId,
+                  session_id: effectiveSessionId,
                   session_key: sessionKey,
-                  agent_id: agentId,
-                  agent_type: agentType,
-                  force: agentType === "subagent",
+                  agent_id: effectiveAgentId,
+                  agent_type: effectiveAgentType,
+                  // Force the proxy to attribute LLM calls to upstream identity
+                  // (same as sub-agents) so codex/model spans match the run.
+                  force: Boolean(upstream) || effectiveAgentType === "subagent",
                 }
                 if (config.project) sessionPayload.project = config.project
-                if (parentSid) sessionPayload.parent_session_id = parentSid
+                if (proxyParentSid) sessionPayload.parent_session_id = proxyParentSid
                 if (taskLabel) sessionPayload.task_label = taskLabel
                 if (canonicalUuid) sessionPayload.session_uuid = canonicalUuid
+                if (upstream?.paperclip?.runId) sessionPayload.run_id = upstream.paperclip.runId
+                if (upstream?.paperclip?.issueId) sessionPayload.issue_id = upstream.paperclip.issueId
                 if (parentTraceIdHex && parentSpanIdHex) {
                   sessionPayload.parent_trace_id = parentTraceIdHex
                   sessionPayload.parent_span_id = parentSpanIdHex
@@ -407,7 +482,7 @@ export function createAgentWeaveBridgeService() {
                     "x-agentweave-session-key": sessionKey,
                   },
                   body: JSON.stringify(sessionPayload),
-                }).then(() => console.log(`[agentweave-bridge] proxy session set for ${agentType}: ${sessionId}`))
+                }).then(() => console.log(`[agentweave-bridge] proxy session set for ${effectiveAgentType}: ${effectiveSessionId}`))
                   .catch(err => console.warn(`[agentweave-bridge] proxy session set failed:`, err.message))
               }
               break
