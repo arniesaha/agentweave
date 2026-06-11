@@ -17,6 +17,7 @@ from agentweave.proxy import (
     _detect_provider,
     _is_chatgpt_mode_bearer,
     _maybe_reroute_openai_to_codex,
+    _extract_model,
     _extract_anthropic_cache_tokens,
     _inject_anthropic_key,
     _openai_response_text,
@@ -78,6 +79,28 @@ class TestDetectProvider:
 
     def test_anthropic_fallback(self):
         assert _detect_provider("v1/unknown/path") == "anthropic"
+
+
+class TestExtractModel:
+    def test_strips_prometheus_range_suffix_from_body_model(self):
+        assert (
+            _extract_model("anthropic", "v1/messages", {"model": "claude-opus-4-8[1m]"})
+            == "claude-opus-4-8"
+        )
+
+    def test_strips_prometheus_range_suffix_from_google_path_model(self):
+        assert (
+            _extract_model(
+                "google",
+                "v1beta/models/gemini-2.5-pro[5m]:generateContent",
+                {},
+            )
+            == "gemini-2.5-pro"
+        )
+
+    @pytest.mark.parametrize("model", ["", None, 42])
+    def test_falls_back_to_unknown_for_unusable_body_model(self, model):
+        assert _extract_model("openai", "v1/responses", {"model": model}) == "unknown"
 
 
 class TestChatGPTModeBearerDetection:
