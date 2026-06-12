@@ -102,6 +102,13 @@ class TestExtractModel:
     def test_falls_back_to_unknown_for_unusable_body_model(self, model):
         assert _extract_model("openai", "v1/responses", {"model": model}) == "unknown"
 
+    def test_does_not_mutate_request_body(self):
+        # Normalization is telemetry-only: the upstream request body must be
+        # forwarded unchanged, range selector and all.
+        body = {"model": "claude-opus-4-8[1m]"}
+        _extract_model("anthropic", "v1/messages", body)
+        assert body == {"model": "claude-opus-4-8[1m]"}
+
 
 class TestChatGPTModeBearerDetection:
     """ChatGPT-mode JWTs (eyJ…) versus OpenAI sk-* keys versus empty/anthropic."""
