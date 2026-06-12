@@ -374,11 +374,30 @@ def _upstream_url(provider: str, path: str, query_string: str) -> str:
     return url
 
 
+_MODEL_RANGE_SUFFIX_RE = re.compile(r"\[[0-9]+[smhd]\]$")
+
+
+def _normalize_model_label(model: Any) -> str:
+    """Return the model label used for telemetry.
+
+    Some callers have leaked Prometheus range selectors into the request model
+    string, e.g. ``claude-opus-4-8[1m]``. Keep the upstream request body intact,
+    but normalize the telemetry label so span names and prov.llm.model stay
+    stable for dashboards and quality gates.
+    """
+    if not isinstance(model, str):
+        return "unknown"
+    model = model.strip()
+    if not model:
+        return "unknown"
+    return _MODEL_RANGE_SUFFIX_RE.sub("", model)
+
+
 def _extract_model(provider: str, path: str, body: dict) -> str:
     if provider == "google":
         m = _GEMINI_MODEL_RE.search(path)
-        return m.group(1) if m else "gemini"
-    return body.get("model", "unknown")
+        return _normalize_model_label(m.group(1) if m else "gemini")
+    return _normalize_model_label(body.get("model", "unknown"))
 
 
 def _is_streaming(provider: str, path: str, body: dict) -> bool:
