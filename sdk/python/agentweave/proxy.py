@@ -994,8 +994,8 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     )
     _is_subagent_env = os.getenv("AGENTWEAVE_AGENT_TYPE", "").lower() == "subagent"
     # Request carries a session_key matching a stored forced context — caller
-    # explicitly opted in, so this wins over per-request headers.
-    _force_per_key = _forced_ctx is not None
+    # explicitly opted in, so this wins over per-request headers. When there is
+    # no match, _active_ctx is empty and contributes nothing to resolution.
     _active_ctx: dict[str, str] = _forced_ctx if _forced_ctx is not None else {}
 
     # The literal "unattributed" sentinel is treated as a no-op so it can't
@@ -1005,7 +1005,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         return v if v and v != "unattributed" else None
 
     _agent_id_resolved = (
-        (_real(_active_ctx.get("prov.agent.id")) if _force_per_key else None)
+        _real(_active_ctx.get("prov.agent.id"))
         or (_real(os.getenv("AGENTWEAVE_AGENT_ID")) if _is_subagent_env else None)
         or _real(request.headers.get("x-agentweave-agent-id"))
         or _real(os.getenv("AGENTWEAVE_AGENT_ID"))
@@ -1018,7 +1018,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     )
 
     session_id = (
-        (_active_ctx.get("prov.session.id") if _force_per_key else None)
+        _active_ctx.get("prov.session.id")
         or (os.getenv("AGENTWEAVE_SESSION_ID") if _is_subagent_env else None)
         or request.headers.get("x-agentweave-session-id")
         or os.getenv("AGENTWEAVE_SESSION_ID")
@@ -1027,7 +1027,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     # Use AGENTWEAVE_PROJECT env var or X-AgentWeave-Project header.
     project = (
         request.headers.get("x-agentweave-project")
-        or (_active_ctx.get("prov.project") if _force_per_key else None)
+        or _active_ctx.get("prov.project")
         or os.getenv("AGENTWEAVE_PROJECT")
         or None
     )
@@ -1038,7 +1038,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         f"unattributed:{project}" if project else "unattributed"
     )
     task_label: str | None = (
-        (_active_ctx.get("prov.task.label") if _force_per_key else None)
+        _active_ctx.get("prov.task.label")
         or request.headers.get("x-agentweave-task-label")
         or os.getenv("AGENTWEAVE_TASK_LABEL")
         or None
@@ -1074,14 +1074,14 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
 
     # Sub-agent attribution headers (issue #15)
     parent_session_id: str | None = (
-        (_active_ctx.get("prov.parent.session.id") if _force_per_key else None)
+        _active_ctx.get("prov.parent.session.id")
         or (os.getenv("AGENTWEAVE_PARENT_SESSION_ID") if _is_subagent_env else None)
         or request.headers.get("x-agentweave-parent-session-id")
         or os.getenv("AGENTWEAVE_PARENT_SESSION_ID")
         or None
     )
     agent_type: str | None = (
-        (_active_ctx.get("prov.agent.type") if _force_per_key else None)
+        _active_ctx.get("prov.agent.type")
         or (os.getenv("AGENTWEAVE_AGENT_TYPE") if _is_subagent_env else None)
         or request.headers.get("x-agentweave-agent-type")
         or os.getenv("AGENTWEAVE_AGENT_TYPE")
