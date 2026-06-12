@@ -61,7 +61,7 @@ import time
 from typing import Any, AsyncIterator
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from opentelemetry.trace import Link, NonRecordingSpan, SpanContext, StatusCode, TraceFlags
 
@@ -429,13 +429,8 @@ async def provider_base_health() -> dict:
     return await health()
 
 
-# When True, _session_context overrides request headers (used during sub-agent windows).
-# Kept for backward compatibility with callers that don't supply a session_key.
-_session_context_force: bool = False
-
 # Per-session-key forced context map (issue #149).
-# Replaces the single global _session_context_force for concurrent-safe attribution:
-# each sub-agent window stores its override under a unique key so concurrent
+# Each sub-agent window stores its override under a unique key so concurrent
 # requests from other channels (e.g. Telegram) are not misattributed.
 # Key: session_key string, Value: dict of forced session context attrs
 # LRU-bounded: orphaned entries (e.g. from bridge plugin crashes mid sub-agent)
@@ -452,17 +447,16 @@ def _set_forced_context(session_key: str, ctx: dict[str, str]) -> None:
 
 @app.post("/session", include_in_schema=True)
 async def set_session_context(body: dict):
-    """Override the global session context for all subsequent spans.
+    """Set global session context or per-key forced session context.
 
-    When ``force: true`` is included, the session context takes precedence
-    over per-request headers.  This allows the bridge plugin to temporarily
-    switch attribution during a sub-agent window.
+    When ``force: true`` is included, ``session_key`` is required.  The keyed
+    session context takes precedence over per-request headers for requests that
+    carry the matching ``X-AgentWeave-Session-Key`` header.  This allows the
+    bridge plugin to temporarily switch attribution during a sub-agent window.
 
-    When ``session_key`` is also provided, the override is stored per-key in
-    ``_forced_session_contexts`` so concurrent requests on different channels
-    are not misattributed (issue #149).  Requests that carry the matching
-    ``X-AgentWeave-Session-Key`` header will use this override; all other
-    requests continue to see the global ``_session_context``.
+    The override is stored per-key in ``_forced_session_contexts`` so
+    concurrent requests on different channels are not misattributed
+    (issue #149).
 
     To clear a per-key override, POST with ``force: false`` and the same
     ``session_key``.
@@ -472,7 +466,7 @@ async def set_session_context(body: dict):
     build OTel links[] on llm_call spans (issue #178).  Sending either field
     as an explicit empty string clears the entry for that session.
     """
-    global _session_context, _session_context_force, _forced_session_contexts
+    global _session_context, _forced_session_contexts
     ctx = {k: v for k, v in {
         "prov.session.id": body.get("session_id", ""),
         "prov.parent.session.id": body.get("parent_session_id", ""),
@@ -481,6 +475,15 @@ async def set_session_context(body: dict):
         "prov.agent.id": body.get("agent_id", ""),
         "prov.project": body.get("project", ""),
     }.items() if v}
+
+    force = bool(body.get("force", False))
+    session_key = body.get("session_key", "")
+
+    if force and not session_key:
+        raise HTTPException(
+            status_code=400,
+            detail="force:true requires session_key",
+        )
 
     # Issue #178: bridge pushes the active agent_turn's trace/span IDs so the
     # proxy can build links[] on llm_call spans.  Keyed by session_id so
@@ -495,9 +498,6 @@ async def set_session_context(body: dict):
             # Explicit empty string in either field clears the entry.
             _clear_session_parent_span(_sid_for_parent)
 
-    force = bool(body.get("force", False))
-    session_key = body.get("session_key", "")
-
     if session_key:
         if force:
             # Store per-key forced context — isolates concurrent request streams
@@ -508,18 +508,9 @@ async def set_session_context(body: dict):
         # Update global context so GET /session reflects the latest state;
         # but do NOT set the global force flag — that would affect all requests.
         _session_context = ctx
-        _session_context_force = False
     else:
-        # Legacy path (no session_key): update global context and force flag.
-        # Not concurrent-safe — callers should migrate to session_key.
-        if force:
-            logger.warning(
-                "deprecated legacy global force session context used: "
-                "POST /session with force=true and no session_key; "
-                "migrate caller to session_key before this path is removed"
-            )
+        # Non-forced global context update for GET /session and default attrs.
         _session_context = ctx
-        _session_context_force = force
 
     return {"ok": True, "context": ctx, "force": force, "session_key": session_key}
 
@@ -1014,8 +1005,6 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     # Resolve the active forced session context for this request (issue #149).
     # Per-key lookup (concurrent-safe): if the request carries X-AgentWeave-Session-Key
     # and a matching entry exists in _forced_session_contexts, use that entry.
-    # Fall back to the legacy global _session_context_force flag for callers
-    # that haven't migrated to session_key yet.
     _incoming_session_key = request.headers.get("x-agentweave-session-key", "")
     _forced_ctx: dict[str, str] | None = (
         _forced_session_contexts.get(_incoming_session_key)
@@ -1023,19 +1012,10 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         else None
     )
     _is_subagent_env = os.getenv("AGENTWEAVE_AGENT_TYPE", "").lower() == "subagent"
-    # Issue #189: split per-key force from legacy global force.
-    # _force_per_key: request carries a session_key matching a stored forced
-    #   context — caller explicitly opted in, so this wins over per-request
-    #   headers (preserves bridge-driven subagent attribution).
-    # _force_legacy: legacy global _session_context_force flag is set, but the
-    #   request did NOT match a per-key context. Treat as a low-priority
-    #   FALLBACK only: explicit per-request headers must win, otherwise
-    #   unrelated callers get hijacked by whichever subagent the bridge
-    #   most recently forced (the original #189 symptom).
-    _force_per_key = _forced_ctx is not None
-    _force_legacy = _session_context_force and not _force_per_key
-    # _active_ctx is the context dict to read forced attributes from.
-    _active_ctx: dict[str, str] = _forced_ctx if _force_per_key else _session_context
+    # Request carries a session_key matching a stored forced context — caller
+    # explicitly opted in, so this wins over per-request headers. When there is
+    # no match, _active_ctx is empty and contributes nothing to resolution.
+    _active_ctx: dict[str, str] = _forced_ctx if _forced_ctx is not None else {}
 
     # The literal "unattributed" sentinel is treated as a no-op so it can't
     # short-circuit the project-qualified fallback below — defends against
@@ -1044,10 +1024,9 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         return v if v and v != "unattributed" else None
 
     _agent_id_resolved = (
-        (_real(_active_ctx.get("prov.agent.id")) if _force_per_key else None)
+        _real(_active_ctx.get("prov.agent.id"))
         or (_real(os.getenv("AGENTWEAVE_AGENT_ID")) if _is_subagent_env else None)
         or _real(request.headers.get("x-agentweave-agent-id"))
-        or (_real(_active_ctx.get("prov.agent.id")) if _force_legacy else None)
         or _real(os.getenv("AGENTWEAVE_AGENT_ID"))
         or _real(_config_value("agent_id"))
     )
@@ -1058,19 +1037,17 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     )
 
     session_id = (
-        (_active_ctx.get("prov.session.id") if _force_per_key else None)
+        _active_ctx.get("prov.session.id")
         or (os.getenv("AGENTWEAVE_SESSION_ID") if _is_subagent_env else None)
         or request.headers.get("x-agentweave-session-id")
-        or (_active_ctx.get("prov.session.id") if _force_legacy else None)
         or os.getenv("AGENTWEAVE_SESSION_ID")
     )
     # Only use explicitly set project — do NOT infer from agent_id prefix.
     # Use AGENTWEAVE_PROJECT env var or X-AgentWeave-Project header.
     project = (
         request.headers.get("x-agentweave-project")
-        or (_active_ctx.get("prov.project") if _force_per_key else None)
+        or _active_ctx.get("prov.project")
         or os.getenv("AGENTWEAVE_PROJECT")
-        or (_active_ctx.get("prov.project") if _force_legacy else None)
         or None
     )
     # When attribution is missing but we still know the project, qualify the
@@ -1080,9 +1057,8 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         f"unattributed:{project}" if project else "unattributed"
     )
     task_label: str | None = (
-        (_active_ctx.get("prov.task.label") if _force_per_key else None)
+        _active_ctx.get("prov.task.label")
         or request.headers.get("x-agentweave-task-label")
-        or (_active_ctx.get("prov.task.label") if _force_legacy else None)
         or os.getenv("AGENTWEAVE_TASK_LABEL")
         or None
     )
@@ -1117,18 +1093,16 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
 
     # Sub-agent attribution headers (issue #15)
     parent_session_id: str | None = (
-        (_active_ctx.get("prov.parent.session.id") if _force_per_key else None)
+        _active_ctx.get("prov.parent.session.id")
         or (os.getenv("AGENTWEAVE_PARENT_SESSION_ID") if _is_subagent_env else None)
         or request.headers.get("x-agentweave-parent-session-id")
-        or (_active_ctx.get("prov.parent.session.id") if _force_legacy else None)
         or os.getenv("AGENTWEAVE_PARENT_SESSION_ID")
         or None
     )
     agent_type: str | None = (
-        (_active_ctx.get("prov.agent.type") if _force_per_key else None)
+        _active_ctx.get("prov.agent.type")
         or (os.getenv("AGENTWEAVE_AGENT_TYPE") if _is_subagent_env else None)
         or request.headers.get("x-agentweave-agent-type")
-        or (_active_ctx.get("prov.agent.type") if _force_legacy else None)
         or os.getenv("AGENTWEAVE_AGENT_TYPE")
         or None
     )

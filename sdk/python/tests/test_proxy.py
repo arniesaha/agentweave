@@ -1160,7 +1160,6 @@ class TestForcedSessionContextRace:
         from fastapi.testclient import TestClient
         from agentweave.proxy import app
         monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
-        monkeypatch.setattr(proxy_module, "_session_context_force", False)
 
         client = TestClient(app)
         resp = client.post("/session", json={
@@ -1179,8 +1178,6 @@ class TestForcedSessionContextRace:
             "prov.session.id": "subagent-sess-001",
             "prov.parent.session.id": "parent-001",
         }
-        # Global force flag must NOT be set — that's the whole fix
-        assert proxy_module._session_context_force is False
 
     def test_session_key_clear_removes_from_map(self, monkeypatch):
         """POST /session with force:false + session_key removes the key from the map."""
@@ -1209,7 +1206,6 @@ class TestForcedSessionContextRace:
         monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict({
             "key-subagent": {"prov.session.id": "forced-sess", "prov.agent.id": "forced-agent"},
         }))
-        monkeypatch.setattr(proxy_module, "_session_context_force", False)
         monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
 
@@ -1267,7 +1263,6 @@ class TestForcedSessionContextRace:
         monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict({
             "key-subagent": {"prov.session.id": "forced-sess", "prov.agent.id": "forced-agent"},
         }))
-        monkeypatch.setattr(proxy_module, "_session_context_force", False)
         monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
 
@@ -1327,20 +1322,14 @@ class TestForcedSessionContextRace:
         """x-agentweave-task-label must not be forwarded upstream."""
         assert "x-agentweave-task-label" in _SKIP_HEADERS_ALWAYS
 
-    def test_legacy_global_force_does_not_override_explicit_header(self, monkeypatch):
-        """Issue #189: when ONLY the legacy global force flag is set (no per-key
-        match) and the request carries an explicit X-AgentWeave-Agent-Id, the
-        explicit header MUST win — otherwise unrelated callers (e.g. a Claude
-        Code Mac dryrun) get hijacked into whatever subagent the bridge most
-        recently forced (e.g. nix-v1).
-        """
+    def test_global_session_context_does_not_override_explicit_header(self, monkeypatch):
+        """Global session context is never a forced override without a matching key."""
         from unittest.mock import AsyncMock, MagicMock, patch
         import httpx
         from fastapi.testclient import TestClient
         from agentweave.proxy import app
         from agentweave.config import AgentWeaveConfig
 
-        # Legacy global force is on, with a global ctx pinning agent_id=nix-v1
         monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
         monkeypatch.setattr(proxy_module, "_session_context", {
             "prov.session.id": "claude-code-main",
@@ -1350,9 +1339,11 @@ class TestForcedSessionContextRace:
             "prov.parent.session.id": "nix-main",
             "prov.agent.type": "subagent",
         })
-        monkeypatch.setattr(proxy_module, "_session_context_force", True)
         monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        monkeypatch.delenv("AGENTWEAVE_AGENT_ID", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_SESSION_ID", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_AGENT_TYPE", raising=False)
 
         captured: list[dict] = []
         original_set_request_attrs = proxy_module._set_request_attrs
@@ -1406,7 +1397,7 @@ class TestForcedSessionContextRace:
         assert len(captured) >= 1
         c = captured[0]
         assert c["agent_id"] == "claude-code-mac-subagent", (
-            f"Explicit header must beat legacy global force, got: {c['agent_id']!r}"
+            f"Explicit header must beat global session context, got: {c['agent_id']!r}"
         )
         assert c["session_id"] == "claude-code-nexus-dryrun-20260510"
         assert c["task_label"] == "nexus dryrun"
@@ -1414,11 +1405,8 @@ class TestForcedSessionContextRace:
         assert c["parent_session_id"] == "nix-main"
         assert c["agent_type"] == "subagent"
 
-    def test_legacy_global_force_fills_attrs_when_header_missing(self, monkeypatch):
-        """Issue #189: legacy global force still acts as a fallback for
-        attributes the request does NOT supply — preserves backward compat
-        for the few legacy callers that have not migrated to session_key.
-        """
+    def test_global_session_context_does_not_fill_attrs_when_header_missing(self, monkeypatch):
+        """Global session context is not used as a request attribution fallback."""
         from unittest.mock import AsyncMock, MagicMock, patch
         import httpx
         from fastapi.testclient import TestClient
@@ -1430,9 +1418,11 @@ class TestForcedSessionContextRace:
             "prov.session.id": "legacy-fallback-sess",
             "prov.agent.id": "legacy-fallback-agent",
         })
-        monkeypatch.setattr(proxy_module, "_session_context_force", True)
         monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        monkeypatch.delenv("AGENTWEAVE_AGENT_ID", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_SESSION_ID", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_AGENT_TYPE", raising=False)
 
         captured: list[dict] = []
         original_set_request_attrs = proxy_module._set_request_attrs
@@ -1463,7 +1453,7 @@ class TestForcedSessionContextRace:
         with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm), \
              patch.object(proxy_module, "_set_request_attrs", side_effect=_capturing):
             client = TestClient(app)
-            # No attribution headers — fallback chain should fill from legacy ctx
+            # No attribution headers — request resolution should not fill from global ctx
             client.post(
                 "/v1/messages",
                 json={"model": "claude-3-haiku-20240307", "max_tokens": 1,
@@ -1472,30 +1462,26 @@ class TestForcedSessionContextRace:
             )
 
         assert len(captured) >= 1
-        assert captured[0]["agent_id"] == "legacy-fallback-agent"
-        assert captured[0]["session_id"] == "legacy-fallback-sess"
+        assert captured[0]["agent_id"] == "unattributed"
+        assert captured[0]["session_id"] is None
 
-    def test_legacy_force_without_key_warns_and_still_works(self, monkeypatch, caplog):
-        """Backward compat: warn on legacy force while keeping the global flag path."""
+    def test_force_without_key_is_rejected(self, monkeypatch):
+        """force:true without session_key is no longer accepted."""
         from fastapi.testclient import TestClient
         from agentweave.proxy import app
         monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
-        monkeypatch.setattr(proxy_module, "_session_context_force", False)
+        monkeypatch.setattr(proxy_module, "_session_context", {})
 
         client = TestClient(app)
-        with caplog.at_level(logging.WARNING, logger="agentweave.proxy"):
-            resp = client.post("/session", json={
-                "session_id": "legacy-sess",
-                "force": True,
-                # no session_key
-            })
-        assert resp.status_code == 200
-        warning_messages = [record.message for record in caplog.records]
-        assert any("legacy global force" in msg for msg in warning_messages)
-        assert any("session_key" in msg for msg in warning_messages)
-        # Legacy path: global flag should be set
-        assert proxy_module._session_context_force is True
+        resp = client.post("/session", json={
+            "session_id": "legacy-sess",
+            "force": True,
+            # no session_key
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "force:true requires session_key"
         assert len(proxy_module._forced_session_contexts) == 0
+        assert proxy_module._session_context == {}
 
     def test_forced_contexts_map_is_lru_bounded(self, monkeypatch):
         """Orphaned entries (bridge plugin crashes mid sub-agent) must not leak.
@@ -1918,7 +1904,6 @@ class TestAttributeResolution:
 
         monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
         monkeypatch.setattr(proxy_module, "_session_context", {})
-        monkeypatch.setattr(proxy_module, "_session_context_force", False)
         monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
         if agent_id_env is not None:

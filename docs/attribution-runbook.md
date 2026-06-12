@@ -19,16 +19,12 @@ order — first non-empty value wins:
    `X-AgentWeave-Session-Id`, `X-AgentWeave-Task-Label`,
    `X-AgentWeave-Parent-Session-Id`, `X-AgentWeave-Agent-Type`,
    `X-AgentWeave-Project`.
-4. **Legacy global forced context** — if `_session_context_force` is set
-   globally (legacy callers that POST `/session` without `session_key`),
-   the stored value is used as a low-priority fallback. This intentionally
-   ranks BELOW explicit headers so unrelated callers are not hijacked
-   (issue #189). This path is deprecated: `force:true` without
-   `session_key` logs a "legacy global force" warning so callers can be
-   found before the fallback is removed.
-5. **Proxy process env** — `AGENTWEAVE_<ATTR>` without subagent mode.
-6. **Static config** — `agentweave.yaml`.
-7. **Sentinel** — `"unattributed"` for `agent_id`; `None` for the rest.
+4. **Proxy process env** — `AGENTWEAVE_<ATTR>` without subagent mode.
+5. **Static config** — `agentweave.yaml`.
+6. **Sentinel** — `"unattributed"` for `agent_id`; `None` for the rest.
+
+`POST /session` with `force:true` must include `session_key`; unkeyed forced
+session context is rejected with HTTP 400.
 
 ## `unattributed` vs `unknown` on the dashboard
 
