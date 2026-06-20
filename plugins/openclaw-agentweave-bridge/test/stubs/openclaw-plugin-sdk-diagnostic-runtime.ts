@@ -30,3 +30,7 @@ export function onDiagnosticEvent(listener: (evt: unknown) => void): () => void 
     state.listeners.delete(listener)
   }
 }
+
+export function onModelDiagnosticEvent(listener: (evt: unknown) => void): () => void {
+  return onDiagnosticEvent(listener)
+}

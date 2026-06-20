@@ -75,6 +75,28 @@ function makeCtx(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function makeCtxWithInternalDiagnostics(overrides: Record<string, unknown> = {}) {
+  const listeners = new Set<(evt: unknown, metadata: unknown, privateData: object) => void>()
+  return {
+    ctx: {
+      ...makeCtx(overrides),
+      internalDiagnostics: {
+        onEvent(listener: (evt: unknown, metadata: unknown, privateData: object) => void) {
+          listeners.add(listener)
+          return () => {
+            listeners.delete(listener)
+          }
+        },
+      },
+    },
+    fireInternal(evt: object, privateData: unknown = {}) {
+      for (const listener of listeners) {
+        listener(evt, { trusted: true }, privateData as object)
+      }
+    },
+  }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 describe("createAgentWeaveBridgeService", () => {
   let service: ReturnType<typeof createAgentWeaveBridgeService>
@@ -147,6 +169,98 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "018f-openclaw-preview-0001")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.observation.input", "summarize the deployment status")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.input.preview", "summarize the deployment status")
+  })
+
+  it("sets Langfuse input from private model-call content without public lifecycle previews", async () => {
+    await service.stop()
+    const harness = makeCtxWithInternalDiagnostics()
+    service = createAgentWeaveBridgeService()
+    await service.start(harness.ctx)
+
+    harness.fireInternal({
+      type: "message.queued",
+      sessionKey: "agent:main:private-input-session",
+      sessionId: "018f-openclaw-private-input-0001",
+      channel: "telegram",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    harness.fireInternal(
+      {
+        type: "model.call.completed",
+        sessionKey: "agent:main:private-input-session",
+        sessionId: "018f-openclaw-private-input-0001",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        durationMs: 12,
+        ts: Date.now(),
+        seq: 2,
+      },
+      {
+        modelContent: {
+          inputMessages: [
+            { role: "system", content: "system instructions stay out" },
+            {
+              role: "user",
+              content: "Please summarize deployment status Authorization: Bearer sk-live-secret-token",
+            },
+          ],
+        },
+      },
+    )
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith(
+      "langfuse.observation.input",
+      "Please summarize deployment status Authorization: Bearer [REDACTED]",
+    )
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith(
+      "prov.input.preview",
+      "Please summarize deployment status Authorization: Bearer [REDACTED]",
+    )
+  })
+
+  it("does not capture private input preview when captureInputPreviews is false", async () => {
+    await service.stop()
+    const harness = makeCtxWithInternalDiagnostics({ captureInputPreviews: false })
+    service = createAgentWeaveBridgeService()
+    await service.start(harness.ctx)
+
+    harness.fireInternal({
+      type: "message.queued",
+      sessionKey: "agent:main:no-capture-session",
+      sessionId: "018f-openclaw-no-capture-0001",
+      channel: "telegram",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    harness.fireInternal(
+      {
+        type: "model.call.completed",
+        sessionKey: "agent:main:no-capture-session",
+        sessionId: "018f-openclaw-no-capture-0001",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        durationMs: 12,
+        ts: Date.now(),
+        seq: 2,
+      },
+      {
+        modelContent: {
+          inputMessages: [
+            { role: "system", content: "system instructions stay out" },
+            {
+              role: "user",
+              content: "Please summarize deployment status",
+            },
+          ],
+        },
+      },
+    )
+
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("langfuse.observation.input", expect.anything())
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.input.preview", expect.anything())
   })
 
   it("uses task labels as a safe input fallback for lifecycle spans", () => {
