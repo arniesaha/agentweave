@@ -56,6 +56,12 @@ interface HarnessState {
 // globalThis.__openclawDiagnosticEventsState. Fire events through that state.
 // `privateData` (e.g. `{ clientContext }`) is delivered only for trusted
 // lifecycle events, matching onTrustedDiagnosticEvent.
+//
+// Production (`dispatchDiagnosticEvent`) delivers session.state/message.queued
+// to BOTH the public and trusted listener sets — the plugin's public listener
+// must skip them to avoid creating the root span twice, and the trusted
+// listener processes them with privateData. Mirror that dual-delivery so the
+// public-listener skip (the double-span guard) is actually exercised.
 function fire(evt: object, privateData?: unknown) {
   const g = globalThis as Record<string, unknown>
   const state = g.__openclawDiagnosticEventsState as HarnessState | undefined
@@ -64,6 +70,9 @@ function fire(evt: object, privateData?: unknown) {
   }
   const type = (evt as { type?: string }).type
   if (type && TRUSTED_LIFECYCLE_TYPES.has(type)) {
+    for (const listener of state.listeners) {
+      listener(evt)
+    }
     for (const listener of state.trustedListeners) {
       listener(evt, privateData)
     }
@@ -647,6 +656,39 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.end).toHaveBeenCalled()
   })
 
+  it("creates the upstream root span exactly once under dual public+trusted delivery", () => {
+    // Production delivers session.state to both listener sets; the public
+    // listener must skip it so only the trusted delivery starts the root span.
+    fire(
+      {
+        type: "session.state",
+        sessionKey: "agent:main:paperclip-conductor",
+        sessionId: "018f-openclaw-main-dual",
+        state: "processing",
+        ts: Date.now(),
+        seq: 1,
+      },
+      {
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          source: "paperclip",
+          sessionId: "dual-run",
+          agentId: "Conductor",
+          agentType: "paperclip",
+          paperclip: { runId: "dual-run", issueId: "AGE-11" },
+        },
+      },
+    )
+
+    // If the public listener failed to skip the type, the span (and every
+    // attribute on it) would be created twice. Pin the count to exactly one.
+    const harnessCalls = mockSpan.setAttribute.mock.calls.filter(
+      (call: unknown[]) => call[0] === "prov.harness" && call[1] === "openclaw",
+    )
+    expect(harnessCalls).toHaveLength(1)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
+  })
+
   it("does not start a root span from session.state for a main session without upstream context", () => {
     fire({
       type: "session.state",
@@ -659,5 +701,75 @@ describe("createAgentWeaveBridgeService", () => {
 
     // No upstream context + not a subagent key → no span created from session.state.
     expect(mockSpan.setAttribute).not.toHaveBeenCalled()
+  })
+})
+
+// Older OpenClaw runtimes forwarded `clientContext` on the public event payload
+// and never exported `onTrustedDiagnosticEvent`. The dispatcher must still honor
+// that attribution (falling back from privateData to the payload) rather than
+// silently downgrading to nix-v1. Uses a module mock to drop the trusted channel.
+describe("createAgentWeaveBridgeService — legacy runtime without trusted channel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    delete (globalThis as Record<string, unknown>).__legacyDiagnosticListeners
+    delete process.env.AGENTWEAVE_TRACEPARENT
+    delete process.env.AGENTWEAVE_SESSION_ID
+    delete process.env.AGENTWEAVE_PARENT_SESSION_ID
+  })
+
+  afterEach(() => {
+    vi.doUnmock("openclaw/plugin-sdk/diagnostic-runtime")
+    vi.resetModules()
+  })
+
+  it("reads clientContext off the public event payload when onTrustedDiagnosticEvent is absent", async () => {
+    vi.resetModules()
+    // Legacy runtime: only the public channel exists — no onTrustedDiagnosticEvent
+    // and no onModelDiagnosticEvent — and clientContext rides the event payload.
+    vi.doMock("openclaw/plugin-sdk/diagnostic-runtime", () => ({
+      onDiagnosticEvent(listener: (evt: unknown) => void) {
+        const g = globalThis as Record<string, unknown>
+        const set = (g.__legacyDiagnosticListeners as Set<(evt: unknown) => void>) ?? new Set()
+        g.__legacyDiagnosticListeners = set
+        set.add(listener)
+        return () => set.delete(listener)
+      },
+      // Legacy runtime exports neither — declared undefined so `typeof` checks
+      // resolve to "undefined" instead of vitest throwing on a missing export.
+      onModelDiagnosticEvent: undefined,
+      onTrustedDiagnosticEvent: undefined,
+    }))
+
+    const { createAgentWeaveBridgeService: makeLegacyService } = await import("./service.js")
+    const legacy = makeLegacyService()
+    await legacy.start(makeCtx())
+
+    const g = globalThis as Record<string, unknown>
+    const listeners = g.__legacyDiagnosticListeners as Set<(evt: unknown) => void> | undefined
+    expect(listeners && listeners.size).toBeGreaterThan(0)
+    for (const listener of listeners!) {
+      listener({
+        type: "session.state",
+        sessionKey: "agent:main:paperclip-conductor",
+        sessionId: "018f-openclaw-main-legacy",
+        state: "processing",
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          source: "paperclip",
+          sessionId: "legacy-run",
+          agentId: "Conductor",
+          agentType: "paperclip",
+          paperclip: { runId: "legacy-run", issueId: "AGE-12" },
+        },
+        ts: Date.now(),
+        seq: 1,
+      })
+    }
+
+    // Without the payload fallback this downgrades to nix-v1 — pin the fix.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "paperclip")
+
+    await legacy.stop()
   })
 })

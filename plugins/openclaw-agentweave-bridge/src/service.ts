@@ -125,8 +125,10 @@ function subscribeToDiagnosticEvents(
   //    silently buckets as "unknown" on the dashboard).
   // 3. `onTrustedDiagnosticEvent` delivers `session.state`/`message.queued`
   //    paired with the opt-in `privateData` bag (carrying the seeded
-  //    `clientContext`). This is the only path the upstream attribution
-  //    arrives on now; the public payload is withheld it.
+  //    `clientContext`). This is the preferred path for upstream attribution;
+  //    the dispatcher still falls back to `clientContext` on the public event
+  //    payload for older runtimes that forwarded it there before this channel
+  //    existed.
   //
   // `onModelDiagnosticEvent` and `onTrustedDiagnosticEvent` were added to the
   // plugin-sdk in separate openclaw PRs; older runtimes export only
@@ -135,8 +137,10 @@ function subscribeToDiagnosticEvents(
 
   // When the trusted lifecycle channel is available, the public stream must
   // not also process session.state/message.queued — those arrive (with
-  // privateData) via onTrustedDiagnosticEvent below. Without it we fall back to
-  // handling them on the public stream (no clientContext → nix-v1 attribution).
+  // privateData) via onTrustedDiagnosticEvent below, so processing them here
+  // too would create the root span twice. Without the trusted channel we handle
+  // them on the public stream, where the dispatcher reads any clientContext off
+  // the event payload (older-runtime fallback).
   const publicListener = hasTrusted
     ? (evt: unknown) => {
         const type = (evt as { type?: string }).type
@@ -526,10 +530,17 @@ export function createAgentWeaveBridgeService() {
 
       unsubscribe = subscribeToDiagnosticEvents((evt: unknown, privateData?: unknown) => {
         const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string; cwd?: string; repository?: string; raw_data?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string }; rawData?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string } }
-        // Upstream attribution now rides the trusted privateData channel for
-        // session.state/message.queued; older runtimes deliver neither and this
-        // is undefined (→ nix-v1 fallback).
-        const clientContext = (privateData as { clientContext?: unknown } | undefined)?.clientContext
+        // Upstream attribution prefers the trusted privateData channel
+        // (session.state/message.queued on runtimes that export
+        // onTrustedDiagnosticEvent), falling back to the public event payload
+        // for the older runtime window that forwarded clientContext on the
+        // event itself before the trusted channel existed. privateData wins
+        // when present; on the trusted runtime the public listener skips these
+        // types, so the payload fallback only ever applies when there is no
+        // trusted delivery. No upstream context on either → nix-v1 fallback.
+        const clientContext =
+          (privateData as { clientContext?: unknown } | undefined)?.clientContext ??
+          (e as { clientContext?: unknown }).clientContext
         console.log("[agentweave-bridge] event:", e.type, "sessionKey:", e.sessionKey, "source:", e.source)
         try {
           switch (e.type) {
