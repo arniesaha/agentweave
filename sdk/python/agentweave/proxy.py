@@ -62,7 +62,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from opentelemetry.trace import Link, NonRecordingSpan, SpanContext, StatusCode, TraceFlags
 
 from agentweave import schema
@@ -963,7 +963,7 @@ async def list_models(request: Request) -> JSONResponse:
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], response_model=None)
-async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse:
+async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse | Response:
     if (denied := _check_auth(request)) is not None:
         return denied
 
@@ -1274,7 +1274,7 @@ async def _request_and_trace(
     parent_span_id_raw: str | None = None,
     parent_trace_id_raw: str | None = None,
     task_label: str | None = None,
-) -> JSONResponse:
+) -> Response:
     tracer = get_tracer()
     _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
     _links = _build_parent_links(parent_trace_id_raw, parent_span_id_raw)
@@ -1297,7 +1297,31 @@ async def _request_and_trace(
                     method, upstream_url, headers=headers, content=body_bytes,
                 )
             elapsed_ms = int((time.perf_counter() - start) * 1000)
-            data = resp.json()
+            try:
+                data = resp.json()
+            except (ValueError, UnicodeDecodeError):
+                data = None
+
+            if data is None:
+                # Upstream returned a non-JSON body (e.g. an HTML error page, or
+                # a non-API path forwarded through the catch-all route). Relay it
+                # transparently instead of crashing on resp.json() and masking the
+                # real upstream response behind a proxy-generated 500.
+                is_error = resp.status_code >= 400
+                span.set_status(StatusCode.ERROR if is_error else StatusCode.OK)
+                _health_record_span(
+                    agent_id=agent_id or "unknown",
+                    session_id=session_id or "",
+                    duration_ms=float(elapsed_ms),
+                    is_error=is_error,
+                    cost_usd=0.0,
+                )
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    media_type=resp.headers.get("content-type"),
+                )
+
             _extract_and_set_response(span, data=data, provider=provider, elapsed_ms=elapsed_ms, model=model)
             span.set_status(StatusCode.OK)
             # Record span in health tracker

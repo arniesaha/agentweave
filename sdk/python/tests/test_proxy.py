@@ -2103,6 +2103,67 @@ class TestListModelsEndpoint:
         assert resp.status_code == 401
 
 
+class TestNonJsonUpstreamPassthrough:
+    """The non-streaming handler must relay non-JSON upstream bodies transparently
+    instead of crashing on resp.json() and masking them behind a proxy 500.
+
+    Regression for the follow-up bug found while fixing agentweave#241: forwarding
+    a GET / (or any non-API path) upstream returned an HTML body, and the
+    unconditional resp.json() at proxy._request_and_trace raised JSONDecodeError,
+    which the generic handler re-raised as an opaque HTTP 500.
+    """
+
+    def _mock_non_json_response(self, *, status_code, content, content_type):
+        from unittest.mock import AsyncMock, MagicMock
+        import httpx
+
+        fake_resp = MagicMock(spec=httpx.Response)
+        fake_resp.status_code = status_code
+        fake_resp.content = content
+        fake_resp.headers = {"content-type": content_type}
+        fake_resp.json.side_effect = ValueError("Expecting value: line 1 column 1 (char 0)")
+
+        client_instance = AsyncMock()
+        client_instance.request = AsyncMock(return_value=fake_resp)
+
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client_instance)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+    def _post(self, monkeypatch, *, status_code, content, content_type):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        cm = self._mock_non_json_response(
+            status_code=status_code, content=content, content_type=content_type,
+        )
+        with patch("agentweave.proxy.httpx.AsyncClient", return_value=cm):
+            return TestClient(app, raise_server_exceptions=False).post(
+                "/v1/messages",
+                json={"model": "claude-3-haiku-20240307", "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "hi"}]},
+                headers={"x-api-key": "sk-ant-test-key"},
+            )
+
+    def test_non_json_error_body_relayed_not_500(self, monkeypatch):
+        """An HTML error page upstream is relayed with its real status and body."""
+        html = b"<html><body>Bad Gateway</body></html>"
+        resp = self._post(monkeypatch, status_code=502, content=html, content_type="text/html")
+        assert resp.status_code == 502  # upstream status preserved, not a proxy 500
+        assert resp.content == html
+        assert resp.headers["content-type"].startswith("text/html")
+
+    def test_non_json_success_body_relayed(self, monkeypatch):
+        """A non-JSON 2xx body is passed through verbatim."""
+        body = b"plain text ok"
+        resp = self._post(monkeypatch, status_code=200, content=body, content_type="text/plain")
+        assert resp.status_code == 200
+        assert resp.content == body
+
+
 # ---------------------------------------------------------------------------
 # Tests for issue #174: env key fallback when AGENTWEAVE_* vars are unset
 # ---------------------------------------------------------------------------
