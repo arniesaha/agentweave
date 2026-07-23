@@ -4,12 +4,16 @@ import { NodeSDK } from "@opentelemetry/sdk-node"
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import { BatchSpanProcessor, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base"
 // @ts-ignore — provided by host at runtime, not in plugin's local node_modules
-import { onDiagnosticEvent, onModelDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
+import { onDiagnosticEvent, onModelDiagnosticEvent, onTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
 import { resolveCost } from "./pricing.js"
 
 interface ActiveTurn {
   span: Span
   ctx: Context
+  /** True for spans started from session.state (gateway-agent / subagent paths)
+   *  that must be ended on the session.state idle transition rather than a
+   *  message.processed event (which never fires for those paths). */
+  endOnIdle?: boolean
 }
 
 export interface BridgeConfig {
@@ -97,23 +101,57 @@ function initSdk(config: BridgeConfig): void {
   console.log("[agentweave-bridge] OTel SDK started, exporting to:", `${config.otlpEndpoint}/v1/traces`)
 }
 
-function subscribeToDiagnosticEvents(listener: (evt: unknown) => void): () => void {
-  // Two openclaw plugin-sdk subscriptions:
+// Lifecycle event types whose upstream `clientContext` now rides the trusted
+// privateData channel (`onTrustedDiagnosticEvent`) instead of the public event
+// payload. When that subscription is available we route these two types through
+// it so the dispatcher reads clientContext from privateData; the public
+// subscription then skips them to avoid creating the root span twice.
+const TRUSTED_LIFECYCLE_TYPES = new Set(["session.state", "message.queued"])
+
+function subscribeToDiagnosticEvents(
+  listener: (evt: unknown, privateData?: unknown) => void,
+): () => void {
+  // Three openclaw plugin-sdk subscriptions:
   //
   // 1. `onDiagnosticEvent` covers the public (untrusted) event stream —
   //    message/session lifecycle, queue events, etc. used to manage spans.
+  //    The public payload no longer carries `clientContext`; that moved to
+  //    the trusted privateData channel (see #3).
   // 2. `onModelDiagnosticEvent` is the narrow opt-in over the trusted
   //    `model.*` family (call.started/completed/error, usage, failover).
   //    Without it, the embedded codex runner's `model.call.completed`
   //    events never reach the bridge and codex turn spans land in
   //    AgentWeave without `prov.llm.{provider,model}` (issue: codex traffic
   //    silently buckets as "unknown" on the dashboard).
+  // 3. `onTrustedDiagnosticEvent` delivers `session.state`/`message.queued`
+  //    paired with the opt-in `privateData` bag (carrying the seeded
+  //    `clientContext`). This is the preferred path for upstream attribution;
+  //    the dispatcher still falls back to `clientContext` on the public event
+  //    payload for older runtimes that forwarded it there before this channel
+  //    existed.
   //
-  // `onModelDiagnosticEvent` was added to the plugin-sdk in a separate
-  // openclaw PR; older runtimes export only `onDiagnosticEvent`, so we
-  // guard the call to keep the bridge compatible.
-  const unsubMain = (onDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(listener)
+  // `onModelDiagnosticEvent` and `onTrustedDiagnosticEvent` were added to the
+  // plugin-sdk in separate openclaw PRs; older runtimes export only
+  // `onDiagnosticEvent`, so we guard both calls to keep the bridge compatible.
+  const hasTrusted = typeof onTrustedDiagnosticEvent === "function"
+
+  // When the trusted lifecycle channel is available, the public stream must
+  // not also process session.state/message.queued — those arrive (with
+  // privateData) via onTrustedDiagnosticEvent below, so processing them here
+  // too would create the root span twice. Without the trusted channel we handle
+  // them on the public stream, where the dispatcher reads any clientContext off
+  // the event payload (older-runtime fallback).
+  const publicListener = hasTrusted
+    ? (evt: unknown) => {
+        const type = (evt as { type?: string }).type
+        if (type && TRUSTED_LIFECYCLE_TYPES.has(type)) return
+        listener(evt)
+      }
+    : (evt: unknown) => listener(evt)
+
+  const unsubMain = (onDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(publicListener)
   console.log("[agentweave-bridge] subscribed to diagnostic events via plugin-sdk")
+
   let unsubModel: (() => void) | undefined
   if (typeof onModelDiagnosticEvent === "function") {
     unsubModel = (onModelDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(listener)
@@ -123,9 +161,23 @@ function subscribeToDiagnosticEvents(listener: (evt: unknown) => void): () => vo
       "[agentweave-bridge] openclaw plugin-sdk is missing onModelDiagnosticEvent — codex turn spans will not be enriched with prov.llm.model. Upgrade openclaw to a build that exports it.",
     )
   }
+
+  let unsubTrusted: (() => void) | undefined
+  if (hasTrusted) {
+    unsubTrusted = (
+      onTrustedDiagnosticEvent as (l: (evt: unknown, priv: unknown) => void) => () => void
+    )((evt, privateData) => listener(evt, privateData))
+    console.log("[agentweave-bridge] subscribed to trusted lifecycle clientContext via plugin-sdk")
+  } else {
+    console.warn(
+      "[agentweave-bridge] openclaw plugin-sdk is missing onTrustedDiagnosticEvent — upstream clientContext attribution falls back to nix-v1. Upgrade openclaw to a build that exports it.",
+    )
+  }
+
   return () => {
     unsubMain()
     if (unsubModel) unsubModel()
+    if (unsubTrusted) unsubTrusted()
   }
 }
 
@@ -140,6 +192,61 @@ function firstString(...values: unknown[]): string | undefined {
     if (trimmed) return trimmed
   }
   return undefined
+}
+
+/** Schema discriminator for the upstream context the gateway forwards. */
+const AGENTWEAVE_CONTEXT_SCHEMA = "agentweave.context.v1"
+
+/** Upstream attribution forwarded by an orchestrator (e.g. Paperclip/Conductor). */
+interface UpstreamAgentContext {
+  source?: string
+  sessionId?: string
+  agentId?: string
+  agentType?: string
+  taskLabel?: string
+  parentSessionId?: string
+  paperclip?: { runId?: string; issueId?: string; taskId?: string }
+}
+
+/**
+ * Read upstream attribution from an opaque OpenClaw diagnostic `clientContext`
+ * bag. Returns undefined unless the bag declares the recognized schema, so
+ * unrelated client context never hijacks attribution. Parses defensively — the
+ * bag is plugin-trusted but still externally supplied data.
+ */
+function resolveUpstreamContext(clientContext: unknown): UpstreamAgentContext | undefined {
+  if (!clientContext || typeof clientContext !== "object") return undefined
+  const ctx = clientContext as Record<string, unknown>
+  if (ctx.schemaVersion !== AGENTWEAVE_CONTEXT_SCHEMA) return undefined
+  const paperclipRaw =
+    ctx.paperclip && typeof ctx.paperclip === "object"
+      ? (ctx.paperclip as Record<string, unknown>)
+      : undefined
+  const paperclip = paperclipRaw
+    ? {
+        runId: firstString(paperclipRaw.runId),
+        issueId: firstString(paperclipRaw.issueId),
+        taskId: firstString(paperclipRaw.taskId),
+      }
+    : undefined
+  return {
+    source: firstString(ctx.source),
+    sessionId: firstString(ctx.sessionId),
+    agentId: firstString(ctx.agentId),
+    agentType: firstString(ctx.agentType),
+    taskLabel: firstString(ctx.taskLabel),
+    parentSessionId: firstString(ctx.parentSessionId),
+    paperclip,
+  }
+}
+
+/** Stamp upstream run/issue ids onto a span for filtering/debugging in Tempo. */
+function applyUpstreamContextAttrs(span: Span, upstream: UpstreamAgentContext | undefined): void {
+  if (!upstream) return
+  if (upstream.source) span.setAttribute("prov.upstream.source", upstream.source)
+  if (upstream.paperclip?.runId) span.setAttribute("prov.upstream.run_id", upstream.paperclip.runId)
+  if (upstream.paperclip?.issueId) span.setAttribute("prov.upstream.issue_id", upstream.paperclip.issueId)
+  if (upstream.paperclip?.taskId) span.setAttribute("prov.upstream.task_id", upstream.paperclip.taskId)
 }
 
 function resolveOpenClawSessionId(sessionKey: string, eventSessionId: unknown): { sessionId: string; canonicalUuid?: string } {
@@ -250,6 +357,150 @@ function findTurnForModelUsage(sessionKey: string, sessionId: string): { key: st
   return null
 }
 
+/**
+ * Start a root span for a gateway-`agent` run from a session.state event.
+ *
+ * Gateway `agent` runs (e.g. Paperclip) start the embedded runner directly and
+ * only emit session.state (+ model.call.*) — they never emit the message.queued
+ * event the normal root-span path keys on. When OpenClaw seeds upstream context
+ * (agentweave.context.v1) onto such a session, this starts the equivalent
+ * upstream-attributed root span and forces the proxy to attribute LLM calls to
+ * that identity. The span is ended on the session.state idle transition
+ * (endOnIdle), since no message.processed event fires for this path.
+ */
+function startUpstreamRootSpanFromSessionState(
+  e: Record<string, unknown>,
+  sessionKey: string,
+  upstream: UpstreamAgentContext,
+  config: BridgeConfig,
+): void {
+  const { sessionId, canonicalUuid } = resolveOpenClawSessionId(sessionKey, e.sessionId)
+  const effectiveSessionId = upstream.sessionId ?? sessionId
+  const agentId = upstream.agentId ?? config.agentId ?? "nix-v1"
+  const agentType = upstream.agentType ?? "main"
+
+  const tracer = trace.getTracer("openclaw-agentweave-bridge")
+  const span = tracer.startSpan("openclaw.turn")
+  span.setAttribute("session_id", effectiveSessionId)
+  span.setAttribute("session.id", effectiveSessionId)
+  span.setAttribute("prov.session.id", effectiveSessionId)
+  span.setAttribute("prov.session.key", sessionKey)
+  if (canonicalUuid && canonicalUuid !== sessionKey) {
+    span.setAttribute("prov.session.uuid", canonicalUuid)
+  }
+  span.setAttribute("prov.harness", "openclaw")
+  span.setAttribute("prov.agent.id", agentId)
+  span.setAttribute("prov.agent.type", agentType)
+  span.setAttribute("prov.activity.type", "agent_turn")
+  const channel = firstString(e.channel)
+  if (channel) span.setAttribute("channel", channel)
+  if (config.project) span.setAttribute("prov.project", config.project)
+  applyUpstreamContextAttrs(span, upstream)
+  const taskLabel = upstream.taskLabel ?? firstString(e.taskLabel)
+  if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
+  applyExecutionContextAttrs(span, e)
+  const repository = firstString(
+    e.repository,
+    (e.raw_data as { repository?: unknown } | undefined)?.repository,
+    (e.rawData as { repository?: unknown } | undefined)?.repository,
+  )
+  const inputPreview = resolveInputPreview(e, taskLabel)
+
+  let parentSid: string | undefined
+  if (upstream.parentSessionId) {
+    parentSid = upstream.parentSessionId
+    span.setAttribute("prov.parent.session.id", parentSid)
+    process.env.AGENTWEAVE_PARENT_SESSION_ID = parentSid
+  }
+  applyLangfuseAgentTurnAttrs(span, {
+    sessionId: effectiveSessionId,
+    sessionKey,
+    project: config.project,
+    agentId,
+    agentType,
+    parentSessionId: parentSid,
+    repository,
+    taskLabel,
+    inputPreview,
+  })
+
+  const spanCtx = trace.setSpan(context.active(), span)
+  const carrier: Record<string, string> = {}
+  propagation.inject(spanCtx, carrier)
+  if (carrier["traceparent"]) {
+    process.env.AGENTWEAVE_TRACEPARENT = carrier["traceparent"]
+  }
+  let parentTraceIdHex = ""
+  let parentSpanIdHex = ""
+  const spanContext = span.spanContext()
+  if (spanContext) {
+    parentTraceIdHex = spanContext.traceId.replace(/-/g, "").padStart(32, "0")
+    parentSpanIdHex = spanContext.spanId.replace(/-/g, "").padStart(16, "0")
+    process.env.AGENTWEAVE_PARENT_TRACE_ID = parentTraceIdHex
+    process.env.AGENTWEAVE_PARENT_SPAN_ID = parentSpanIdHex
+  }
+  process.env.AGENTWEAVE_SESSION_ID = effectiveSessionId
+  process.env.AGENTWEAVE_AGENT_ID = agentId
+  process.env.AGENTWEAVE_AGENT_TYPE = agentType
+  const proxyBaseUrl = normalizeProxyBaseUrl(config.proxyUrl)
+  if (proxyBaseUrl) {
+    process.env.ANTHROPIC_BASE_URL = proxyBaseUrl
+    process.env.OPENAI_BASE_URL = proxyBaseUrl
+    process.env.OPENAI_API_BASE = proxyBaseUrl
+  }
+
+  activeTurns.set(sessionKey, { span, ctx: spanCtx, endOnIdle: true })
+  console.log(`[agentweave-bridge] started root span for ${agentType} session:`, effectiveSessionId, "agent:", agentId)
+
+  if (proxyBaseUrl) {
+    const sessionPayload: Record<string, unknown> = {
+      session_id: effectiveSessionId,
+      session_key: sessionKey,
+      agent_id: agentId,
+      agent_type: agentType,
+      // Force the proxy to attribute LLM calls to the upstream identity.
+      force: true,
+    }
+    if (config.project) sessionPayload.project = config.project
+    if (parentSid) sessionPayload.parent_session_id = parentSid
+    if (taskLabel) sessionPayload.task_label = taskLabel
+    if (canonicalUuid) sessionPayload.session_uuid = canonicalUuid
+    if (upstream.paperclip?.runId) sessionPayload.run_id = upstream.paperclip.runId
+    if (upstream.paperclip?.issueId) sessionPayload.issue_id = upstream.paperclip.issueId
+    if (parentTraceIdHex && parentSpanIdHex) {
+      sessionPayload.parent_trace_id = parentTraceIdHex
+      sessionPayload.parent_span_id = parentSpanIdHex
+    }
+    fetch(`${proxyBaseUrl}/session`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-agentweave-session-key": sessionKey,
+      },
+      body: JSON.stringify(sessionPayload),
+    }).then(() => console.log(`[agentweave-bridge] proxy session set for ${agentType}: ${effectiveSessionId}`))
+      .catch(err => console.warn(`[agentweave-bridge] proxy session set failed:`, err.message))
+  }
+}
+
+function endUpstreamRootSpanOnIdle(sessionKey: string): void {
+  const turn = activeTurns.get(sessionKey)
+  if (!turn?.endOnIdle) return
+  turn.span.setAttribute("outcome", "completed")
+  turn.span.end()
+  activeTurns.delete(sessionKey)
+  delete process.env.AGENTWEAVE_TRACEPARENT
+  delete process.env.AGENTWEAVE_PARENT_TRACE_ID
+  delete process.env.AGENTWEAVE_PARENT_SPAN_ID
+  delete process.env.ANTHROPIC_BASE_URL
+  delete process.env.OPENAI_BASE_URL
+  delete process.env.OPENAI_API_BASE
+  delete process.env.AGENTWEAVE_AGENT_ID
+  delete process.env.AGENTWEAVE_AGENT_TYPE
+  delete process.env.AGENTWEAVE_PARENT_SESSION_ID
+  console.log("[agentweave-bridge] ended upstream root span for session:", sessionKey)
+}
+
 export function createAgentWeaveBridgeService() {
   return {
     id: "agentweave-bridge",
@@ -277,8 +528,19 @@ export function createAgentWeaveBridgeService() {
       if (config.enabled === false) return
       initSdk(config)
 
-      unsubscribe = subscribeToDiagnosticEvents((evt: unknown) => {
+      unsubscribe = subscribeToDiagnosticEvents((evt: unknown, privateData?: unknown) => {
         const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string; cwd?: string; repository?: string; raw_data?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string }; rawData?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string } }
+        // Upstream attribution prefers the trusted privateData channel
+        // (session.state/message.queued on runtimes that export
+        // onTrustedDiagnosticEvent), falling back to the public event payload
+        // for the older runtime window that forwarded clientContext on the
+        // event itself before the trusted channel existed. privateData wins
+        // when present; on the trusted runtime the public listener skips these
+        // types, so the payload fallback only ever applies when there is no
+        // trusted delivery. No upstream context on either → nix-v1 fallback.
+        const clientContext =
+          (privateData as { clientContext?: unknown } | undefined)?.clientContext ??
+          (e as { clientContext?: unknown }).clientContext
         console.log("[agentweave-bridge] event:", e.type, "sessionKey:", e.sessionKey, "source:", e.source)
         try {
           switch (e.type) {
@@ -289,11 +551,19 @@ export function createAgentWeaveBridgeService() {
 
               const { agentId, agentType, parentSessionKey } = resolveAgentId(sessionKey, config, activeTurns, e.source)
 
+              // Prefer upstream attribution (e.g. Paperclip/Conductor) when the
+              // gateway forwarded an agentweave.context.v1 bag; otherwise keep
+              // the local nix-v1 fallback derived above.
+              const upstream = resolveUpstreamContext(clientContext)
+              const effectiveSessionId = upstream?.sessionId ?? sessionId
+              const effectiveAgentId = upstream?.agentId ?? agentId
+              const effectiveAgentType = upstream?.agentType ?? agentType
+
               const tracer = trace.getTracer("openclaw-agentweave-bridge")
               const span = tracer.startSpan("openclaw.turn")
-              span.setAttribute("session_id", sessionId)
-              span.setAttribute("session.id", sessionId)
-              span.setAttribute("prov.session.id", sessionId)
+              span.setAttribute("session_id", effectiveSessionId)
+              span.setAttribute("session.id", effectiveSessionId)
+              span.setAttribute("prov.session.id", effectiveSessionId)
               // Qualified route key stays available for attribution and
               // parent/session heuristics after session.id switches to the
               // OpenClaw UUID used by the native JSONL shipper.
@@ -302,20 +572,26 @@ export function createAgentWeaveBridgeService() {
                 span.setAttribute("prov.session.uuid", canonicalUuid)
               }
               span.setAttribute("prov.harness", "openclaw")
-              span.setAttribute("prov.agent.id", agentId)
-              span.setAttribute("prov.agent.type", agentType)
+              span.setAttribute("prov.agent.id", effectiveAgentId)
+              span.setAttribute("prov.agent.type", effectiveAgentType)
               span.setAttribute("prov.activity.type", "agent_turn")
               if (e.channel) span.setAttribute("channel", e.channel)
               if (config.project) span.setAttribute("prov.project", config.project)
-              const taskLabel = e.taskLabel?.trim()
+              applyUpstreamContextAttrs(span, upstream)
+              const taskLabel = upstream?.taskLabel ?? e.taskLabel?.trim()
               if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
               applyExecutionContextAttrs(span, e as Record<string, unknown>)
               const repository = firstString(e.repository, e.raw_data?.repository, e.rawData?.repository)
               const inputPreview = resolveInputPreview(e as Record<string, unknown>, taskLabel)
 
-              // Link sub-agent to parent session
+              // Link to parent session: an explicit upstream parent wins;
+              // otherwise fall back to the sub-agent concurrent-turn heuristic.
               let parentSid: string | undefined
-              if (agentType === "subagent") {
+              if (upstream?.parentSessionId) {
+                parentSid = upstream.parentSessionId
+                span.setAttribute("prov.parent.session.id", parentSid)
+                process.env.AGENTWEAVE_PARENT_SESSION_ID = parentSid
+              } else if (agentType === "subagent") {
                 // Use parentSessionKey from concurrent-turn heuristic, or find any active main turn
                 const parentKey = parentSessionKey
                   ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:"))
@@ -329,11 +605,11 @@ export function createAgentWeaveBridgeService() {
                 }
               }
               applyLangfuseAgentTurnAttrs(span, {
-                sessionId,
+                sessionId: effectiveSessionId,
                 sessionKey,
                 project: config.project,
-                agentId,
-                agentType,
+                agentId: effectiveAgentId,
+                agentType: effectiveAgentType,
                 parentSessionId: parentSid,
                 repository,
                 taskLabel,
@@ -362,9 +638,9 @@ export function createAgentWeaveBridgeService() {
                 process.env.AGENTWEAVE_PARENT_TRACE_ID = parentTraceIdHex
                 process.env.AGENTWEAVE_PARENT_SPAN_ID = parentSpanIdHex
               }
-              process.env.AGENTWEAVE_SESSION_ID = sessionId
-              process.env.AGENTWEAVE_AGENT_ID = agentId
-              process.env.AGENTWEAVE_AGENT_TYPE = agentType
+              process.env.AGENTWEAVE_SESSION_ID = effectiveSessionId
+              process.env.AGENTWEAVE_AGENT_ID = effectiveAgentId
+              process.env.AGENTWEAVE_AGENT_TYPE = effectiveAgentType
               const proxyBaseUrl = normalizeProxyBaseUrl(config.proxyUrl)
               if (proxyBaseUrl) {
                 process.env.ANTHROPIC_BASE_URL = proxyBaseUrl
@@ -373,7 +649,7 @@ export function createAgentWeaveBridgeService() {
               }
 
               activeTurns.set(sessionKey, { span, ctx: spanCtx })
-              console.log(`[agentweave-bridge] started root span for ${agentType} session:`, sessionId, "agent:", agentId)
+              console.log(`[agentweave-bridge] started root span for ${effectiveAgentType} session:`, effectiveSessionId, "agent:", effectiveAgentId)
 
               // Push session context into the proxy so its _session_context dict
               // includes session_id / agent_id / project / task_label for the
@@ -381,21 +657,27 @@ export function createAgentWeaveBridgeService() {
               // snapshots env only at startup — POST /session is the live path.
               const proxyBaseUrlForSession = normalizeProxyBaseUrl(config.proxyUrl)
               if (proxyBaseUrlForSession) {
-                const parentSid = agentType === "subagent"
-                  ? (parentSessionKey
-                    ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:")))
-                  : undefined
+                // Upstream parent wins; else the sub-agent concurrent-turn heuristic.
+                const proxyParentSid = upstream?.parentSessionId
+                  ?? (effectiveAgentType === "subagent"
+                    ? (parentSessionKey
+                      ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:")))
+                    : undefined)
                 const sessionPayload: Record<string, unknown> = {
-                  session_id: sessionId,
+                  session_id: effectiveSessionId,
                   session_key: sessionKey,
-                  agent_id: agentId,
-                  agent_type: agentType,
-                  force: agentType === "subagent",
+                  agent_id: effectiveAgentId,
+                  agent_type: effectiveAgentType,
+                  // Force the proxy to attribute LLM calls to upstream identity
+                  // (same as sub-agents) so codex/model spans match the run.
+                  force: Boolean(upstream) || effectiveAgentType === "subagent",
                 }
                 if (config.project) sessionPayload.project = config.project
-                if (parentSid) sessionPayload.parent_session_id = parentSid
+                if (proxyParentSid) sessionPayload.parent_session_id = proxyParentSid
                 if (taskLabel) sessionPayload.task_label = taskLabel
                 if (canonicalUuid) sessionPayload.session_uuid = canonicalUuid
+                if (upstream?.paperclip?.runId) sessionPayload.run_id = upstream.paperclip.runId
+                if (upstream?.paperclip?.issueId) sessionPayload.issue_id = upstream.paperclip.issueId
                 if (parentTraceIdHex && parentSpanIdHex) {
                   sessionPayload.parent_trace_id = parentTraceIdHex
                   sessionPayload.parent_span_id = parentSpanIdHex
@@ -407,7 +689,7 @@ export function createAgentWeaveBridgeService() {
                     "x-agentweave-session-key": sessionKey,
                   },
                   body: JSON.stringify(sessionPayload),
-                }).then(() => console.log(`[agentweave-bridge] proxy session set for ${agentType}: ${sessionId}`))
+                }).then(() => console.log(`[agentweave-bridge] proxy session set for ${effectiveAgentType}: ${effectiveSessionId}`))
                   .catch(err => console.warn(`[agentweave-bridge] proxy session set failed:`, err.message))
               }
               break
@@ -549,6 +831,19 @@ export function createAgentWeaveBridgeService() {
                     .catch(err => console.warn(`[agentweave-bridge] proxy session restore failed:`, err.message))
 
                   console.log(`[agentweave-bridge] ended subagent span: ${sessionKey}`)
+                }
+              }
+              // Gateway `agent` runs (e.g. Paperclip) emit session.state but no
+              // message.queued for the initial turn, so start the upstream root
+              // span here when OpenClaw seeded an agentweave.context.v1 bag onto
+              // the session, and end it on the idle transition. Non-subagent
+              // keys only; subagent sessions are handled above.
+              if (!sessionKey.includes(":subagent:")) {
+                const upstream = resolveUpstreamContext(clientContext)
+                if (state === "processing" && upstream && !activeTurns.has(sessionKey)) {
+                  startUpstreamRootSpanFromSessionState(e as Record<string, unknown>, sessionKey, upstream, config)
+                } else if (state === "idle") {
+                  endUpstreamRootSpanOnIdle(sessionKey)
                 }
               }
               break

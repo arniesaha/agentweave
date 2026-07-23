@@ -11,15 +11,22 @@
 
 interface DiagnosticEventsState {
   listeners: Set<(evt: unknown) => void>
+  // Trusted lifecycle channel: session.state / message.queued arrive here paired
+  // with a `privateData` bag carrying the seeded upstream `clientContext`. Mirrors
+  // the host's `onTrustedDiagnosticEvent` so the harness can exercise the same
+  // attribution path the plugin uses in production.
+  trustedListeners: Set<(evt: unknown, privateData: unknown) => void>
 }
 
 function getState(): DiagnosticEventsState {
   const g = globalThis as Record<string, unknown>
   let state = g.__openclawDiagnosticEventsState as DiagnosticEventsState | undefined
   if (!state) {
-    state = { listeners: new Set() }
+    state = { listeners: new Set(), trustedListeners: new Set() }
     g.__openclawDiagnosticEventsState = state
   }
+  // Back-compat for any state created before trustedListeners existed.
+  if (!state.trustedListeners) state.trustedListeners = new Set()
   return state
 }
 
@@ -28,5 +35,15 @@ export function onDiagnosticEvent(listener: (evt: unknown) => void): () => void 
   state.listeners.add(listener)
   return () => {
     state.listeners.delete(listener)
+  }
+}
+
+export function onTrustedDiagnosticEvent(
+  listener: (evt: unknown, privateData: unknown) => void,
+): () => void {
+  const state = getState()
+  state.trustedListeners.add(listener)
+  return () => {
+    state.trustedListeners.delete(listener)
   }
 }

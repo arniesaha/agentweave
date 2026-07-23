@@ -41,13 +41,42 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// service.ts writes directly to globalThis.__openclawDiagnosticEventsState —
-// not via onDiagnosticEvent. Fire events through that state.
-function fire(evt: object) {
+// In production the plugin reads upstream `clientContext` off the trusted
+// privateData channel (`onTrustedDiagnosticEvent`) for these two lifecycle
+// types; every other event stays on the public stream. Route them the same way
+// here so tests exercise the real attribution path.
+const TRUSTED_LIFECYCLE_TYPES = new Set(["session.state", "message.queued"])
+
+interface HarnessState {
+  listeners: Set<(evt: unknown) => void>
+  trustedListeners: Set<(evt: unknown, privateData: unknown) => void>
+}
+
+// service.ts subscribes via the plugin-sdk stub, which registers listeners into
+// globalThis.__openclawDiagnosticEventsState. Fire events through that state.
+// `privateData` (e.g. `{ clientContext }`) is delivered only for trusted
+// lifecycle events, matching onTrustedDiagnosticEvent.
+//
+// Production (`dispatchDiagnosticEvent`) delivers session.state/message.queued
+// to BOTH the public and trusted listener sets — the plugin's public listener
+// must skip them to avoid creating the root span twice, and the trusted
+// listener processes them with privateData. Mirror that dual-delivery so the
+// public-listener skip (the double-span guard) is actually exercised.
+function fire(evt: object, privateData?: unknown) {
   const g = globalThis as Record<string, unknown>
-  const state = g.__openclawDiagnosticEventsState as { listeners: Set<(evt: unknown) => void> } | undefined
-  if (!state || state.listeners.size === 0) {
+  const state = g.__openclawDiagnosticEventsState as HarnessState | undefined
+  if (!state || (state.listeners.size === 0 && state.trustedListeners.size === 0)) {
     throw new Error("No listener registered — did you call service.start()?")
+  }
+  const type = (evt as { type?: string }).type
+  if (type && TRUSTED_LIFECYCLE_TYPES.has(type)) {
+    for (const listener of state.listeners) {
+      listener(evt)
+    }
+    for (const listener of state.trustedListeners) {
+      listener(evt, privateData)
+    }
+    return
   }
   for (const listener of state.listeners) {
     listener(evt)
@@ -444,5 +473,303 @@ describe("createAgentWeaveBridgeService", () => {
 
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("outcome", "interrupted")
     expect(mockSpan.end).toHaveBeenCalled()
+  })
+
+  it("prefers upstream agentweave context for attribution on message.queued", () => {
+    fire(
+      {
+        type: "message.queued",
+        sessionKey: "agent:main:paperclip-conductor",
+        sessionId: "018f-openclaw-main-pc",
+        channel: "cli",
+        source: "user",
+        ts: Date.now(),
+        seq: 1,
+      },
+      {
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          source: "paperclip",
+          sessionId: "ea03270f-e02c-4afc-b893-862dcb51b05d",
+          agentId: "Conductor",
+          agentType: "paperclip",
+          taskLabel: "AGE-8: fix attribution",
+          parentSessionId: "paperclip-root",
+          paperclip: {
+            runId: "ea03270f-e02c-4afc-b893-862dcb51b05d",
+            issueId: "AGE-8",
+            taskId: "task-1",
+          },
+        },
+      },
+    )
+
+    // Upstream identity wins over the local nix-v1 fallback.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "paperclip")
+    // session.id becomes the upstream run/session id so spans are findable by it.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "ea03270f-e02c-4afc-b893-862dcb51b05d")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "ea03270f-e02c-4afc-b893-862dcb51b05d")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.task.label", "AGE-8: fix attribution")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.parent.session.id", "paperclip-root")
+    // Paperclip ids retained for filtering/debugging.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.source", "paperclip")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.run_id", "ea03270f-e02c-4afc-b893-862dcb51b05d")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.issue_id", "AGE-8")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.task_id", "task-1")
+    // The qualified OpenClaw route key is still preserved for correlation.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:paperclip-conductor")
+  })
+
+  it("maps partial upstream context without inventing missing fields", () => {
+    fire(
+      {
+        type: "message.queued",
+        sessionKey: "agent:main:paperclip-partial",
+        sessionId: "018f-openclaw-main-partial",
+        channel: "cli",
+        source: "user",
+        ts: Date.now(),
+        seq: 1,
+      },
+      {
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          source: "paperclip",
+          agentId: "Conductor",
+          agentType: "conductor",
+        },
+      },
+    )
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "conductor")
+    // No upstream sessionId provided → keep the OpenClaw canonical id.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "018f-openclaw-main-partial")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.parent.session.id", expect.anything())
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.upstream.run_id", expect.anything())
+  })
+
+  it("falls back to nix-v1 attribution when no upstream context is present", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:plain",
+      sessionId: "sess-plain",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "nix-v1")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "main")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.upstream.source", expect.anything())
+  })
+
+  it("ignores clientContext with an unrecognized schemaVersion", () => {
+    fire(
+      {
+        type: "message.queued",
+        sessionKey: "agent:main:other",
+        sessionId: "sess-other",
+        channel: "cli",
+        source: "user",
+        ts: Date.now(),
+        seq: 1,
+      },
+      { clientContext: { schemaVersion: "something.else.v9", agentId: "X" } },
+    )
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "nix-v1")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.agent.id", "X")
+  })
+
+  // Gateway `agent` runs (Paperclip) emit session.state + model.call.* but NOT
+  // message.queued for the initial turn, so the root span must be started from
+  // session.state when upstream context is seeded onto the session.
+  it("starts an upstream-attributed root span from session.state on a main gateway-agent session", () => {
+    fire(
+      {
+        type: "session.state",
+        sessionKey: "agent:main:paperclip-conductor",
+        sessionId: "018f-openclaw-main-pc2",
+        state: "processing",
+        ts: Date.now(),
+        seq: 1,
+      },
+      {
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          source: "paperclip",
+          sessionId: "0fafebf4-8c84-45e4-9583-8149f2bdd16e",
+          agentId: "Conductor",
+          agentType: "paperclip",
+          taskLabel: "AGE-10 dry run",
+          paperclip: { runId: "0fafebf4-8c84-45e4-9583-8149f2bdd16e", issueId: "AGE-10" },
+        },
+      },
+    )
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "paperclip")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "0fafebf4-8c84-45e4-9583-8149f2bdd16e")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "0fafebf4-8c84-45e4-9583-8149f2bdd16e")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:paperclip-conductor")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.run_id", "0fafebf4-8c84-45e4-9583-8149f2bdd16e")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.issue_id", "AGE-10")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.harness", "openclaw")
+  })
+
+  it("ends the session.state-created upstream root span on idle", () => {
+    const ctx = {
+      schemaVersion: "agentweave.context.v1",
+      source: "paperclip",
+      sessionId: "run-end",
+      agentId: "Conductor",
+      agentType: "paperclip",
+      paperclip: { runId: "run-end", issueId: "AGE-10" },
+    }
+    fire(
+      {
+        type: "session.state",
+        sessionKey: "agent:main:paperclip-conductor",
+        sessionId: "018f-openclaw-main-pc3",
+        state: "processing",
+        ts: Date.now(),
+        seq: 1,
+      },
+      { clientContext: ctx },
+    )
+    fire(
+      {
+        type: "session.state",
+        sessionKey: "agent:main:paperclip-conductor",
+        sessionId: "018f-openclaw-main-pc3",
+        state: "idle",
+        ts: Date.now(),
+        seq: 2,
+      },
+      { clientContext: ctx },
+    )
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("outcome", "completed")
+    expect(mockSpan.end).toHaveBeenCalled()
+  })
+
+  it("creates the upstream root span exactly once under dual public+trusted delivery", () => {
+    // Production delivers session.state to both listener sets; the public
+    // listener must skip it so only the trusted delivery starts the root span.
+    fire(
+      {
+        type: "session.state",
+        sessionKey: "agent:main:paperclip-conductor",
+        sessionId: "018f-openclaw-main-dual",
+        state: "processing",
+        ts: Date.now(),
+        seq: 1,
+      },
+      {
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          source: "paperclip",
+          sessionId: "dual-run",
+          agentId: "Conductor",
+          agentType: "paperclip",
+          paperclip: { runId: "dual-run", issueId: "AGE-11" },
+        },
+      },
+    )
+
+    // If the public listener failed to skip the type, the span (and every
+    // attribute on it) would be created twice. Pin the count to exactly one.
+    const harnessCalls = mockSpan.setAttribute.mock.calls.filter(
+      (call: unknown[]) => call[0] === "prov.harness" && call[1] === "openclaw",
+    )
+    expect(harnessCalls).toHaveLength(1)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
+  })
+
+  it("does not start a root span from session.state for a main session without upstream context", () => {
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:main",
+      sessionId: "018f-openclaw-main-plain",
+      state: "processing",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    // No upstream context + not a subagent key → no span created from session.state.
+    expect(mockSpan.setAttribute).not.toHaveBeenCalled()
+  })
+})
+
+// Older OpenClaw runtimes forwarded `clientContext` on the public event payload
+// and never exported `onTrustedDiagnosticEvent`. The dispatcher must still honor
+// that attribution (falling back from privateData to the payload) rather than
+// silently downgrading to nix-v1. Uses a module mock to drop the trusted channel.
+describe("createAgentWeaveBridgeService — legacy runtime without trusted channel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    delete (globalThis as Record<string, unknown>).__legacyDiagnosticListeners
+    delete process.env.AGENTWEAVE_TRACEPARENT
+    delete process.env.AGENTWEAVE_SESSION_ID
+    delete process.env.AGENTWEAVE_PARENT_SESSION_ID
+  })
+
+  afterEach(() => {
+    vi.doUnmock("openclaw/plugin-sdk/diagnostic-runtime")
+    vi.resetModules()
+  })
+
+  it("reads clientContext off the public event payload when onTrustedDiagnosticEvent is absent", async () => {
+    vi.resetModules()
+    // Legacy runtime: only the public channel exists — no onTrustedDiagnosticEvent
+    // and no onModelDiagnosticEvent — and clientContext rides the event payload.
+    vi.doMock("openclaw/plugin-sdk/diagnostic-runtime", () => ({
+      onDiagnosticEvent(listener: (evt: unknown) => void) {
+        const g = globalThis as Record<string, unknown>
+        const set = (g.__legacyDiagnosticListeners as Set<(evt: unknown) => void>) ?? new Set()
+        g.__legacyDiagnosticListeners = set
+        set.add(listener)
+        return () => set.delete(listener)
+      },
+      // Legacy runtime exports neither — declared undefined so `typeof` checks
+      // resolve to "undefined" instead of vitest throwing on a missing export.
+      onModelDiagnosticEvent: undefined,
+      onTrustedDiagnosticEvent: undefined,
+    }))
+
+    const { createAgentWeaveBridgeService: makeLegacyService } = await import("./service.js")
+    const legacy = makeLegacyService()
+    await legacy.start(makeCtx())
+
+    const g = globalThis as Record<string, unknown>
+    const listeners = g.__legacyDiagnosticListeners as Set<(evt: unknown) => void> | undefined
+    expect(listeners && listeners.size).toBeGreaterThan(0)
+    for (const listener of listeners!) {
+      listener({
+        type: "session.state",
+        sessionKey: "agent:main:paperclip-conductor",
+        sessionId: "018f-openclaw-main-legacy",
+        state: "processing",
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          source: "paperclip",
+          sessionId: "legacy-run",
+          agentId: "Conductor",
+          agentType: "paperclip",
+          paperclip: { runId: "legacy-run", issueId: "AGE-12" },
+        },
+        ts: Date.now(),
+        seq: 1,
+      })
+    }
+
+    // Without the payload fallback this downgrades to nix-v1 — pin the fix.
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "paperclip")
+
+    await legacy.stop()
   })
 })
