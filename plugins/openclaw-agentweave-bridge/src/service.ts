@@ -4,7 +4,7 @@ import { NodeSDK } from "@opentelemetry/sdk-node"
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import { BatchSpanProcessor, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base"
 // @ts-ignore — provided by host at runtime, not in plugin's local node_modules
-import { onDiagnosticEvent, onModelDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
+import { onDiagnosticEvent, onModelDiagnosticEvent, onTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
 import { resolveCost } from "./pricing.js"
 
 interface ActiveTurn {
@@ -101,23 +101,53 @@ function initSdk(config: BridgeConfig): void {
   console.log("[agentweave-bridge] OTel SDK started, exporting to:", `${config.otlpEndpoint}/v1/traces`)
 }
 
-function subscribeToDiagnosticEvents(listener: (evt: unknown) => void): () => void {
-  // Two openclaw plugin-sdk subscriptions:
+// Lifecycle event types whose upstream `clientContext` now rides the trusted
+// privateData channel (`onTrustedDiagnosticEvent`) instead of the public event
+// payload. When that subscription is available we route these two types through
+// it so the dispatcher reads clientContext from privateData; the public
+// subscription then skips them to avoid creating the root span twice.
+const TRUSTED_LIFECYCLE_TYPES = new Set(["session.state", "message.queued"])
+
+function subscribeToDiagnosticEvents(
+  listener: (evt: unknown, privateData?: unknown) => void,
+): () => void {
+  // Three openclaw plugin-sdk subscriptions:
   //
   // 1. `onDiagnosticEvent` covers the public (untrusted) event stream —
   //    message/session lifecycle, queue events, etc. used to manage spans.
+  //    The public payload no longer carries `clientContext`; that moved to
+  //    the trusted privateData channel (see #3).
   // 2. `onModelDiagnosticEvent` is the narrow opt-in over the trusted
   //    `model.*` family (call.started/completed/error, usage, failover).
   //    Without it, the embedded codex runner's `model.call.completed`
   //    events never reach the bridge and codex turn spans land in
   //    AgentWeave without `prov.llm.{provider,model}` (issue: codex traffic
   //    silently buckets as "unknown" on the dashboard).
+  // 3. `onTrustedDiagnosticEvent` delivers `session.state`/`message.queued`
+  //    paired with the opt-in `privateData` bag (carrying the seeded
+  //    `clientContext`). This is the only path the upstream attribution
+  //    arrives on now; the public payload is withheld it.
   //
-  // `onModelDiagnosticEvent` was added to the plugin-sdk in a separate
-  // openclaw PR; older runtimes export only `onDiagnosticEvent`, so we
-  // guard the call to keep the bridge compatible.
-  const unsubMain = (onDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(listener)
+  // `onModelDiagnosticEvent` and `onTrustedDiagnosticEvent` were added to the
+  // plugin-sdk in separate openclaw PRs; older runtimes export only
+  // `onDiagnosticEvent`, so we guard both calls to keep the bridge compatible.
+  const hasTrusted = typeof onTrustedDiagnosticEvent === "function"
+
+  // When the trusted lifecycle channel is available, the public stream must
+  // not also process session.state/message.queued — those arrive (with
+  // privateData) via onTrustedDiagnosticEvent below. Without it we fall back to
+  // handling them on the public stream (no clientContext → nix-v1 attribution).
+  const publicListener = hasTrusted
+    ? (evt: unknown) => {
+        const type = (evt as { type?: string }).type
+        if (type && TRUSTED_LIFECYCLE_TYPES.has(type)) return
+        listener(evt)
+      }
+    : (evt: unknown) => listener(evt)
+
+  const unsubMain = (onDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(publicListener)
   console.log("[agentweave-bridge] subscribed to diagnostic events via plugin-sdk")
+
   let unsubModel: (() => void) | undefined
   if (typeof onModelDiagnosticEvent === "function") {
     unsubModel = (onModelDiagnosticEvent as (l: (evt: unknown) => void) => () => void)(listener)
@@ -127,9 +157,23 @@ function subscribeToDiagnosticEvents(listener: (evt: unknown) => void): () => vo
       "[agentweave-bridge] openclaw plugin-sdk is missing onModelDiagnosticEvent — codex turn spans will not be enriched with prov.llm.model. Upgrade openclaw to a build that exports it.",
     )
   }
+
+  let unsubTrusted: (() => void) | undefined
+  if (hasTrusted) {
+    unsubTrusted = (
+      onTrustedDiagnosticEvent as (l: (evt: unknown, priv: unknown) => void) => () => void
+    )((evt, privateData) => listener(evt, privateData))
+    console.log("[agentweave-bridge] subscribed to trusted lifecycle clientContext via plugin-sdk")
+  } else {
+    console.warn(
+      "[agentweave-bridge] openclaw plugin-sdk is missing onTrustedDiagnosticEvent — upstream clientContext attribution falls back to nix-v1. Upgrade openclaw to a build that exports it.",
+    )
+  }
+
   return () => {
     unsubMain()
     if (unsubModel) unsubModel()
+    if (unsubTrusted) unsubTrusted()
   }
 }
 
@@ -480,8 +524,12 @@ export function createAgentWeaveBridgeService() {
       if (config.enabled === false) return
       initSdk(config)
 
-      unsubscribe = subscribeToDiagnosticEvents((evt: unknown) => {
+      unsubscribe = subscribeToDiagnosticEvents((evt: unknown, privateData?: unknown) => {
         const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string; cwd?: string; repository?: string; raw_data?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string }; rawData?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string } }
+        // Upstream attribution now rides the trusted privateData channel for
+        // session.state/message.queued; older runtimes deliver neither and this
+        // is undefined (→ nix-v1 fallback).
+        const clientContext = (privateData as { clientContext?: unknown } | undefined)?.clientContext
         console.log("[agentweave-bridge] event:", e.type, "sessionKey:", e.sessionKey, "source:", e.source)
         try {
           switch (e.type) {
@@ -495,7 +543,7 @@ export function createAgentWeaveBridgeService() {
               // Prefer upstream attribution (e.g. Paperclip/Conductor) when the
               // gateway forwarded an agentweave.context.v1 bag; otherwise keep
               // the local nix-v1 fallback derived above.
-              const upstream = resolveUpstreamContext((e as { clientContext?: unknown }).clientContext)
+              const upstream = resolveUpstreamContext(clientContext)
               const effectiveSessionId = upstream?.sessionId ?? sessionId
               const effectiveAgentId = upstream?.agentId ?? agentId
               const effectiveAgentType = upstream?.agentType ?? agentType
@@ -780,7 +828,7 @@ export function createAgentWeaveBridgeService() {
               // the session, and end it on the idle transition. Non-subagent
               // keys only; subagent sessions are handled above.
               if (!sessionKey.includes(":subagent:")) {
-                const upstream = resolveUpstreamContext((e as { clientContext?: unknown }).clientContext)
+                const upstream = resolveUpstreamContext(clientContext)
                 if (state === "processing" && upstream && !activeTurns.has(sessionKey)) {
                   startUpstreamRootSpanFromSessionState(e as Record<string, unknown>, sessionKey, upstream, config)
                 } else if (state === "idle") {
