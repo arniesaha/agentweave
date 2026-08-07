@@ -712,16 +712,28 @@ async def get_agent_health_config():
 # ---------------------------------------------------------------------------
 
 def _extract_parent_context(traceparent: str | None):
-    """Parse a W3C traceparent header into an OTel context for span linking."""
+    """Parse a W3C traceparent header into an OTel context for span linking.
+
+    Returns ``None`` when no usable parent can be recovered, so callers fall
+    back to emitting a root span.  A malformed header is expected and logged at
+    debug; anything else means the propagator API itself broke and is logged as
+    a warning, since silently rooting every span is how #246 went unnoticed.
+    """
     if not traceparent:
         return None
+    from opentelemetry import propagate, trace as _otel_trace
+
     try:
-        from opentelemetry.propagators.textmap import DictGetter
-        from opentelemetry import propagate
-        ctx = propagate.extract(carrier={"traceparent": traceparent}, getter=DictGetter())
-        return ctx
-    except Exception:
+        ctx = propagate.extract(carrier={"traceparent": traceparent})
+    except Exception:  # pragma: no cover — propagator API breakage
+        logger.warning("traceparent extraction failed", exc_info=True)
         return None
+
+    span_ctx = _otel_trace.get_current_span(ctx).get_span_context()
+    if not span_ctx.is_valid:
+        logger.debug("ignoring malformed traceparent: %r", traceparent)
+        return None
+    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +838,39 @@ async def delete_prompt(name: str):
     return {"ok": True, "deleted": deleted, "name": name}
 
 
+def _event_start_time_ns(ts) -> int:
+    """Convert a buffered hook event's ms timestamp to epoch nanoseconds.
+
+    Falls back to wall clock when the timestamp is missing or unparseable, so
+    one corrupt line in the buffer can't fail the whole batch.
+    """
+    try:
+        return int(ts) * 1_000_000
+    except (TypeError, ValueError):
+        return time.time_ns()
+
+
+def _hook_attribution(body: dict) -> dict[str, str]:
+    """Build the ``prov.*`` agent-attribution attributes for a hook span.
+
+    Hook spans previously carried only session id and tool name, so they could
+    not be attributed to an agent or joined to LLM spans on any dimension
+    (#247).  Fields absent from the body are omitted rather than written as
+    empty strings, keeping older installed hook scripts working.
+    """
+    attrs: dict[str, str] = {"prov.harness": "claude-code"}
+    for key, field in (
+        ("prov.agent.id", "agent_id"),
+        ("prov.agent.type", "agent_type"),
+        ("prov.project", "project"),
+        ("prov.cwd", "cwd"),
+    ):
+        value = body.get(field)
+        if value:
+            attrs[key] = str(value)
+    return attrs
+
+
 @app.post("/hooks/span", include_in_schema=True)
 async def hooks_span(body: dict):
     """Receive a single span from Claude Code hooks (e.g., SubagentStop).
@@ -842,6 +887,9 @@ async def hooks_span(body: dict):
     with tracer.start_as_current_span(span_name, context=parent_ctx) as span:
         span.set_attribute("prov.session.id", session_id)
         span.set_attribute("prov.hook.source", "claude-code")
+        for key, value in _hook_attribution(body).items():
+            span.set_attribute(key, value)
+        # Explicit attributes are applied last so callers can override.
         for key, value in attributes.items():
             if value is not None:
                 span.set_attribute(key, str(value) if not isinstance(value, (int, float, bool)) else value)
@@ -861,31 +909,51 @@ async def hooks_batch(body: dict):
     session_id = body.get("session_id", "")
     events = body.get("events", [])
     parent_ctx = _extract_parent_context(body.get("traceparent"))
+    attribution = _hook_attribution(body)
 
     spans_created = 0
     for event in events:
         event_type = event.get("event", "unknown")
         ts = event.get("ts")
-        data = event.get("data", {})
+        data = event.get("data")
+        if not isinstance(data, dict):
+            # A corrupt buffer line shouldn't cost us the rest of the batch.
+            data = {}
 
         span_name = f"hook.{event_type}"
-        with tracer.start_as_current_span(span_name, context=parent_ctx) as span:
-            span.set_attribute("prov.session.id", session_id or event.get("session_id", ""))
-            span.set_attribute("prov.hook.source", "claude-code")
-            span.set_attribute("prov.hook.event_type", event_type)
-            if ts:
-                span.set_attribute("prov.hook.timestamp_ms", ts)
+        # Stamp at event time, not export time: the Stop hook batches a whole
+        # session's buffer, so wall-clock here collapses every tool call in the
+        # session to the same instant (#248).  The buffer records one timestamp
+        # per event, so these are point-in-time spans — end them at start_time
+        # rather than letting them run to the export moment, which would report
+        # the whole buffering delay as tool latency.
+        start_time = _event_start_time_ns(ts)
+        # end_on_exit=False so the span can be pinned to start_time; the
+        # try/finally preserves the context manager's guarantee that it ends.
+        with tracer.start_as_current_span(
+            span_name, context=parent_ctx, start_time=start_time, end_on_exit=False
+        ) as span:
+            try:
+                span.set_attribute("prov.session.id", session_id or event.get("session_id", ""))
+                span.set_attribute("prov.hook.source", "claude-code")
+                span.set_attribute("prov.hook.event_type", event_type)
+                for key, value in attribution.items():
+                    span.set_attribute(key, value)
+                if ts:
+                    span.set_attribute("prov.hook.timestamp_ms", ts)
 
-            # Extract tool use data if present
-            tool_name = data.get("tool_name") or data.get("toolName")
-            if tool_name:
-                span.set_attribute("prov.tool.name", tool_name)
-            tool_input = data.get("tool_input") or data.get("toolInput")
-            if tool_input and isinstance(tool_input, str):
-                span.set_attribute("prov.tool.input_preview", tool_input[:512])
-            tool_result = data.get("tool_result") or data.get("toolResult")
-            if tool_result and isinstance(tool_result, str):
-                span.set_attribute("prov.tool.result_preview", tool_result[:512])
+                # Extract tool use data if present
+                tool_name = data.get("tool_name") or data.get("toolName")
+                if tool_name:
+                    span.set_attribute("prov.tool.name", tool_name)
+                tool_input = data.get("tool_input") or data.get("toolInput")
+                if tool_input and isinstance(tool_input, str):
+                    span.set_attribute("prov.tool.input_preview", tool_input[:512])
+                tool_result = data.get("tool_result") or data.get("toolResult")
+                if tool_result and isinstance(tool_result, str):
+                    span.set_attribute("prov.tool.result_preview", tool_result[:512])
+            finally:
+                span.end(end_time=start_time)
 
         spans_created += 1
 
