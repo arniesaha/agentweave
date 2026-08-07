@@ -142,6 +142,25 @@ def _context_for_trace_id(trace_id_int: int):
     return _trace.set_span_in_context(NonRecordingSpan(span_ctx))
 
 
+def _llm_parent_context(det_trace_id_int: int | None, traceparent: str | None):
+    """Resolve the parent context for an LLM span.
+
+    Precedence:
+
+    1. ``x-agentweave-trace-id`` — an explicit override callers use to pin
+       retries to a trace; the openclaw bridge relies on it, so it stays
+       ahead of everything else.
+    2. An inbound W3C ``traceparent`` — what Claude Code sends when
+       ``CLAUDE_CODE_PROPAGATE_TRACEPARENT`` is set. Parenting off it puts the
+       proxy's LLM span in the same trace as the native
+       ``claude_code.interaction`` span instead of a disconnected root (#245).
+    3. Neither — a root span, as before.
+    """
+    if det_trace_id_int is not None:
+        return _context_for_trace_id(det_trace_id_int)
+    return _extract_parent_context(traceparent)
+
+
 _SPAN_ID_RE = re.compile(r'^[0-9a-fA-F]{16}$')
 
 
@@ -268,7 +287,7 @@ _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 app = FastAPI(
     title="AgentWeave Proxy",
     description="Multi-provider AI observability proxy (Anthropic + Google Gemini + OpenAI)",
-    version="0.3.2",
+    version="0.3.3",
 )
 
 
@@ -1344,7 +1363,7 @@ async def _request_and_trace(
     task_label: str | None = None,
 ) -> Response:
     tracer = get_tracer()
-    _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
+    _span_ctx = _llm_parent_context(det_trace_id_int, traceparent)
     _links = _build_parent_links(parent_trace_id_raw, parent_span_id_raw)
     with tracer.start_as_current_span(f"{schema.SPAN_PREFIX_LLM}.{model}", context=_span_ctx, links=_links) as span:
         _set_request_attrs(span, model=model, provider=provider,
@@ -1453,7 +1472,7 @@ async def _stream_and_trace(
     task_label: str | None = None,
 ) -> AsyncIterator[bytes]:
     tracer = get_tracer()
-    _span_ctx = _context_for_trace_id(det_trace_id_int) if det_trace_id_int is not None else None
+    _span_ctx = _llm_parent_context(det_trace_id_int, traceparent)
     _links = _build_parent_links(parent_trace_id_raw, parent_span_id_raw)
     span = tracer.start_span(f"{schema.SPAN_PREFIX_LLM}.{model}", context=_span_ctx, links=_links)
     _set_request_attrs(span, model=model, provider=provider,

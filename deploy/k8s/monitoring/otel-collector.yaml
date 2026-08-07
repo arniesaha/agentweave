@@ -44,6 +44,26 @@ data:
         limit_mib: 384
         spike_limit_mib: 128
 
+      # Claude Code's native OTel spans carry account PII by default —
+      # user.email, user.id, user.account_uuid, user.account_id and
+      # organization.id appear on claude_code.interaction with no content
+      # flags enabled. Enabling native tracing is not optional for us: it is
+      # the only way Claude Code emits the traceparent that lets proxy spans
+      # join the interaction trace (#245). So the PII is stripped here, at the
+      # ingest boundary, before anything reaches Tempo.
+      attributes/strip_pii:
+        actions:
+          - key: user.email
+            action: delete
+          - key: user.id
+            action: delete
+          - key: user.account_uuid
+            action: delete
+          - key: user.account_id
+            action: delete
+          - key: organization.id
+            action: delete
+
     exporters:
       otlphttp/tempo:
         endpoint: http://tempo.monitoring.svc.cluster.local:4318
@@ -55,7 +75,7 @@ data:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, batch]
+          processors: [memory_limiter, attributes/strip_pii, batch]
           exporters: [otlphttp/tempo, debug]
 
 ---
