@@ -273,6 +273,11 @@ def _inject_anthropic_key(forward_headers: dict[str, str], query_string: str) ->
 # Global session context — set at startup from env, overrideable via POST /session
 _session_context: dict[str, str] = {
     k: v for k, v in {
+        # Records who the global belongs to. Session identity from this dict is
+        # only applied to requests from the same agent (see _set_request_attrs),
+        # so an env-configured single-tenant proxy must name its agent here or
+        # its session id will not be applied to anything.
+        "prov.agent.id": os.getenv("AGENTWEAVE_AGENT_ID", ""),
         "prov.session.id": os.getenv("AGENTWEAVE_SESSION_ID", ""),
         "prov.parent.session.id": os.getenv("AGENTWEAVE_PARENT_SESSION_ID", ""),
         "prov.task.label": os.getenv("AGENTWEAVE_TASK_LABEL", ""),
@@ -281,13 +286,22 @@ _session_context: dict[str, str] = {
     }.items() if v
 }
 
+# Attributes in _session_context that identify a specific session rather than
+# acting as a config default. These are only applied to requests from the agent
+# that wrote the global, so one caller's session can't be stamped on another's.
+_GLOBAL_IDENTITY_ATTRS = frozenset({
+    schema.SESSION_ID,
+    schema.PROV_SESSION_ID,
+    schema.PROV_PARENT_SESSION_ID,
+})
+
 # Gemini model name from URL, e.g. /v1beta/models/gemini-2.5-pro:generateContent
 _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 
 app = FastAPI(
     title="AgentWeave Proxy",
     description="Multi-provider AI observability proxy (Anthropic + Google Gemini + OpenAI)",
-    version="0.3.3",
+    version="0.3.4",
 )
 
 
@@ -2097,9 +2111,25 @@ def _set_request_attrs(
         _explicit_session_attrs.add(schema.PROV_PARENT_SESSION_ID)
     if agent_type is not None:
         _explicit_session_attrs.add(schema.PROV_AGENT_TYPE)
+    # Session identity from the process-global is scoped to the agent that set
+    # it. The bridge POSTs /session with force:false on every main-agent turn,
+    # which writes this global; without scoping, any caller that sends no
+    # X-AgentWeave-Session-Id inherits it — Claude Code spans were being
+    # stamped with openclaw cron session ids. Project and similar defaults are
+    # not identity and still apply across agents.
+    _ctx_owner = _session_context.get(schema.PROV_AGENT_ID)
+    _owns_global = bool(_ctx_owner) and _ctx_owner == agent_id
     for k, v in _session_context.items():
-        if k not in _explicit_session_attrs:
-            span.set_attribute(k, v)
+        if k in _explicit_session_attrs:
+            continue
+        if k in _GLOBAL_IDENTITY_ATTRS and not _owns_global:
+            continue
+        span.set_attribute(k, v)
+    # The global stores prov.session.id only; mirror it onto session.id so the
+    # owning agent gets the same pair an explicit session id would produce.
+    if _owns_global and schema.PROV_SESSION_ID in _session_context:
+        if schema.SESSION_ID not in _explicit_session_attrs:
+            span.set_attribute(schema.SESSION_ID, _session_context[schema.PROV_SESSION_ID])
 
     # Only fall back to cfg.agent_id if no per-request agent_id was provided via header
     if not agent_id:
