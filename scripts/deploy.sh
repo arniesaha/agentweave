@@ -114,16 +114,29 @@ kubectl rollout status deployment/agentweave-proxy -n "${NAMESPACE}" --timeout="
 ts "Rollout complete"
 
 # --- Step 5: Health check ---
-ts "Checking proxy health at ${HEALTH_URL}"
+# The NodePort still resolves to the old pod while it drains, so a bare 200
+# here can report the *previous* build as a successful deploy — observed on
+# the 0.3.2 rollout, where this printed version 0.3.1 and exited 0. Require
+# the reported version to match what we just built.
+ts "Checking proxy health at ${HEALTH_URL} (expecting version ${VERSION})"
 for i in $(seq 1 10); do
-  if curl -sf --max-time 5 "${HEALTH_URL}" >/dev/null 2>&1; then
-    HEALTH_RESP=$(curl -sf --max-time 5 "${HEALTH_URL}")
-    ts "Health check passed: ${HEALTH_RESP}"
-    ts "Deploy successful"
-    exit 0
+  if HEALTH_RESP=$(curl -sf --max-time 5 "${HEALTH_URL}" 2>/dev/null); then
+    LIVE_VERSION="$(printf '%s' "${HEALTH_RESP}" \
+      | sed -nE 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+    if [ "${LIVE_VERSION}" = "${VERSION}" ]; then
+      ts "Health check passed: ${HEALTH_RESP}"
+      ts "Deploy successful"
+      exit 0
+    fi
+    ts "Health check attempt ${i}/10 — serving ${LIVE_VERSION:-unknown}, waiting for ${VERSION}"
+    sleep 3
+    continue
   fi
   ts "Health check attempt ${i}/10 — retrying in 3s"
   sleep 3
 done
 
-fail "Health check failed after 10 attempts at ${HEALTH_URL}"
+fail "Health check failed after 10 attempts at ${HEALTH_URL}
+Last response: ${HEALTH_RESP:-<none>}
+Expected version ${VERSION}. A healthy endpoint serving an older version means
+the rollout did not fully replace the previous pods."
