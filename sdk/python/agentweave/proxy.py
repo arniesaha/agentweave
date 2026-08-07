@@ -712,16 +712,28 @@ async def get_agent_health_config():
 # ---------------------------------------------------------------------------
 
 def _extract_parent_context(traceparent: str | None):
-    """Parse a W3C traceparent header into an OTel context for span linking."""
+    """Parse a W3C traceparent header into an OTel context for span linking.
+
+    Returns ``None`` when no usable parent can be recovered, so callers fall
+    back to emitting a root span.  A malformed header is expected and logged at
+    debug; anything else means the propagator API itself broke and is logged as
+    a warning, since silently rooting every span is how #246 went unnoticed.
+    """
     if not traceparent:
         return None
+    from opentelemetry import propagate, trace as _otel_trace
+
     try:
-        from opentelemetry.propagators.textmap import DictGetter
-        from opentelemetry import propagate
-        ctx = propagate.extract(carrier={"traceparent": traceparent}, getter=DictGetter())
-        return ctx
-    except Exception:
+        ctx = propagate.extract(carrier={"traceparent": traceparent})
+    except Exception:  # pragma: no cover — propagator API breakage
+        logger.warning("traceparent extraction failed", exc_info=True)
         return None
+
+    span_ctx = _otel_trace.get_current_span(ctx).get_span_context()
+    if not span_ctx.is_valid:
+        logger.debug("ignoring malformed traceparent: %r", traceparent)
+        return None
+    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +838,27 @@ async def delete_prompt(name: str):
     return {"ok": True, "deleted": deleted, "name": name}
 
 
+def _hook_attribution(body: dict) -> dict[str, str]:
+    """Build the ``prov.*`` agent-attribution attributes for a hook span.
+
+    Hook spans previously carried only session id and tool name, so they could
+    not be attributed to an agent or joined to LLM spans on any dimension
+    (#247).  Fields absent from the body are omitted rather than written as
+    empty strings, keeping older installed hook scripts working.
+    """
+    attrs: dict[str, str] = {"prov.harness": "claude-code"}
+    for key, field in (
+        ("prov.agent.id", "agent_id"),
+        ("prov.agent.type", "agent_type"),
+        ("prov.project", "project"),
+        ("prov.cwd", "cwd"),
+    ):
+        value = body.get(field)
+        if value:
+            attrs[key] = str(value)
+    return attrs
+
+
 @app.post("/hooks/span", include_in_schema=True)
 async def hooks_span(body: dict):
     """Receive a single span from Claude Code hooks (e.g., SubagentStop).
@@ -842,6 +875,9 @@ async def hooks_span(body: dict):
     with tracer.start_as_current_span(span_name, context=parent_ctx) as span:
         span.set_attribute("prov.session.id", session_id)
         span.set_attribute("prov.hook.source", "claude-code")
+        for key, value in _hook_attribution(body).items():
+            span.set_attribute(key, value)
+        # Explicit attributes are applied last so callers can override.
         for key, value in attributes.items():
             if value is not None:
                 span.set_attribute(key, str(value) if not isinstance(value, (int, float, bool)) else value)
@@ -861,6 +897,7 @@ async def hooks_batch(body: dict):
     session_id = body.get("session_id", "")
     events = body.get("events", [])
     parent_ctx = _extract_parent_context(body.get("traceparent"))
+    attribution = _hook_attribution(body)
 
     spans_created = 0
     for event in events:
@@ -869,10 +906,18 @@ async def hooks_batch(body: dict):
         data = event.get("data", {})
 
         span_name = f"hook.{event_type}"
-        with tracer.start_as_current_span(span_name, context=parent_ctx) as span:
+        # Stamp at event time, not export time: the Stop hook batches a whole
+        # session's buffer, so wall-clock here collapses every tool call in the
+        # session to the same instant (#248).
+        start_time = int(ts) * 1_000_000 if ts else None
+        with tracer.start_as_current_span(
+            span_name, context=parent_ctx, start_time=start_time
+        ) as span:
             span.set_attribute("prov.session.id", session_id or event.get("session_id", ""))
             span.set_attribute("prov.hook.source", "claude-code")
             span.set_attribute("prov.hook.event_type", event_type)
+            for key, value in attribution.items():
+                span.set_attribute(key, value)
             if ts:
                 span.set_attribute("prov.hook.timestamp_ms", ts)
 

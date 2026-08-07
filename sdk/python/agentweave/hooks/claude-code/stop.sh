@@ -15,9 +15,14 @@ if [ -f "$BUFFER" ]; then
   if [ -n "$EVENTS" ]; then
     # Read traceparent from env if the agentweave-bridge plugin set it
     TP="${AGENTWEAVE_TRACEPARENT:-}"
+    # Agent identity so hook spans are attributable and joinable (#247).
+    # Empty values are dropped proxy-side rather than written as empty attrs.
+    AID="${AGENTWEAVE_AGENT_ID:-}"
+    ATYPE="${AGENTWEAVE_AGENT_TYPE:-}"
+    PROJ="${AGENTWEAVE_PROJECT:-}"
     curl -s -X POST "$PROXY/hooks/batch" \
       -H "Content-Type: application/json" \
-      -d "{\"session_id\":\"${SID}\",\"traceparent\":\"${TP}\",\"events\":$(echo "$EVENTS" | jq -s .)}"
+      -d "{\"session_id\":\"${SID}\",\"traceparent\":\"${TP}\",\"agent_id\":\"${AID}\",\"agent_type\":\"${ATYPE}\",\"project\":\"${PROJ}\",\"cwd\":\"${PWD}\",\"events\":$(echo "$EVENTS" | jq -s .)}"
   fi
   rm -f "$EXPORT_FILE"
 fi

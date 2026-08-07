@@ -8,14 +8,19 @@ SID="${CLAUDE_SESSION_ID:-}"
 INPUT=$(cat)
 
 # Use jq for safe JSON composition; fall back to raw curl if unavailable.
+# Agent identity so subagent spans are attributable and joinable (#247).
+AID="${AGENTWEAVE_AGENT_ID:-}"
+PROJ="${AGENTWEAVE_PROJECT:-}"
+
 if command -v jq >/dev/null 2>&1; then
   PAYLOAD=$(echo "$INPUT" | jq -c --arg sid "$SID" --arg psid "${CLAUDE_PARENT_SESSION_ID:-}" \
-    '{span_name:"subagent.stop", session_id:$sid, attributes:{"prov.parent.session.id":$psid, "prov.agent.type":"subagent", hook_data:.}}')
+    --arg aid "$AID" --arg proj "$PROJ" --arg cwd "$PWD" \
+    '{span_name:"subagent.stop", session_id:$sid, agent_id:$aid, project:$proj, cwd:$cwd, attributes:{"prov.parent.session.id":$psid, "prov.agent.type":"subagent", hook_data:.}}')
   curl -s -X POST "$PROXY/hooks/span" \
     -H "Content-Type: application/json" \
     -d "$PAYLOAD" &
 else
   curl -s -X POST "$PROXY/hooks/span" \
     -H "Content-Type: application/json" \
-    -d "{\"span_name\":\"subagent.stop\",\"session_id\":\"${SID}\",\"attributes\":{\"prov.parent.session.id\":\"${CLAUDE_PARENT_SESSION_ID:-}\",\"prov.agent.type\":\"subagent\",\"hook_data\":$INPUT}}" &
+    -d "{\"span_name\":\"subagent.stop\",\"session_id\":\"${SID}\",\"agent_id\":\"${AID}\",\"project\":\"${PROJ}\",\"cwd\":\"${PWD}\",\"attributes\":{\"prov.parent.session.id\":\"${CLAUDE_PARENT_SESSION_ID:-}\",\"prov.agent.type\":\"subagent\",\"hook_data\":$INPUT}}" &
 fi
