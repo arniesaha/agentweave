@@ -918,6 +918,107 @@ class TestSubAgentAttributionHeaders:
         assert "x-agentweave-turn-depth" in _SKIP_HEADERS_ALWAYS
 
 
+class TestGlobalSessionContextLeak:
+    """The process-global session context must not leak across callers.
+
+    POST /session with force:false writes a process-global _session_context.
+    _set_request_attrs then stamps every key of that global onto any span that
+    didn't set the key explicitly, so a request from an unrelated agent that
+    sends no X-AgentWeave-Session-Id inherits whoever wrote the global last.
+
+    On the shared NAS proxy the openclaw bridge writes it on every main-agent
+    turn (service.ts: force is false when there's no upstream and the agent
+    isn't a subagent), so Claude Code spans were being stamped with openclaw
+    cron session ids like agent:main:cron:<uuid>:run:<uuid>.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_global(self):
+        from agentweave import proxy as proxy_mod
+
+        saved = dict(proxy_mod._session_context)
+        yield
+        proxy_mod._session_context = saved
+
+    OPENCLAW_SESSION = "agent:main:cron:e2344169:run:4af17ab6"
+
+    def _attrs(self, monkeypatch, global_ctx, **kwargs):
+        from agentweave import proxy as proxy_mod
+        from agentweave.config import AgentWeaveConfig
+
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        proxy_mod._session_context = global_ctx
+        span = _FakeSpan()
+        proxy_mod._set_request_attrs(
+            span, model="claude-opus-5", provider="anthropic",
+            agent_model="claude-opus-5", path="v1/messages", body={},
+            **kwargs,
+        )
+        return span.attrs
+
+    def test_session_id_does_not_leak_to_a_different_agent(self, monkeypatch):
+        """A global written by nix-v1 must not attach to claude-code-nas spans."""
+        attrs = self._attrs(
+            monkeypatch,
+            {"prov.agent.id": "nix-v1", "prov.session.id": self.OPENCLAW_SESSION},
+            agent_id="claude-code-nas", session_id=None,
+        )
+
+        assert attrs.get("prov.session.id") != self.OPENCLAW_SESSION
+        assert attrs.get("session.id") != self.OPENCLAW_SESSION
+
+    def test_session_id_still_applies_to_the_owning_agent(self, monkeypatch):
+        """openclaw's own spans must keep the session id it set (no regression)."""
+        attrs = self._attrs(
+            monkeypatch,
+            {"prov.agent.id": "nix-v1", "prov.session.id": self.OPENCLAW_SESSION},
+            agent_id="nix-v1", session_id=None,
+        )
+
+        assert attrs["prov.session.id"] == self.OPENCLAW_SESSION
+        assert attrs["session.id"] == self.OPENCLAW_SESSION
+
+    def test_parent_session_id_is_scoped_too(self, monkeypatch):
+        """Parent session id is identity as well and must not cross agents."""
+        attrs = self._attrs(
+            monkeypatch,
+            {"prov.agent.id": "nix-v1", "prov.parent.session.id": "parent-abc"},
+            agent_id="claude-code-nas",
+        )
+
+        assert attrs.get("prov.parent.session.id") != "parent-abc"
+
+    def test_unowned_global_does_not_supply_session_identity(self, monkeypatch):
+        """With no owner recorded, ownership can't be checked — so don't apply."""
+        attrs = self._attrs(
+            monkeypatch,
+            {"prov.session.id": self.OPENCLAW_SESSION},
+            agent_id="claude-code-nas", session_id=None,
+        )
+
+        assert attrs.get("prov.session.id") != self.OPENCLAW_SESSION
+
+    def test_explicit_session_id_still_wins(self, monkeypatch):
+        """A caller's own session id is unaffected by the global."""
+        attrs = self._attrs(
+            monkeypatch,
+            {"prov.agent.id": "nix-v1", "prov.session.id": self.OPENCLAW_SESSION},
+            agent_id="claude-code-nas", session_id="my-own-session",
+        )
+
+        assert attrs["prov.session.id"] == "my-own-session"
+
+    def test_non_identity_globals_still_apply_across_agents(self, monkeypatch):
+        """Project is a default, not identity — it may still cross agents."""
+        attrs = self._attrs(
+            monkeypatch,
+            {"prov.agent.id": "nix-v1", "prov.project": "global-project"},
+            agent_id="claude-code-nas",
+        )
+
+        assert attrs["prov.project"] == "global-project"
+
+
 class TestLLMSpanParentContext:
     """LLM spans parent off an inbound traceparent (#245).
 
@@ -1185,11 +1286,18 @@ class TestSessionEndpoint:
         importlib.reload(proxy_module)
 
     def test_session_context_applied_to_spans(self, monkeypatch):
-        """After POST /session, _set_request_attrs applies context attrs to spans."""
+        """After POST /session, _set_request_attrs applies context attrs to spans.
+
+        The context must name its owning agent for session identity to apply —
+        see TestGlobalSessionContextLeak. Previously this test set no
+        prov.agent.id and still expected the session id on an agent-1 span,
+        which is the cross-caller leak itself.
+        """
         from agentweave.config import AgentWeaveConfig
         monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
         # Set the global context
         monkeypatch.setattr(proxy_module, "_session_context", {
+            "prov.agent.id": "agent-1",
             "prov.session.id": "ctx-sess-99",
             "prov.task.label": "run tests",
         })
