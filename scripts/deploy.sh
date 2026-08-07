@@ -4,7 +4,6 @@ set -euo pipefail
 
 # --- Configuration (override via env) ---
 REGISTRY="${AGENTWEAVE_REGISTRY:-localhost:5000}"
-IMAGE="${REGISTRY}/agentweave-proxy:latest"
 NAMESPACE="${AGENTWEAVE_NAMESPACE:-agentweave}"
 MONITORING_NAMESPACE="${AGENTWEAVE_MONITORING_NAMESPACE:-monitoring}"
 NODE_IP="${AGENTWEAVE_NODE_IP:-192.168.1.70}"
@@ -17,16 +16,46 @@ ts() { printf "[%s] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
 fail() { ts "ERROR: $*" >&2; exit 1; }
 
+# --- Step 0: Resolve and verify the version being deployed ---
+# The proxy ran as :latest for months, so the running build was not
+# identifiable from the cluster and a rollout could not be correlated to a
+# commit. The SDK version is the single source of truth; the manifest pins it
+# and this check refuses to deploy if the two have drifted.
+MANIFEST="${REPO_ROOT}/deploy/k8s/deployment.yaml"
+VERSION="$(grep -E '^version *= *"' "${REPO_ROOT}/sdk/python/pyproject.toml" \
+  | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+[ -n "${VERSION}" ] || fail "Could not read version from sdk/python/pyproject.toml"
+
+IMAGE="${REGISTRY}/agentweave-proxy:${VERSION}"
+MANIFEST_IMAGE="$(grep -E 'image: .*agentweave-proxy:' "${MANIFEST}" \
+  | head -1 | sed -E 's/.*image: *//')"
+
+if [ "${MANIFEST_IMAGE}" != "${IMAGE}" ]; then
+  fail "Version drift: pyproject.toml is ${VERSION} (image ${IMAGE}) but
+${MANIFEST} pins ${MANIFEST_IMAGE}.
+Bump both together, or set AGENTWEAVE_REGISTRY to match."
+fi
+ts "Deploying version ${VERSION}"
+
+# Captured before any apply — afterwards the spec already holds the new tag.
+RUNNING_IMAGE="$(kubectl get deployment/agentweave-proxy -n "${NAMESPACE}" \
+  -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+
 # --- Step 1: Build Docker image ---
 ts "Building Docker image: ${IMAGE}"
-docker build -t "${IMAGE}" -f "${REPO_ROOT}/deploy/docker/Dockerfile" "${REPO_ROOT}" \
+docker build -t "${IMAGE}" -t "${REGISTRY}/agentweave-proxy:latest" \
+  -f "${REPO_ROOT}/deploy/docker/Dockerfile" "${REPO_ROOT}" \
   || fail "Docker build failed"
 ts "Build complete"
 
 # --- Step 2: Push to local registry ---
+# :latest is still pushed so anything pinned to it keeps resolving, but the
+# deployment tracks the versioned tag.
 ts "Pushing image to ${REGISTRY}"
 docker push "${IMAGE}" \
   || fail "Docker push failed — is the registry at ${REGISTRY} running?"
+docker push "${REGISTRY}/agentweave-proxy:latest" \
+  || fail "Docker push of :latest failed"
 ts "Push complete"
 
 # --- Step 3: Deploy to k8s ---
@@ -66,9 +95,17 @@ ts "Validating secret fields"
 AGENTWEAVE_NAMESPACE="${NAMESPACE}" bash "${REPO_ROOT}/deploy/validate-secrets.sh" \
   || fail "Secret validation failed — refusing to continue deploy"
 
-# Restart deployment to pick up :latest image
-kubectl rollout restart deployment/agentweave-proxy -n "${NAMESPACE}"
-ts "Manifests applied, rollout restarting"
+# A changed image tag makes `kubectl apply` roll the deployment on its own.
+# Only force a restart when the tag is unchanged — redeploying the same
+# version after a rebuild — so we don't trigger two rollouts back to back.
+# RUNNING_IMAGE was captured before the apply above.
+if [ "${RUNNING_IMAGE}" = "${IMAGE}" ]; then
+  ts "Image tag unchanged (${IMAGE}) — forcing restart to pick up rebuild"
+  kubectl rollout restart deployment/agentweave-proxy -n "${NAMESPACE}"
+else
+  ts "Image tag changed (${RUNNING_IMAGE:-none} -> ${IMAGE}) — apply will roll"
+fi
+ts "Manifests applied"
 
 # --- Step 4: Wait for rollout ---
 ts "Waiting for rollout to complete (timeout: ${ROLLOUT_TIMEOUT})"
