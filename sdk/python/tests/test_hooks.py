@@ -399,6 +399,64 @@ class TestHooksSpanContent:
         assert starts[0] == 1711234567890 * 1_000_000
         assert starts[1] == 1711234599999 * 1_000_000
 
+    def test_hooks_batch_emits_zero_duration_for_point_events(self, client, captured_spans):
+        """A single ts yields a point-in-time span, not one lasting until export.
+
+        Setting start_time alone makes the span end at wall clock, so an event
+        buffered an hour before the Stop hook reports a one-hour duration and
+        poisons the spanmetrics latency histograms.
+        """
+        import time
+
+        one_hour_ago_ms = int(time.time() * 1000) - 3_600_000
+
+        client.post(
+            "/hooks/batch",
+            json={
+                "session_id": "sess-1",
+                "events": [
+                    {"event": "post_tool_use", "ts": one_hour_ago_ms, "data": {"tool_name": "Bash"}},
+                ],
+            },
+        )
+
+        span = captured_spans.get_finished_spans()[0]
+        assert span.end_time == span.start_time
+
+    def test_hooks_batch_survives_malformed_ts(self, client, captured_spans):
+        """A non-numeric ts degrades to wall clock instead of 500ing the batch."""
+        response = client.post(
+            "/hooks/batch",
+            json={
+                "session_id": "sess-1",
+                "events": [
+                    {"event": "post_tool_use", "ts": "not-a-number", "data": {"tool_name": "Bash"}},
+                    {"event": "post_tool_use", "ts": 1711234567890, "data": {"tool_name": "Read"}},
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["spans_created"] == 2
+        assert len(captured_spans.get_finished_spans()) == 2
+
+    def test_hooks_batch_survives_non_dict_event_data(self, client, captured_spans):
+        """A corrupt buffer line can't 500 the batch or leak an unended span."""
+        response = client.post(
+            "/hooks/batch",
+            json={
+                "session_id": "sess-1",
+                "events": [
+                    {"event": "post_tool_use", "ts": 1711234567890, "data": "corrupt-line"},
+                    {"event": "post_tool_use", "ts": 1711234567891, "data": {"tool_name": "Read"}},
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        spans = captured_spans.get_finished_spans()
+        assert len(spans) == 2, "both spans must be ended and exported"
+
     def test_hooks_batch_falls_back_to_wall_clock_without_ts(self, client, captured_spans):
         """An event with no ts still produces a span with a sane start time."""
         client.post(
@@ -504,6 +562,16 @@ class TestHooksShellScripts:
         assert payload["agent_id"] == "claude-code-nas"
         assert payload["agent_type"] == "main"
         assert payload["project"] == "agentweave"
+
+    def test_stop_hook_payload_survives_quotes_in_values(self, tmp_path):
+        """A cwd or project containing quotes must not corrupt the JSON body."""
+        payload = self._run_stop_hook(
+            tmp_path,
+            {"AGENTWEAVE_PROJECT": 'we"ird\\proj'},
+        )
+
+        assert payload["project"] == 'we"ird\\proj'
+        assert payload["events"][0]["data"]["tool_name"] == "Bash"
 
     def test_stop_hook_omits_unset_attribution(self, tmp_path):
         """Unset agent identity yields empty strings the proxy then drops."""
