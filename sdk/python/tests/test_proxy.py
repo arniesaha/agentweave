@@ -918,6 +918,73 @@ class TestSubAgentAttributionHeaders:
         assert "x-agentweave-turn-depth" in _SKIP_HEADERS_ALWAYS
 
 
+class TestLLMSpanParentContext:
+    """LLM spans parent off an inbound traceparent (#245).
+
+    Claude Code sends a traceparent when CLAUDE_CODE_PROPAGATE_TRACEPARENT is
+    set, but the proxy only recorded it as an attribute and started a fresh
+    root trace, so the native claude_code.interaction trace and the proxy's
+    llm span were two disconnected traces for the same request.
+    """
+
+    TP = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    TP_TRACE_ID = 0x4BF92F3577B34DA6A3CE929D0E0E4736
+    TP_SPAN_ID = 0x00F067AA0BA902B7
+
+    def _ctx_ids(self, ctx):
+        from opentelemetry import trace as otel_trace
+
+        sc = otel_trace.get_current_span(ctx).get_span_context()
+        return sc.trace_id, sc.span_id
+
+    def test_traceparent_becomes_the_parent_context(self):
+        """With no deterministic trace id, the inbound traceparent parents."""
+        from agentweave.proxy import _llm_parent_context
+
+        ctx = _llm_parent_context(None, self.TP)
+
+        assert ctx is not None
+        trace_id, span_id = self._ctx_ids(ctx)
+        assert trace_id == self.TP_TRACE_ID
+        assert span_id == self.TP_SPAN_ID
+
+    def test_deterministic_trace_id_still_wins(self):
+        """An explicit x-agentweave-trace-id overrides traceparent.
+
+        The openclaw bridge pins retries to a trace this way; traceparent must
+        not silently take that over.
+        """
+        from agentweave.proxy import _llm_parent_context
+
+        det = 0x11111111111111111111111111111111
+        ctx = _llm_parent_context(det, self.TP)
+
+        trace_id, _ = self._ctx_ids(ctx)
+        assert trace_id == det
+
+    def test_deterministic_trace_id_alone_unchanged(self):
+        """Existing behaviour with no traceparent is preserved."""
+        from agentweave.proxy import _llm_parent_context
+
+        det = 0x22222222222222222222222222222222
+        ctx = _llm_parent_context(det, None)
+
+        trace_id, _ = self._ctx_ids(ctx)
+        assert trace_id == det
+
+    def test_no_signals_yields_root(self):
+        """Neither signal present means a root span, as before."""
+        from agentweave.proxy import _llm_parent_context
+
+        assert _llm_parent_context(None, None) is None
+
+    def test_malformed_traceparent_yields_root(self):
+        """A malformed traceparent must not produce a bogus parent."""
+        from agentweave.proxy import _llm_parent_context
+
+        assert _llm_parent_context(None, "not-a-traceparent") is None
+
+
 class TestTraceparentPassthrough:
     """Verify W3C traceparent header is read, set on spans, and forwarded downstream (issue #44)."""
 
