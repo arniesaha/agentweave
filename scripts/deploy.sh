@@ -80,6 +80,17 @@ kubectl apply -f "${REPO_ROOT}/deploy/k8s/namespace.yaml"
 # Langfuse fanout overlay is applied manually after Langfuse v3 migration and a
 # real project API key are ready.
 kubectl apply -f "${REPO_ROOT}/deploy/k8s/monitoring/otel-collector.yaml"
+
+# A ConfigMap edit doesn't restart the pods that mount it, so collector config
+# changes silently didn't take effect — the PII-strip processor applied cleanly
+# and the collector kept running a config from ten weeks earlier. Stamp the pod
+# template with the config hash so apply rolls the deployment exactly when the
+# config actually changed.
+COLLECTOR_HASH="$(sha256sum "${REPO_ROOT}/deploy/k8s/monitoring/otel-collector.yaml" | cut -c1-16)"
+kubectl patch deployment/agentweave-otel-collector -n "${MONITORING_NAMESPACE}" \
+  -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"agentweave.dev/config-hash\":\"${COLLECTOR_HASH}\"}}}}}" \
+  >/dev/null || fail "Could not stamp collector config hash"
+
 kubectl rollout status deployment/agentweave-otel-collector \
   -n "${MONITORING_NAMESPACE}" --timeout="${ROLLOUT_TIMEOUT}" \
   || fail "OTel collector rollout did not complete within ${ROLLOUT_TIMEOUT}"
