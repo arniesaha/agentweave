@@ -1,0 +1,101 @@
+---
+# AgentWeave Normalizer — receives Claude Code's native OTLP-JSON spans,
+# normalizes them into the prov.* schema, and forwards to the OTel collector.
+#
+#   Claude Code --OTLP/JSON--> normalizer --OTLP--> collector --> Tempo
+#
+# Deployed with NO traffic pointed at it initially (rollout step 3 of
+# docs/superpowers/specs/2026-08-07-native-otel-normalization-design.md).
+# Traffic is cut over by repointing OTEL_EXPORTER_OTLP_ENDPOINT on the client;
+# rollback is repointing that one variable back at the collector.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentweave-normalizer
+  namespace: agentweave
+  labels:
+    app: agentweave-normalizer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentweave-normalizer
+  template:
+    metadata:
+      labels:
+        app: agentweave-normalizer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: normalizer
+          # Pinned to the SDK version, same convention as the proxy.
+          image: localhost:5000/agentweave-normalizer:0.3.5
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4318
+              name: otlp-http
+          env:
+            # In-cluster DNS rather than the hardcoded ClusterIP the bridge and
+            # Claude Code currently use — this pod is inside the cluster, so it
+            # does not need the host-reachable address.
+            - name: AGENTWEAVE_COLLECTOR_ENDPOINT
+              value: "http://agentweave-otel-collector.monitoring.svc.cluster.local:4318"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4318
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4318
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentweave-normalizer
+  namespace: agentweave
+  labels:
+    app: agentweave-normalizer
+spec:
+  type: ClusterIP
+  selector:
+    app: agentweave-normalizer
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+
+---
+# NodePort so Claude Code on the NAS host reaches the normalizer directly.
+# Host-to-ClusterIP routing on this cluster has been observed taking ~5s on a
+# cold path, which is not acceptable in a telemetry hot path.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentweave-normalizer-nodeport
+  namespace: agentweave
+  labels:
+    app: agentweave-normalizer
+spec:
+  type: NodePort
+  selector:
+    app: agentweave-normalizer
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      nodePort: 30419
