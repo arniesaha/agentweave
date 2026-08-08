@@ -918,6 +918,37 @@ class TestSubAgentAttributionHeaders:
         assert "x-agentweave-turn-depth" in _SKIP_HEADERS_ALWAYS
 
 
+class TestProvSourceTagging:
+    """Every span records which collector produced it (#249).
+
+    The migration to native-as-primary switches on prov.source. If only the
+    normalizer tagged its output, the switch would be asymmetric — proxy spans
+    inferred from service.name, native spans tagged explicitly. Both are
+    tagged so the flip is symmetric.
+    """
+
+    def test_proxy_llm_spans_are_tagged_as_proxy(self, monkeypatch):
+        from agentweave.config import AgentWeaveConfig
+        from agentweave.proxy import _set_request_attrs
+        from agentweave import schema
+
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        span = _FakeSpan()
+
+        _set_request_attrs(
+            span, model="claude-opus-5", provider="anthropic",
+            agent_id="claude-code-nas", agent_model="claude-opus-5",
+            path="v1/messages", body={},
+        )
+
+        assert span.attrs[schema.PROV_SOURCE] == schema.SOURCE_PROXY
+
+    def test_source_constants_are_distinct(self):
+        from agentweave import schema
+
+        assert schema.SOURCE_PROXY != schema.SOURCE_NATIVE
+
+
 class TestGlobalSessionContextLeak:
     """The process-global session context must not leak across callers.
 

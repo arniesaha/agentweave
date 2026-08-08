@@ -301,7 +301,7 @@ _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 app = FastAPI(
     title="AgentWeave Proxy",
     description="Multi-provider AI observability proxy (Anthropic + Google Gemini + OpenAI)",
-    version="0.3.5",
+    version="0.3.6",
 )
 
 
@@ -2093,6 +2093,11 @@ def _set_request_attrs(
     span.set_attribute(schema.GEN_AI_SYSTEM, provider)
     span.set_attribute(schema.GEN_AI_REQUEST_MODEL, agent_model)
     span.set_attribute(schema.GEN_AI_AGENT_NAME, agent_id)
+
+    # Records that this span came from the proxy rather than Claude Code's
+    # native exporter, so the two can be told apart without inferring from
+    # service.name (#249).
+    span.set_attribute(schema.PROV_SOURCE, schema.SOURCE_PROXY)
 
     # Apply global session context (env-var defaults) — but don't overwrite
     # per-request values that were already set explicitly above.

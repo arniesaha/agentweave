@@ -46,9 +46,26 @@ export const TEMPO_SERVICE = 'agentweave-proxy'
 // be matched alongside agentweave-proxy for Overview/session queries to count
 // them.
 export const TEMPO_SERVICES = ['agentweave-proxy', 'mux-router'] as const
-export const TEMPO_SERVICE_FILTER = `(${TEMPO_SERVICES.map(
+
+// Services whose spans are queryable in Tempo. claude-code is included so
+// Claude Code's native spans — normalized into prov.* by the normalizer
+// service (#249) — are visible for tool-level and session detail.
+//
+// Safe against double counting: native llm_request spans deliberately do NOT
+// carry prov.activity.type = "llm_call", so the Overview's cost and token
+// aggregation still sees each model call exactly once, from the proxy.
+export const TEMPO_QUERYABLE_SERVICES = [
+  ...TEMPO_SERVICES,
+  'claude-code',
+] as const
+export const TEMPO_SERVICE_FILTER = `(${TEMPO_QUERYABLE_SERVICES.map(
   (s) => `resource.service.name = "${s}"`,
 ).join(' || ')})`
+
+// Prometheus span-metrics deliberately stay on the proxy services only. Tempo's
+// metrics-generator emits a series per service, so adding claude-code here
+// would count the same model call twice — once from the proxy span and once
+// from the native one.
 export const PROM_SERVICE_REGEX = TEMPO_SERVICES.join('|')
 const PROM_LLM_SPAN_FILTER = `service=~"${PROM_SERVICE_REGEX}",prov_llm_model=~".+"`
 
