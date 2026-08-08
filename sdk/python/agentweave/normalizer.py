@@ -29,11 +29,6 @@ from typing import Any, Optional
 
 from agentweave import pricing, schema
 
-# Marks which collector produced a span, so the later migration to
-# native-as-primary (#249 phase C) is a switch rather than a re-mapping.
-PROV_SOURCE = "prov.source"
-SOURCE_NATIVE = "native"
-
 _HARNESS = "claude-code"
 
 # claude_code.* span name -> prov.activity.type
@@ -149,7 +144,7 @@ def _normalize_span(span: dict) -> None:
     attrs = _decode_attrs(span)
 
     _set(span, schema.PROV_HARNESS, _HARNESS)
-    _set(span, PROV_SOURCE, SOURCE_NATIVE)
+    _set(span, schema.PROV_SOURCE, schema.SOURCE_NATIVE)
 
     activity = _ACTIVITY_BY_SPAN.get(name)
     if activity:

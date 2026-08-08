@@ -62,6 +62,13 @@ PROV_REPOSITORY = "prov.repository"                 # enclosing git repository n
 PROV_HARNESS = "prov.harness"                       # "claude-code" | "openclaw"
 PROV_TOOL_NAME = "prov.tool.name"                   # tool invoked by an agent
 
+# Which collector produced a span (issue #249). Both the proxy and the
+# normalizer tag their output, so migrating to native-as-primary is a switch on
+# this value rather than an inference from service.name.
+PROV_SOURCE = "prov.source"
+SOURCE_PROXY = "proxy"
+SOURCE_NATIVE = "native"
+
 # Agent type constants
 AGENT_TYPE_MAIN = "main"
 AGENT_TYPE_SUBAGENT = "subagent"
