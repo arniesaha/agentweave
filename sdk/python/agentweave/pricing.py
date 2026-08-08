@@ -42,6 +42,20 @@ _PriceEntry = Union[Tuple[float, float], Tuple[float, float, float, float]]
 
 _DEFAULT_PRICING: dict[str, _PriceEntry] = {
     # ── Anthropic Claude (input, output, cache_read, cache_write) ─────────────
+    # Cache columns follow the published multipliers: read = 0.1x input,
+    # write = 1.25x input (the 5-minute TTL; a 1h-TTL write is 2x and is not
+    # modelled here).
+    #
+    # Claude 5 generation. These were missing entirely, so every claude-opus-5
+    # span — the primary model on the NAS — was written with cost.usd = -1.
+    "claude-opus-5":              (5.00, 25.00, 0.50, 6.25),
+    # Sonnet 5 carries an introductory $2.00/$10.00 rate through 2026-08-31.
+    # Standard rates are used here: the table has no date handling, and
+    # over-reporting spend during the intro window is the safer error for a
+    # budget tool than under-reporting it indefinitely afterwards.
+    "claude-sonnet-5":            (3.00, 15.00, 0.30, 3.75),
+    "claude-fable-5":             (10.00, 50.00, 1.00, 12.50),
+    "claude-mythos-5":            (10.00, 50.00, 1.00, 12.50),
     # claude-opus-4 / claude-3-opus-*
     "claude-opus-4":              (15.00, 75.00, 1.50, 18.75),
     "claude-opus-4-5":            (15.00, 75.00, 1.50, 18.75),
@@ -52,8 +66,9 @@ _DEFAULT_PRICING: dict[str, _PriceEntry] = {
     "claude-3-5-sonnet":          (3.00, 15.00, 0.30, 3.75),
     # claude-3-haiku (legacy)
     "claude-3-haiku":             (0.25,  1.25, 0.03, 0.30),
-    # claude-haiku-4-5 / claude-3-5-haiku-*
-    "claude-haiku-4-5":           (0.80,  4.00, 0.08, 1.00),
+    # claude-haiku-4-5 is $1.00/$5.00; the table carried pre-repricing values.
+    "claude-haiku-4-5":           (1.00,  5.00, 0.10, 1.25),
+    # claude-3-5-haiku-* keeps its own (lower) legacy rate.
     "claude-haiku-3-5":           (0.80,  4.00, 0.08, 1.00),
     "claude-3-5-haiku":           (0.80,  4.00, 0.08, 1.00),
 

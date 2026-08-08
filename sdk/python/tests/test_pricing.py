@@ -9,6 +9,71 @@ import pytest
 # pricing.compute_cost unit tests
 # ---------------------------------------------------------------------------
 
+class TestClaude5FamilyPricing:
+    """The Claude 5 generation must be priced, not fall through to UNKNOWN_COST.
+
+    The table shipped only the Claude 4 family, so every Claude 5 span was
+    written with cost.usd = -1 — including claude-opus-5, the primary model on
+    the NAS. Cost is the dashboard's headline metric, so this silently broke it
+    for the whole generation.
+    """
+
+    @pytest.mark.parametrize(
+        "model,expected_input,expected_output",
+        [
+            ("claude-opus-5", 5.00, 25.00),
+            ("claude-sonnet-5", 3.00, 15.00),
+            ("claude-fable-5", 10.00, 50.00),
+        ],
+    )
+    def test_claude_5_models_are_priced(self, model, expected_input, expected_output):
+        from agentweave.pricing import compute_cost, UNKNOWN_COST
+
+        in_cost = compute_cost(model, input_tokens=1_000_000, output_tokens=0)
+        out_cost = compute_cost(model, input_tokens=0, output_tokens=1_000_000)
+
+        assert in_cost != UNKNOWN_COST, f"{model} is unpriced"
+        assert abs(in_cost - expected_input) < 1e-9
+        assert abs(out_cost - expected_output) < 1e-9
+
+    def test_haiku_4_5_repriced_to_current_rates(self):
+        """Haiku 4.5 is $1.00/$5.00 — the table had the pre-repricing values."""
+        from agentweave.pricing import compute_cost
+
+        assert abs(compute_cost("claude-haiku-4-5", 1_000_000, 0) - 1.00) < 1e-9
+        assert abs(compute_cost("claude-haiku-4-5", 0, 1_000_000) - 5.00) < 1e-9
+
+    def test_context_suffixed_model_id_resolves(self):
+        """The proxy sees ids like `claude-opus-5[1m]` from Claude Code."""
+        from agentweave.pricing import compute_cost, UNKNOWN_COST
+
+        cost = compute_cost("claude-opus-5[1m]", input_tokens=1_000_000, output_tokens=0)
+
+        assert cost != UNKNOWN_COST
+        assert abs(cost - 5.00) < 1e-9
+
+    def test_opus_5_does_not_collide_with_opus_4_entries(self):
+        """Partial matching must not resolve Opus 4.x to the Opus 5 entry."""
+        from agentweave.pricing import compute_cost
+
+        # Opus 4.1 is $15/$75; if it fell through to the opus-5 entry it'd be $5.
+        assert abs(compute_cost("claude-opus-4-1", 1_000_000, 0) - 15.00) < 1e-9
+
+    def test_claude_5_cache_rates(self):
+        """Cache read is 0.1x input; 5-minute cache write is 1.25x input."""
+        from agentweave.pricing import compute_cost
+
+        read = compute_cost(
+            "claude-opus-5", input_tokens=0, output_tokens=0, cache_read_tokens=1_000_000
+        )
+        write = compute_cost(
+            "claude-opus-5", input_tokens=0, output_tokens=0, cache_write_tokens=1_000_000
+        )
+
+        assert abs(read - 0.50) < 1e-9
+        assert abs(write - 6.25) < 1e-9
+
+
 class TestComputeCost:
     """Unit tests for the compute_cost function."""
 
@@ -37,7 +102,7 @@ class TestComputeCost:
         cost_prefixed = compute_cost("anthropic/claude-haiku-4-5", input_tokens=1_000_000, output_tokens=0)
         cost_bare = compute_cost("claude-haiku-4-5", input_tokens=1_000_000, output_tokens=0)
         assert abs(cost_prefixed - cost_bare) < 1e-9
-        assert abs(cost_prefixed - 0.80) < 1e-9
+        assert abs(cost_prefixed - 1.00) < 1e-9
 
     def test_case_insensitive(self):
         from agentweave.pricing import compute_cost
@@ -332,7 +397,7 @@ class TestProxyCostAttrs:
         span = _FakeSpan()
         data = {"usage": {"input_tokens": 1_000_000, "output_tokens": 0}}
         _set_anthropic_response_attrs(span, data, elapsed_ms=10, model="anthropic/claude-haiku-4-5")
-        assert abs(span.attrs["cost.usd"] - 0.80) < 1e-9
+        assert abs(span.attrs["cost.usd"] - 1.00) < 1e-9
 
 
 # ---------------------------------------------------------------------------
