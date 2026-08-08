@@ -120,4 +120,7 @@ async def ingest_traces(request: Request) -> JSONResponse:
             {"error": f"collector returned {status}"}, status_code=502
         )
 
-    return JSONResponse({"ok": True}, status_code=200)
+    # OTLP/HTTP expects an ExportTraceServiceResponse. An empty object is the
+    # valid "everything accepted" form; a bespoke body risks an exporter
+    # warning or rejecting, which would be silent in a telemetry path.
+    return JSONResponse({}, status_code=200)

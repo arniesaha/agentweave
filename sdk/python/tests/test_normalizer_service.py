@@ -123,6 +123,26 @@ class TestTraceIngest:
         assert len(sink.calls) == 1
 
 
+class TestOTLPResponseContract:
+    """OTLP/HTTP specifies an ExportTraceServiceResponse body on success.
+
+    An empty object is the valid "everything accepted" form. A bespoke body
+    like {"ok": true} risks an exporter rejecting or warning on the response,
+    and this service sits in the telemetry path where that would be silent.
+    """
+
+    def test_success_body_is_an_empty_export_response(
+        self, client, payload, monkeypatch
+    ):
+        _Forwarded().install(monkeypatch)
+
+        response = client.post("/v1/traces", json=payload)
+
+        assert response.status_code == 200
+        assert response.json() == {}
+        assert response.headers["content-type"].startswith("application/json")
+
+
 class TestHealth:
     def test_health_reports_version_and_collector(self, client):
         response = client.get("/health")
