@@ -13,7 +13,11 @@ Configuration (environment):
 
     AGENTWEAVE_COLLECTOR_ENDPOINT  OTLP HTTP base URL of the collector
                                    (default http://10.43.221.47:4318)
-    AGENTWEAVE_NORMALIZER_PORT     listen port (default 4318)
+    AGENTWEAVE_LISTEN_PORT         listen port (default 4318)
+
+Do not name the port variable after the Service: Kubernetes injects
+AGENTWEAVE_NORMALIZER_PORT as "tcp://<clusterIP>:4318" for a Service called
+agentweave-normalizer, which uvicorn rejects as a non-integer port.
 
 The collector keeps doing PII stripping downstream, so this service does not
 duplicate that responsibility.

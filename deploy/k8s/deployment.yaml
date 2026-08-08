@@ -15,6 +15,12 @@ spec:
       labels:
         app: agentweave-proxy
     spec:
+      # The image registry (localhost:5000) runs only on arnabsnas, so a pod
+      # scheduled onto any other node ImagePullBackOffs. This pin existed only
+      # in the live cluster until now — the manifest lacked it, so a reschedule
+      # would have broken the deployment with no way to see why from git.
+      nodeSelector:
+        kubernetes.io/hostname: arnabsnas
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
