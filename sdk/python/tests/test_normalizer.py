@@ -224,6 +224,35 @@ class TestNonNativeSpansUntouched:
 
         assert keys == {"prov.activity.type"}, "proxy spans must not be rewritten"
 
+    def test_normalizing_twice_does_not_duplicate_attributes(self, payload):
+        """Duplicate attribute keys are undefined behaviour in OTLP.
+
+        Re-normalization is reachable: a replayed payload, a chained
+        normalizer, or a retry that re-enters the mapping. Each prov.* key must
+        appear exactly once regardless of how many passes ran.
+        """
+        from agentweave.normalizer import normalize_payload
+
+        twice = normalize_payload(normalize_payload(payload))
+
+        for rs in twice["resourceSpans"]:
+            for ss in rs["scopeSpans"]:
+                for span in ss["spans"]:
+                    keys = [a["key"] for a in span["attributes"]]
+                    assert len(keys) == len(set(keys)), (
+                        f"{span['name']} has duplicate keys: "
+                        f"{sorted(k for k in set(keys) if keys.count(k) > 1)}"
+                    )
+
+    def test_second_pass_is_byte_identical_to_the_first(self, payload):
+        """Idempotency in the strong sense — not just de-duplicated."""
+        from agentweave.normalizer import normalize_payload
+
+        once = normalize_payload(payload)
+        twice = normalize_payload(once)
+
+        assert json.dumps(twice, sort_keys=True) == json.dumps(once, sort_keys=True)
+
     def test_input_payload_is_not_mutated(self, payload):
         from agentweave.normalizer import normalize_payload
 

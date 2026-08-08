@@ -73,7 +73,13 @@ def _decode_attrs(span: dict) -> dict[str, Any]:
 
 
 def _set(span: dict, key: str, value: Any) -> None:
-    """Append an OTLP-JSON attribute, encoding by Python type."""
+    """Set an OTLP-JSON attribute, encoding by Python type.
+
+    Replaces an existing entry rather than appending a second one. Duplicate
+    attribute keys are undefined behaviour in OTLP, and re-normalization is
+    reachable — a replayed payload, a chained normalizer, or a retry that
+    re-enters the mapping. This keeps the pass idempotent.
+    """
     if value is None:
         return
     if isinstance(value, bool):
@@ -84,7 +90,13 @@ def _set(span: dict, key: str, value: Any) -> None:
         encoded = {"doubleValue": value}
     else:
         encoded = {"stringValue": str(value)}
-    span.setdefault("attributes", []).append({"key": key, "value": encoded})
+
+    attributes = span.setdefault("attributes", [])
+    for attribute in attributes:
+        if attribute["key"] == key:
+            attribute["value"] = encoded
+            return
+    attributes.append({"key": key, "value": encoded})
 
 
 def _normalize_llm_request(span: dict, attrs: dict[str, Any]) -> None:
