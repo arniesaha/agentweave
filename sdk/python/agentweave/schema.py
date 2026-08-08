@@ -57,6 +57,11 @@ PROV_TASK_LABEL = "prov.task.label"                 # human-readable task label 
 PROV_CWD = "prov.cwd"                               # caller working directory
 PROV_REPOSITORY = "prov.repository"                 # enclosing git repository name
 
+# Emitted by the proxy hook endpoints and the openclaw bridge since before this
+# module tracked them; declared here so every producer shares one spelling.
+PROV_HARNESS = "prov.harness"                       # "claude-code" | "openclaw"
+PROV_TOOL_NAME = "prov.tool.name"                   # tool invoked by an agent
+
 # Agent type constants
 AGENT_TYPE_MAIN = "main"
 AGENT_TYPE_SUBAGENT = "subagent"
