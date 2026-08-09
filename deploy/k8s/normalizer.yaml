@@ -38,7 +38,7 @@ spec:
       containers:
         - name: normalizer
           # Pinned to the SDK version, same convention as the proxy.
-          image: localhost:5000/agentweave-normalizer:0.3.6
+          image: localhost:5000/agentweave-normalizer:0.3.7
           imagePullPolicy: Always
           ports:
             - containerPort: 4318
