@@ -137,7 +137,14 @@ Assert on emitted spans, never on HTTP status — the defect class that produced
 2. Build the normalizer with the mapping and tests; no deployment.
 3. Deploy the normalizer with **no traffic pointed at it**. Validate by replaying a captured native payload through the running service and diffing its output against the unit-test expectations — this checks packaging, config, and connectivity to the collector without putting live spans at risk.
 4. Add `prov.source = "proxy"` to the proxy; widen the dashboard filter to include `"claude-code"`.
-5. Point `OTEL_EXPORTER_OTLP_ENDPOINT` on the NAS at the normalizer. Native spans now arrive normalized instead of raw.
+5. Point `OTEL_EXPORTER_OTLP_ENDPOINT` on the NAS at the normalizer **and set
+   `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`**. Native spans now arrive
+   normalized instead of raw.
+
+   Both variables, not just the endpoint. The NAS was on `http/protobuf` from
+   #253, and repointing the endpoint alone produced a 415 from the normalizer
+   — spans rejected rather than normalized. The 415 named the cause
+   immediately, but the step should not have needed it.
 
 Rollback is repointing that one env var back at the collector — native spans revert to raw-but-stored, which is today's behaviour.
 

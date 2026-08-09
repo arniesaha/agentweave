@@ -21,12 +21,19 @@ EXPOSE 4318
 
 # Configuration via environment variables:
 #   AGENTWEAVE_COLLECTOR_ENDPOINT  — OTLP HTTP base URL of the collector
-#   AGENTWEAVE_NORMALIZER_PORT     — listen port (default 4318)
+#   AGENTWEAVE_LISTEN_PORT         — listen port (default 4318)
+#
+# NOTE: use AGENTWEAVE_LISTEN_PORT, never AGENTWEAVE_NORMALIZER_PORT. Kubernetes
+# injects service-discovery variables named after each Service, so a Service
+# called agentweave-normalizer sets AGENTWEAVE_NORMALIZER_PORT to
+# "tcp://<clusterIP>:4318" in every pod in the namespace — which uvicorn then
+# rejects as a non-integer port. The proxy hit the same trap with
+# AGENTWEAVE_PROXY_PORT.
 #
 # Run uvicorn directly rather than through the `agentweave` CLI: the CLI has no
 # normalizer subcommand yet, and adding one is not needed to deploy this.
 ENTRYPOINT ["sh", "-c", "\
   exec uvicorn agentweave.normalizer_service:app \
     --host 0.0.0.0 \
-    --port ${AGENTWEAVE_NORMALIZER_PORT:-4318} \
+    --port ${AGENTWEAVE_LISTEN_PORT:-4318} \
 "]
