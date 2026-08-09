@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 
 from agentweave.normalizer import normalize_payload
 
-__version__ = "0.3.6"
+__version__ = "0.3.7"
 
 logger = logging.getLogger("agentweave.normalizer")
 

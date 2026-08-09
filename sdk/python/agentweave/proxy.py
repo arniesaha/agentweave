@@ -286,22 +286,13 @@ _session_context: dict[str, str] = {
     }.items() if v
 }
 
-# Attributes in _session_context that identify a specific session rather than
-# acting as a config default. These are only applied to requests from the agent
-# that wrote the global, so one caller's session can't be stamped on another's.
-_GLOBAL_IDENTITY_ATTRS = frozenset({
-    schema.SESSION_ID,
-    schema.PROV_SESSION_ID,
-    schema.PROV_PARENT_SESSION_ID,
-})
-
 # Gemini model name from URL, e.g. /v1beta/models/gemini-2.5-pro:generateContent
 _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 
 app = FastAPI(
     title="AgentWeave Proxy",
     description="Multi-provider AI observability proxy (Anthropic + Google Gemini + OpenAI)",
-    version="0.3.6",
+    version="0.3.7",
 )
 
 
@@ -536,14 +527,15 @@ async def set_session_context(body: dict):
             # Store per-key forced context — isolates concurrent request streams
             _set_forced_context(session_key, ctx)
         else:
-            # Clear the per-key forced context when force is disabled
+            # Clear the per-key forced context when force is disabled. The
+            # bridge relies on this to restore main-session attribution when a
+            # subagent goes idle (issue #189) — do not repurpose force:false
+            # into a store without changing the bridge in the same step.
             _forced_session_contexts.pop(session_key, None)
-        # Update global context so GET /session reflects the latest state;
-        # but do NOT set the global force flag — that would affect all requests.
-        _session_context = ctx
-    else:
-        # Non-forced global context update for GET /session and default attrs.
-        _session_context = ctx
+
+    # Mirror the most recent context for GET /session. This is observability
+    # only: _set_request_attrs does not read it, so it cannot reach a span.
+    _session_context = ctx
 
     return {"ok": True, "context": ctx, "force": force, "session_key": session_key}
 
@@ -2116,25 +2108,14 @@ def _set_request_attrs(
         _explicit_session_attrs.add(schema.PROV_PARENT_SESSION_ID)
     if agent_type is not None:
         _explicit_session_attrs.add(schema.PROV_AGENT_TYPE)
-    # Session identity from the process-global is scoped to the agent that set
-    # it. The bridge POSTs /session with force:false on every main-agent turn,
-    # which writes this global; without scoping, any caller that sends no
-    # X-AgentWeave-Session-Id inherits it — Claude Code spans were being
-    # stamped with openclaw cron session ids. Project and similar defaults are
-    # not identity and still apply across agents.
-    _ctx_owner = _session_context.get(schema.PROV_AGENT_ID)
-    _owns_global = bool(_ctx_owner) and _ctx_owner == agent_id
-    for k, v in _session_context.items():
-        if k in _explicit_session_attrs:
-            continue
-        if k in _GLOBAL_IDENTITY_ATTRS and not _owns_global:
-            continue
-        span.set_attribute(k, v)
-    # The global stores prov.session.id only; mirror it onto session.id so the
-    # owning agent gets the same pair an explicit session id would produce.
-    if _owns_global and schema.PROV_SESSION_ID in _session_context:
-        if schema.SESSION_ID not in _explicit_session_attrs:
-            span.set_attribute(schema.SESSION_ID, _session_context[schema.PROV_SESSION_ID])
+    # The process-global session context is deliberately NOT applied here
+    # (#255). It is a single mutable value on a proxy serving many callers, so
+    # anything it contributed was whoever wrote it last. #254 scoped it to the
+    # writing agent, which stopped cross-caller contamination but still
+    # collided for two callers sharing an agent id. Session identity now comes
+    # only from the request: an explicit header, or the per-key forced context
+    # resolved from x-agentweave-session-key above. _session_context survives
+    # solely as a read-only mirror for GET /session.
 
     # Only fall back to cfg.agent_id if no per-request agent_id was provided via header
     if not agent_id:
