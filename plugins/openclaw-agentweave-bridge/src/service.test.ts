@@ -773,3 +773,49 @@ describe("createAgentWeaveBridgeService — legacy runtime without trusted chann
     await legacy.stop()
   })
 })
+
+describe("proxy /session forced context", () => {
+  let service: ReturnType<typeof createAgentWeaveBridgeService>
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    delete (globalThis as Record<string, unknown>).__openclawDiagnosticEventsState
+    fetchMock = vi.fn(async () => new Response("{}", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    service = createAgentWeaveBridgeService()
+    await service.start(makeCtx({ proxyUrl: "http://proxy.test:4000" }))
+  })
+
+  afterEach(async () => {
+    await service.stop()
+    vi.unstubAllGlobals()
+  })
+
+  // Every /session POST body the bridge sent, in order.
+  function sessionPostBodies(): Record<string, unknown>[] {
+    return fetchMock.mock.calls
+      .filter(([url]) => String(url).endsWith("/session"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>)
+  }
+
+  it("forces the proxy context for a plain main turn with no upstream bag", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:main",
+      sessionId: "018f-openclaw-main-plain",
+      channel: "telegram",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    const bodies = sessionPostBodies()
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0].session_key).toBe("agent:main:main")
+    expect(bodies[0].agent_type).toBe("main")
+    // force:false would make the proxy DELETE this key and fall back to the
+    // static X-AgentWeave-Session-Id header (issue #264).
+    expect(bodies[0].force).toBe(true)
+  })
+})

@@ -668,9 +668,11 @@ export function createAgentWeaveBridgeService() {
                   session_key: sessionKey,
                   agent_id: effectiveAgentId,
                   agent_type: effectiveAgentType,
-                  // Force the proxy to attribute LLM calls to upstream identity
-                  // (same as sub-agents) so codex/model spans match the run.
-                  force: Boolean(upstream) || effectiveAgentType === "subagent",
+                  // Always force: the proxy's per-key map (#149) isolates
+                  // concurrent keys, so main turns can claim their own context
+                  // safely. force:false would instead DELETE the entry and let
+                  // the static X-AgentWeave-Session-Id header win (#264).
+                  force: true,
                 }
                 if (config.project) sessionPayload.project = config.project
                 if (proxyParentSid) sessionPayload.parent_session_id = proxyParentSid
