@@ -818,4 +818,30 @@ describe("proxy /session forced context", () => {
     // static X-AgentWeave-Session-Id header (issue #264).
     expect(bodies[0].force).toBe(true)
   })
+
+  it("does not clear the forced context when a subagent goes idle", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:subagent:worker-1",
+      sessionId: "018f-openclaw-sub-1",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    // Ignore the turn-start POST; only the idle transition matters here.
+    fetchMock.mockClear()
+
+    fire({
+      type: "session.state",
+      sessionKey: "agent:main:subagent:worker-1",
+      state: "idle",
+      ts: Date.now(),
+      seq: 2,
+    })
+
+    // A force:false POST here would delete the subagent's entry and let late
+    // LLM calls fall back to the static header (#264).
+    expect(sessionPostBodies()).toHaveLength(0)
+  })
 })

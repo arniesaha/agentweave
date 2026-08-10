@@ -806,31 +806,18 @@ export function createAgentWeaveBridgeService() {
                   console.log(`[agentweave-bridge] started subagent span: ${sessionKey} agent: ${subagentId}`)
                 }
               }
-              // End subagent span when session goes idle — restore main session on proxy
+              // End subagent span when session goes idle. The per-key forced
+              // context is intentionally left in place: under the #149 per-key
+              // map it cannot misattribute another session, and clearing it
+              // would let late LLM calls on this key fall back to the static
+              // provider headers (#264). Orphans are bounded by the proxy's
+              // _MAX_FORCED_CONTEXTS LRU.
               if (sessionKey.includes(":subagent:") && activeTurns.has(sessionKey)) {
                 if (state === "idle") {
                   const turn = activeTurns.get(sessionKey)!
                   turn.span.setAttribute("outcome", "completed")
                   turn.span.end()
                   activeTurns.delete(sessionKey)
-
-                  // Restore proxy to main session — clear the per-key forced
-                  // context for this sessionKey (issue #189). force:false +
-                  // matching session_key removes the entry from
-                  // _forced_session_contexts without touching the legacy
-                  // global flag.
-                  const proxyUrl = normalizeProxyBaseUrl(config.proxyUrl) || "http://192.168.1.70:30400"
-                  fetch(`${proxyUrl}/session`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      session_key: sessionKey,
-                      session_id: "nix-main",
-                      agent_type: "main",
-                      force: false,
-                    }),
-                  }).then(() => console.log(`[agentweave-bridge] proxy session restored to nix-main`))
-                    .catch(err => console.warn(`[agentweave-bridge] proxy session restore failed:`, err.message))
 
                   console.log(`[agentweave-bridge] ended subagent span: ${sessionKey}`)
                 }
