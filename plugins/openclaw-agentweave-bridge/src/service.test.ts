@@ -502,6 +502,34 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.addEvent).not.toHaveBeenCalled()
   })
 
+  it("emits a child llm.call span carrying the session id on model.call.completed", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:call-span",
+      sessionId: "018f-openclaw-main-call",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    mockStartSpan.mockClear()
+
+    fire({
+      type: "model.call.completed",
+      sessionKey: "agent:main:call-span",
+      sessionId: "018f-openclaw-main-call",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      ts: Date.now(),
+      seq: 2,
+    })
+
+    expect(mockStartSpan).toHaveBeenCalledWith("llm.call", undefined, expect.anything())
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-5.6-sol")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "018f-openclaw-main-call")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.provider", "openai")
+  })
+
   it("adds tool.loop event to active span", () => {
     fire({ type: "message.queued", sessionKey: "agent:main:sk-5", sessionId: "sess-e", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
     fire({

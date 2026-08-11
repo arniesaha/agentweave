@@ -896,7 +896,9 @@ export function createAgentWeaveBridgeService() {
               // `model.usage` (which only fires from the legacy openai-compat
               // HTTP path). Without a handler, codex turn spans land in
               // Tempo without `prov.llm.{provider,model}`, so the dashboard's
-              // "Calls by Model" panel can't bucket them.
+              // "Calls by Model" panel can't bucket them. It also emits a
+              // child `llm.call` span per event, since codex's own
+              // `handle_responses` span cannot carry `prov.session.id`.
               //
               // The event does NOT carry token counts today, so we only
               // stamp identity attributes here. Cost stays at whatever
@@ -912,6 +914,19 @@ export function createAgentWeaveBridgeService() {
               if (!provider && !model) break
               if (provider) match.turn.span.setAttribute("prov.llm.provider", provider)
               if (model) match.turn.span.setAttribute("prov.llm.model", model)
+
+              const tracer = trace.getTracer("openclaw-agentweave-bridge")
+              // Flat, queryable per-call span. Codex's own handle_responses span
+              // has the token detail but cannot carry prov.session.id (its
+              // span_attributes are per-config-file, and CODEX_HOME is per-agent),
+              // so this is what a session-id filter actually finds.
+              const callSpan = tracer.startSpan("llm.call", undefined, match.turn.ctx)
+              callSpan.setAttribute("prov.session.id", e.sessionId ?? "")
+              callSpan.setAttribute("prov.session.key", match.key)
+              if (provider) callSpan.setAttribute("prov.llm.provider", provider)
+              if (model) callSpan.setAttribute("prov.llm.model", model)
+              if (config.project) callSpan.setAttribute("prov.project", config.project)
+              callSpan.end()
               break
             }
 
