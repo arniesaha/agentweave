@@ -192,12 +192,14 @@ but the bridge is missing or disabled.
 
 | Diagnostic Event | Action |
 |-----------------|--------|
-| `message.queued` | Creates a root span `openclaw.turn` with session/agent attributes, injects `traceparent` into `process.env.AGENTWEAVE_TRACEPARENT` |
+| `message.queued` | Creates a root span `openclaw.turn` with session/agent attributes, parented under the gateway trace via the event's `trace` field |
 | `message.processed` | Sets outcome attribute and ends the root span |
 | `model.usage` | Adds cost/token data as span events on the root span |
+| `model.call.completed` | Creates a child `llm.call` span under the turn span, carrying `prov.session.id`/`prov.llm.provider`/`prov.llm.model` |
 
-The injected `AGENTWEAVE_TRACEPARENT` env var is picked up by the proxy for
-downstream LLM calls, linking them as child spans in the trace tree.
+Downstream LLM/child spans are linked by joining the OpenTelemetry `Context`
+carried on the turn span — trace propagation does not go through environment
+variables.
 
 ## Proxy Headers Reference
 

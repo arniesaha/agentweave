@@ -142,11 +142,11 @@ User sends message
 OpenClaw emits: message.queued
        ↓
 agentweave-bridge creates root span "openclaw.turn"
-  → sets AGENTWEAVE_TRACEPARENT in process env
   → sets AGENTWEAVE_SESSION_ID in process env
+  → keeps the span's OTel Context for parenting child spans (llm.call, etc.)
        ↓
 OpenClaw processes message → LLM calls → tool calls
-  (proxy reads AGENTWEAVE_TRACEPARENT, attaches LLM spans as children)
+  (model.call.completed spans join that Context directly — no env var)
        ↓
 OpenClaw emits: message.processed
        ↓

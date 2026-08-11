@@ -1,16 +1,36 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import { trace } from "@opentelemetry/api"
 import { createAgentWeaveBridgeService } from "./service.js"
 
 // ── Mock OTel APIs ────────────────────────────────────────────────────────────
-const mockSpan = {
-  setAttribute: vi.fn(),
-  setStatus: vi.fn(),
-  addEvent: vi.fn(),
-  end: vi.fn(),
-  spanContext: vi.fn(() => ({ traceId: "abc", spanId: "def", traceFlags: 1 })),
+// Real spans track attributes internally; production's getSpanSessionId()
+// reads that via a `_attributes` cast, so the mock span must actually record
+// what setAttribute writes rather than just spying on the call.
+function createMockSpan() {
+  const attributes: Record<string, unknown> = {}
+  return {
+    setAttribute: vi.fn((key: string, value: unknown) => {
+      attributes[key] = value
+    }),
+    setStatus: vi.fn(),
+    addEvent: vi.fn(),
+    end: vi.fn(),
+    spanContext: vi.fn(() => ({ traceId: "abc", spanId: "def", traceFlags: 1 })),
+    _attributes: attributes,
+  }
 }
 
-const mockStartSpan = vi.fn(() => mockSpan)
+// `mockSpan` always points at the most recently started span. Every test in
+// this suite starts at most one span before reading `mockSpan` — except the
+// llm.call tests below, which start a turn span then a call span and must
+// tell the two apart; for those, read `mockStartSpan.mock.results` directly
+// instead of relying on this alias.
+let mockSpan = createMockSpan()
+
+const mockStartSpan = vi.fn(() => {
+  mockSpan = createMockSpan()
+  return mockSpan
+})
 
 vi.mock("@opentelemetry/api", () => ({
   trace: {
@@ -502,7 +522,7 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.addEvent).not.toHaveBeenCalled()
   })
 
-  it("emits a child llm.call span carrying the session id on model.call.completed", () => {
+  it("emits a child llm.call span parented under the turn span, with attributes on the call span itself", () => {
     fire({
       type: "message.queued",
       sessionKey: "agent:main:call-span",
@@ -512,6 +532,10 @@ describe("createAgentWeaveBridgeService", () => {
       ts: Date.now(),
       seq: 1,
     })
+    // Capture the turn span/ctx before the second startSpan call replaces
+    // `mockSpan` — this is how the call span's parentage gets verified below.
+    const turnSpan = mockSpan
+    const turnCtx = vi.mocked(trace.setSpan).mock.results.at(-1)?.value
     mockStartSpan.mockClear()
 
     fire({
@@ -524,13 +548,54 @@ describe("createAgentWeaveBridgeService", () => {
       seq: 2,
     })
 
-    expect(mockStartSpan).toHaveBeenCalledWith("llm.call", undefined, expect.anything())
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-5.6-sol")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "018f-openclaw-main-call")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.provider", "openai")
+    expect(mockStartSpan).toHaveBeenCalledTimes(1)
+    expect(mockStartSpan).toHaveBeenCalledWith("llm.call", undefined, turnCtx)
+
+    // Assert on the fresh span startSpan actually returned for this call,
+    // not the shared `mockSpan` alias — proves the attributes and end()
+    // below land on the *call* span, not the turn span.
+    const callSpan = mockStartSpan.mock.results[0].value
+    expect(callSpan).not.toBe(turnSpan)
+    expect(callSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "018f-openclaw-main-call")
+    expect(callSpan.setAttribute).toHaveBeenCalledWith("prov.llm.provider", "openai")
+    expect(callSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-5.6-sol")
+    expect(callSpan.end).toHaveBeenCalledWith()
   })
 
-  it("omits prov.session.id on the llm.call span when the event carries no sessionId", () => {
+  it("sources prov.session.id from the matched turn, not the raw event, when findTurnForModelUsage matches via subagent-suffix", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:subagent:worker-9",
+      sessionId: "018f-openclaw-sub-9",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    mockStartSpan.mockClear()
+
+    // sessionKey does not exactly match any active turn, but its
+    // ":subagent:worker-9" suffix does (findTurnForModelUsage's
+    // subagent-suffix branch) — this models the misattribution bug: a
+    // completion event can match a turn belonging to a different session
+    // key/id than the one on the event itself. e.sessionId is deliberately
+    // wrong so the test proves it is never read for this attribute.
+    fire({
+      type: "model.call.completed",
+      sessionKey: "agent:other:subagent:worker-9",
+      sessionId: "wrong-id-should-be-ignored",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      ts: Date.now(),
+      seq: 2,
+    })
+
+    const callSpan = mockStartSpan.mock.results.at(-1)?.value
+    expect(callSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "018f-openclaw-sub-9")
+    expect(callSpan.setAttribute).not.toHaveBeenCalledWith("prov.session.id", "wrong-id-should-be-ignored")
+  })
+
+  it("omits prov.session.id on the llm.call span when the matched turn has no session id recorded", () => {
     fire({
       type: "message.queued",
       sessionKey: "agent:main:call-span-no-sid",
@@ -540,12 +605,12 @@ describe("createAgentWeaveBridgeService", () => {
       ts: Date.now(),
       seq: 1,
     })
-    mockSpan.setAttribute.mockClear()
+    mockStartSpan.mockClear()
+    // Simulate a turn whose span never recorded a session id (defensive
+    // case for getSpanSessionId's lookup) — the guard on the callSpan write
+    // must skip prov.session.id entirely rather than writing "".
+    delete mockSpan._attributes["session.id"]
 
-    // sessionKey matches the active turn (sessionKey-exact in
-    // findTurnForModelUsage), but the event itself has no sessionId — the
-    // guard on the callSpan write must skip prov.session.id entirely rather
-    // than falling back to "".
     fire({
       type: "model.call.completed",
       sessionKey: "agent:main:call-span-no-sid",
@@ -555,9 +620,40 @@ describe("createAgentWeaveBridgeService", () => {
       seq: 2,
     })
 
-    expect(mockStartSpan).toHaveBeenCalledWith("llm.call", undefined, expect.anything())
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-5.6-sol")
-    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.session.id", expect.anything())
+    const callSpan = mockStartSpan.mock.results.at(-1)?.value
+    expect(callSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-5.6-sol")
+    expect(callSpan.setAttribute).not.toHaveBeenCalledWith("prov.session.id", expect.anything())
+  })
+
+  it("derives the llm.call span's start/end time from durationMs, ending exactly durationMs after start", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:call-span-dur",
+      sessionId: "018f-openclaw-main-dur",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    mockStartSpan.mockClear()
+
+    fire({
+      type: "model.call.completed",
+      sessionKey: "agent:main:call-span-dur",
+      sessionId: "018f-openclaw-main-dur",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      durationMs: 2500,
+      ts: Date.now(),
+      seq: 2,
+    })
+
+    const [, options] = mockStartSpan.mock.calls[0] as unknown as [string, { startTime?: number } | undefined]
+    expect(options?.startTime).toEqual(expect.any(Number))
+    const callSpan = mockStartSpan.mock.results[0].value
+    expect(callSpan.end).toHaveBeenCalledWith(expect.any(Number))
+    const endArg = callSpan.end.mock.calls[0][0] as number
+    expect(endArg - (options?.startTime ?? 0)).toBe(2500)
   })
 
   it("adds tool.loop event to active span", () => {

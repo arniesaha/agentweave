@@ -920,13 +920,31 @@ export function createAgentWeaveBridgeService() {
               // has the token detail but cannot carry prov.session.id (its
               // span_attributes are per-config-file, and CODEX_HOME is per-agent),
               // so this is what a session-id filter actually finds.
-              const callSpan = tracer.startSpan("llm.call", undefined, match.turn.ctx)
-              if (e.sessionId) callSpan.setAttribute("prov.session.id", e.sessionId)
+              //
+              // Stamp the *matched turn's* session id, not the raw event's —
+              // findTurnForModelUsage can match a different session's turn
+              // (subagent-suffix / main-key-fallback-to-active-subagent /
+              // sessionId-as-key). Using e.sessionId there would disagree with
+              // the span's own parent and prov.session.key, silently
+              // misattributing the call under the wrong session id.
+              const matchedSessionId = getSpanSessionId(match.turn)
+              // model.call.completed is a completion event, so durationMs (when
+              // present) is the real call length — without it every llm.call
+              // span renders as a 0ms tick and per-call latency is unavailable.
+              const endTime = Date.now()
+              const startTime = e.durationMs ? endTime - e.durationMs : undefined
+              const callSpan = tracer.startSpan(
+                "llm.call",
+                startTime !== undefined ? { startTime } : undefined,
+                match.turn.ctx,
+              )
+              if (matchedSessionId) callSpan.setAttribute("prov.session.id", matchedSessionId)
               callSpan.setAttribute("prov.session.key", match.key)
               if (provider) callSpan.setAttribute("prov.llm.provider", provider)
               if (model) callSpan.setAttribute("prov.llm.model", model)
               if (config.project) callSpan.setAttribute("prov.project", config.project)
-              callSpan.end()
+              if (startTime !== undefined) callSpan.end(endTime)
+              else callSpan.end()
               break
             }
 
