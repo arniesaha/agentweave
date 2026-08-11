@@ -530,6 +530,36 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.provider", "openai")
   })
 
+  it("omits prov.session.id on the llm.call span when the event carries no sessionId", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:call-span-no-sid",
+      sessionId: "018f-openclaw-main-no-sid",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    mockSpan.setAttribute.mockClear()
+
+    // sessionKey matches the active turn (sessionKey-exact in
+    // findTurnForModelUsage), but the event itself has no sessionId — the
+    // guard on the callSpan write must skip prov.session.id entirely rather
+    // than falling back to "".
+    fire({
+      type: "model.call.completed",
+      sessionKey: "agent:main:call-span-no-sid",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      ts: Date.now(),
+      seq: 2,
+    })
+
+    expect(mockStartSpan).toHaveBeenCalledWith("llm.call", undefined, expect.anything())
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-5.6-sol")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.session.id", expect.anything())
+  })
+
   it("adds tool.loop event to active span", () => {
     fire({ type: "message.queued", sessionKey: "agent:main:sk-5", sessionId: "sess-e", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
     fire({

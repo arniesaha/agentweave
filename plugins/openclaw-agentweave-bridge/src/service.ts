@@ -921,7 +921,7 @@ export function createAgentWeaveBridgeService() {
               // span_attributes are per-config-file, and CODEX_HOME is per-agent),
               // so this is what a session-id filter actually finds.
               const callSpan = tracer.startSpan("llm.call", undefined, match.turn.ctx)
-              callSpan.setAttribute("prov.session.id", e.sessionId ?? "")
+              if (e.sessionId) callSpan.setAttribute("prov.session.id", e.sessionId)
               callSpan.setAttribute("prov.session.key", match.key)
               if (provider) callSpan.setAttribute("prov.llm.provider", provider)
               if (model) callSpan.setAttribute("prov.llm.model", model)
