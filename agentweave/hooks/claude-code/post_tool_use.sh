@@ -3,6 +3,10 @@
 # Appends tool use events to a local JSONL buffer (fast, non-blocking).
 # The buffer is batch-exported by stop.sh when the session ends.
 # Buffer is per-session to avoid cross-session data leaks.
+# Sanitize HOME/PATH to avoid inheriting agent runtime paths (#193)
+export HOME="${HOME%%/.openclaw*}"
+[ -d "$HOME" ] || export HOME=$(eval echo ~$(whoami))
+export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 
 SID="${CLAUDE_SESSION_ID:-default}"
 BUFFER="${AGENTWEAVE_HOOKS_BUFFER:-$HOME/.agentweave/hooks_buffer_${SID}.jsonl}"
