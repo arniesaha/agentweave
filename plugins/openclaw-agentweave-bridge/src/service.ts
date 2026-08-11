@@ -1,4 +1,4 @@
-import { trace, context, propagation, type Span, type Context, SpanStatusCode } from "@opentelemetry/api"
+import { trace, context, type Span, type Context, SpanStatusCode } from "@opentelemetry/api"
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto"
 import { NodeSDK } from "@opentelemetry/sdk-node"
 import { resourceFromAttributes } from "@opentelemetry/resources"
@@ -14,6 +14,24 @@ interface ActiveTurn {
    *  that must be ended on the session.state idle transition rather than a
    *  message.processed event (which never fires for those paths). */
   endOnIdle?: boolean
+}
+
+/**
+ * Builds a parent Context from OpenClaw's DiagnosticTraceContext so bridge spans
+ * join the gateway trace instead of rooting their own. Without this the bridge
+ * and codex export into two unrelated traces and the join silently fails at
+ * query time — it looks like it works until you try to correlate.
+ */
+function contextFromOpenClawTrace(rawTrace: unknown): Context {
+  const t = rawTrace as { traceId?: string; spanId?: string; traceFlags?: string } | undefined
+  if (!t?.traceId || !t.spanId) return context.active()
+  if (!/^[0-9a-f]{32}$/.test(t.traceId) || !/^[0-9a-f]{16}$/.test(t.spanId)) return context.active()
+  return trace.setSpanContext(context.active(), {
+    traceId: t.traceId,
+    spanId: t.spanId,
+    traceFlags: t.traceFlags === "00" ? 0 : 1,
+    isRemote: true,
+  })
 }
 
 export interface BridgeConfig {
@@ -380,7 +398,7 @@ function startUpstreamRootSpanFromSessionState(
   const agentType = upstream.agentType ?? "main"
 
   const tracer = trace.getTracer("openclaw-agentweave-bridge")
-  const span = tracer.startSpan("openclaw.turn")
+  const span = tracer.startSpan("openclaw.turn", undefined, contextFromOpenClawTrace(e.trace))
   span.setAttribute("session_id", effectiveSessionId)
   span.setAttribute("session.id", effectiveSessionId)
   span.setAttribute("prov.session.id", effectiveSessionId)
@@ -425,19 +443,12 @@ function startUpstreamRootSpanFromSessionState(
   })
 
   const spanCtx = trace.setSpan(context.active(), span)
-  const carrier: Record<string, string> = {}
-  propagation.inject(spanCtx, carrier)
-  if (carrier["traceparent"]) {
-    process.env.AGENTWEAVE_TRACEPARENT = carrier["traceparent"]
-  }
   let parentTraceIdHex = ""
   let parentSpanIdHex = ""
   const spanContext = span.spanContext()
   if (spanContext) {
     parentTraceIdHex = spanContext.traceId.replace(/-/g, "").padStart(32, "0")
     parentSpanIdHex = spanContext.spanId.replace(/-/g, "").padStart(16, "0")
-    process.env.AGENTWEAVE_PARENT_TRACE_ID = parentTraceIdHex
-    process.env.AGENTWEAVE_PARENT_SPAN_ID = parentSpanIdHex
   }
   process.env.AGENTWEAVE_SESSION_ID = effectiveSessionId
   process.env.AGENTWEAVE_AGENT_ID = agentId
@@ -489,9 +500,6 @@ function endUpstreamRootSpanOnIdle(sessionKey: string): void {
   turn.span.setAttribute("outcome", "completed")
   turn.span.end()
   activeTurns.delete(sessionKey)
-  delete process.env.AGENTWEAVE_TRACEPARENT
-  delete process.env.AGENTWEAVE_PARENT_TRACE_ID
-  delete process.env.AGENTWEAVE_PARENT_SPAN_ID
   delete process.env.ANTHROPIC_BASE_URL
   delete process.env.OPENAI_BASE_URL
   delete process.env.OPENAI_API_BASE
@@ -529,7 +537,7 @@ export function createAgentWeaveBridgeService() {
       initSdk(config)
 
       unsubscribe = subscribeToDiagnosticEvents((evt: unknown, privateData?: unknown) => {
-        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string; cwd?: string; repository?: string; raw_data?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string }; rawData?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string } }
+        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string; cwd?: string; repository?: string; raw_data?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string }; rawData?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string }; trace?: unknown }
         // Upstream attribution prefers the trusted privateData channel
         // (session.state/message.queued on runtimes that export
         // onTrustedDiagnosticEvent), falling back to the public event payload
@@ -560,7 +568,7 @@ export function createAgentWeaveBridgeService() {
               const effectiveAgentType = upstream?.agentType ?? agentType
 
               const tracer = trace.getTracer("openclaw-agentweave-bridge")
-              const span = tracer.startSpan("openclaw.turn")
+              const span = tracer.startSpan("openclaw.turn", undefined, contextFromOpenClawTrace(e.trace))
               span.setAttribute("session_id", effectiveSessionId)
               span.setAttribute("session.id", effectiveSessionId)
               span.setAttribute("prov.session.id", effectiveSessionId)
@@ -617,11 +625,6 @@ export function createAgentWeaveBridgeService() {
               })
 
               const spanCtx = trace.setSpan(context.active(), span)
-              const carrier: Record<string, string> = {}
-              propagation.inject(spanCtx, carrier)
-              if (carrier["traceparent"]) {
-                process.env.AGENTWEAVE_TRACEPARENT = carrier["traceparent"]
-              }
 
               // Capture parent span/trace IDs for the /session POST below so
               // the proxy can build links[] on llm_call spans (issue #178).
@@ -635,8 +638,6 @@ export function createAgentWeaveBridgeService() {
               if (spanContext) {
                 parentTraceIdHex = spanContext.traceId.replace(/-/g, "").padStart(32, "0")
                 parentSpanIdHex = spanContext.spanId.replace(/-/g, "").padStart(16, "0")
-                process.env.AGENTWEAVE_PARENT_TRACE_ID = parentTraceIdHex
-                process.env.AGENTWEAVE_PARENT_SPAN_ID = parentSpanIdHex
               }
               process.env.AGENTWEAVE_SESSION_ID = effectiveSessionId
               process.env.AGENTWEAVE_AGENT_ID = effectiveAgentId
@@ -710,9 +711,6 @@ export function createAgentWeaveBridgeService() {
               }
               turn.span.end()
               activeTurns.delete(sessionKey)
-              delete process.env.AGENTWEAVE_TRACEPARENT
-              delete process.env.AGENTWEAVE_PARENT_TRACE_ID
-              delete process.env.AGENTWEAVE_PARENT_SPAN_ID
               delete process.env.ANTHROPIC_BASE_URL
               delete process.env.OPENAI_BASE_URL
               delete process.env.OPENAI_API_BASE
@@ -943,7 +941,6 @@ export function createAgentWeaveBridgeService() {
         turn.span.end()
         activeTurns.delete(key)
       }
-      delete process.env.AGENTWEAVE_TRACEPARENT
       delete process.env.ANTHROPIC_BASE_URL
       delete process.env.OPENAI_BASE_URL
       delete process.env.OPENAI_API_BASE

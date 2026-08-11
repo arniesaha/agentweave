@@ -10,10 +10,17 @@ const mockSpan = {
   spanContext: vi.fn(() => ({ traceId: "abc", spanId: "def", traceFlags: 1 })),
 }
 
+const mockStartSpan = vi.fn(() => mockSpan)
+
 vi.mock("@opentelemetry/api", () => ({
   trace: {
-    getTracer: vi.fn(() => ({ startSpan: vi.fn(() => mockSpan) })),
+    getTracer: vi.fn(() => ({ startSpan: mockStartSpan })),
     setSpan: vi.fn((_ctx: unknown, _span: unknown) => ({})),
+    // Returns an identifiable marker so tests can assert which parent context a
+    // span was started under without a real SDK.
+    setSpanContext: vi.fn((_ctx: unknown, sc: { traceId: string }) => ({
+      __parentTraceId: sc.traceId,
+    })),
   },
   context: { active: vi.fn(() => ({})) },
   propagation: {
@@ -134,7 +141,7 @@ describe("createAgentWeaveBridgeService", () => {
     // Don't call disabledService.stop() — shares module-level unsubscribe with main service
   })
 
-  it("creates root span on message.queued and injects traceparent", () => {
+  it("creates root span on message.queued", () => {
     fire({
       type: "message.queued",
       sessionKey: "agent:main:test-session",
@@ -156,8 +163,59 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "main")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.activity.type", "agent_turn")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("channel", "telegram")
-    expect(process.env.AGENTWEAVE_TRACEPARENT).toBeTruthy()
     expect(process.env.AGENTWEAVE_SESSION_ID).toBe("018f-openclaw-main-test")
+  })
+
+  it("starts the turn span inside the gateway trace id from event.trace", () => {
+    const gatewayTraceId = "0af7651916cd43dd8448eb211c80319c"
+
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:trace-adopt",
+      sessionId: "018f-openclaw-main-trace",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+      trace: { traceId: gatewayTraceId, spanId: "b7ad6b7169203331", traceFlags: "01" },
+    })
+
+    expect(mockStartSpan).toHaveBeenCalledWith(
+      expect.any(String),
+      undefined,
+      { __parentTraceId: gatewayTraceId },
+    )
+  })
+
+  it("falls back to the active context when the event carries no usable trace", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:trace-missing",
+      sessionId: "018f-openclaw-main-notrace",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockStartSpan).toHaveBeenCalledWith(expect.any(String), undefined, {})
+  })
+
+  it("does not write traceparent env vars", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:no-env",
+      sessionId: "018f-openclaw-main-noenv",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+      trace: { traceId: "0af7651916cd43dd8448eb211c80319c", spanId: "b7ad6b7169203331" },
+    })
+
+    expect(process.env.AGENTWEAVE_TRACEPARENT).toBeUndefined()
+    expect(process.env.AGENTWEAVE_PARENT_TRACE_ID).toBeUndefined()
+    expect(process.env.AGENTWEAVE_PARENT_SPAN_ID).toBeUndefined()
   })
 
   it("sets Langfuse input preview on message.queued when OpenClaw provides one", () => {
