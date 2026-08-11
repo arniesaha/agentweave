@@ -932,7 +932,10 @@ export function createAgentWeaveBridgeService() {
               // present) is the real call length — without it every llm.call
               // span renders as a 0ms tick and per-call latency is unavailable.
               const endTime = Date.now()
-              const startTime = e.durationMs ? endTime - e.durationMs : undefined
+              // Guard positive, not just truthy: a negative durationMs would
+              // start the span after it ends, which backends render as garbage.
+              const startTime =
+                e.durationMs != null && e.durationMs > 0 ? endTime - e.durationMs : undefined
               const callSpan = tracer.startSpan(
                 "llm.call",
                 startTime !== undefined ? { startTime } : undefined,

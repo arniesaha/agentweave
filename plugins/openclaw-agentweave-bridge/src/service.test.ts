@@ -35,7 +35,9 @@ const mockStartSpan = vi.fn(() => {
 vi.mock("@opentelemetry/api", () => ({
   trace: {
     getTracer: vi.fn(() => ({ startSpan: mockStartSpan })),
-    setSpan: vi.fn((_ctx: unknown, _span: unknown) => ({})),
+    // Returns a marker wrapping the span so a parent-context assertion cannot
+    // pass against `context.active()`, which is a bare object of its own.
+    setSpan: vi.fn((_ctx: unknown, span: unknown) => ({ __parentSpan: span })),
     // Returns an identifiable marker so tests can assert which parent context a
     // span was started under without a real SDK.
     setSpanContext: vi.fn((_ctx: unknown, sc: { traceId: string }) => ({
