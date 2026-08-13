@@ -114,4 +114,5 @@ jobs:
       - name: Validate standalone distribution entry points
         run: |
           bash -n scripts/install.sh
+          python -m pip install -e sdk/python
           PYTHONPATH=sdk/python python sdk/python/agentweave/standalone.py version
