@@ -146,17 +146,26 @@ quickstart.
 ### Local proxy path
 
 ```bash
-pip install "agentweave-sdk[proxy]"
-agentweave start --port 4000 --endpoint http://localhost:4318
-export ANTHROPIC_BASE_URL=http://localhost:4000/v1
+curl -sSfL https://raw.githubusercontent.com/Arniesaha/agentweave/main/scripts/install.sh | sh
+agentweave init --endpoint http://localhost:4318
+# Dashboard: http://localhost:4000/dashboard/
 ```
 
-Use `agentweave status` to inspect the local proxy and `agentweave stop` when
-you are done. `agentweave proxy start` remains available for foreground runs.
+Homebrew users can install the same standalone executable with
+`brew install arniesaha/tap/agentweave`. Python users may instead run
+`pip install "agentweave-sdk[proxy]"`.
+
+Use `agentweave status` to inspect the local proxy, `agentweave trace tail` to
+follow calls, and `agentweave stop` when you are done. `agentweave proxy start`
+remains available for foreground runs.
 
 Use your normal provider API key in the client environment. Proxy-side key
 injection and private NodePort URLs are dogfood-only conveniences, not required
 for the public developer-preview path.
+
+Proxy mode is optional. Claude Code Remote Control users should keep the normal
+Anthropic endpoint and configure Claude Code's native OpenTelemetry export so
+Remote Control remains available.
 
 ## Quickstart (Python)
 

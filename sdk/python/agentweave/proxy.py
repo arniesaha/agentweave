@@ -348,7 +348,7 @@ _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 app = FastAPI(
     title="AgentWeave Proxy",
     description="Multi-provider AI observability proxy (Anthropic + Google Gemini + OpenAI)",
-    version="0.3.7",
+    version="0.3.8",
 )
 
 _EMBEDDED_DASHBOARD = os.getenv("AGENTWEAVE_EMBEDDED_DASHBOARD") == "1"

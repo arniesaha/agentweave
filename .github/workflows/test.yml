@@ -110,3 +110,8 @@ jobs:
           python -m pip install pytest
           python -m py_compile scripts/trace_quality_gate.py tests/test_trace_quality_gate.py
           python -m pytest tests/test_trace_quality_gate.py
+
+      - name: Validate standalone distribution entry points
+        run: |
+          bash -n scripts/install.sh
+          PYTHONPATH=sdk/python python sdk/python/agentweave/standalone.py version
