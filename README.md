@@ -413,6 +413,25 @@ One port, all providers. Every LLM call gets a span automatically.
 
 ## Backends
 
+### Ask your traces (read-only preview)
+
+`agentweave trace ask` maps a deliberately small set of questions to reviewed
+TraceQL templates and queries Tempo without modifying data:
+
+```bash
+agentweave trace ask "Why did this session fail?" --session agent:main:run-42 \
+  --tempo-url http://localhost:3200 --verbose
+agentweave trace ask "Compare agent errors" --window 6h --json
+agentweave trace ask "Show the slowest calls" --limit 10
+agentweave trace ask "Show expensive calls" --window 1d
+```
+
+Supported questions cover failures for an explicit session or trace, agent
+errors, slow calls, and calls with recorded cost. Inputs are validated, windows
+are capped at seven days, results are capped at 100 traces, and every result is
+cited by trace ID. Ambiguous or unsupported questions fail closed; this preview
+does not execute model-generated TraceQL or perform automated actions.
+
 AgentWeave emits standard OTLP HTTP — works with any compatible backend:
 
 | Backend | Endpoint |
