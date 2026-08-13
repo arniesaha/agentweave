@@ -63,6 +63,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from opentelemetry.trace import Link, NonRecordingSpan, SpanContext, StatusCode, TraceFlags
 
@@ -349,6 +350,39 @@ app = FastAPI(
     description="Multi-provider AI observability proxy (Anthropic + Google Gemini + OpenAI)",
     version="0.3.7",
 )
+
+_EMBEDDED_DASHBOARD = os.getenv("AGENTWEAVE_EMBEDDED_DASHBOARD") == "1"
+_DASHBOARD_DIR = pathlib.Path(__file__).with_name("dashboard_dist")
+
+
+async def _dashboard_backend_response(base_url: str, path: str, request: Request) -> Response:
+    """Forward local dashboard GET queries to a configured read-only backend."""
+    if request.method != "GET":
+        raise HTTPException(status_code=405, detail="dashboard backend proxy is read-only")
+    url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+    async with httpx.AsyncClient(timeout=15) as client:
+        upstream = await client.get(url, params=request.query_params)
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("content-type"),
+    )
+
+
+if _EMBEDDED_DASHBOARD and _DASHBOARD_DIR.joinpath("index.html").is_file():
+    @app.get("/tempo/{path:path}", include_in_schema=False)
+    async def dashboard_tempo(path: str, request: Request) -> Response:
+        return await _dashboard_backend_response(
+            os.getenv("AGENTWEAVE_TEMPO_QUERY_URL", "http://localhost:3200"), path, request
+        )
+
+    @app.get("/prometheus/{path:path}", include_in_schema=False)
+    async def dashboard_prometheus(path: str, request: Request) -> Response:
+        return await _dashboard_backend_response(
+            os.getenv("AGENTWEAVE_PROMETHEUS_URL", "http://localhost:9090"), path, request
+        )
+
+    app.mount("/dashboard", StaticFiles(directory=_DASHBOARD_DIR, html=True), name="dashboard")
 
 
 # ---------------------------------------------------------------------------

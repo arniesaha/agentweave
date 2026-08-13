@@ -94,6 +94,7 @@ def init(
 
     console.print(f"[green]AgentWeave initialized[/green] — proxy {action}")
     console.print(f"  Proxy    : [cyan]{state.url}[/cyan]")
+    console.print(f"  Dashboard: [cyan]{state.dashboard_url or state.url + '/dashboard/'}[/cyan]")
     console.print(f"  Logs     : [dim]{state.log_file}[/dim]")
     console.print()
     console.print("Next:")
@@ -203,6 +204,8 @@ def status(
     if current == "running" and state:
         console.print(f"[green]AgentWeave proxy is running[/green] pid=[bold]{state.pid}[/bold]")
         console.print(f"  URL      : [cyan]{state.url}[/cyan]")
+        if state.dashboard_url:
+            console.print(f"  Dashboard: [cyan]{state.dashboard_url}[/cyan]")
         console.print(f"  Logs     : [dim]{state.log_file}[/dim]")
         console.print(f"  Started  : [dim]{_format_started_at(state.started_at)}[/dim]")
         return

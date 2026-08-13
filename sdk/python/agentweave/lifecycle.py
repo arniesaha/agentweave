@@ -32,6 +32,7 @@ class ProxyState:
     command: list[str]
     log_file: str
     started_at: float
+    dashboard_url: str | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "ProxyState":
@@ -43,6 +44,7 @@ class ProxyState:
             command=[str(part) for part in payload["command"]],
             log_file=str(payload["log_file"]),
             started_at=float(payload["started_at"]),
+            dashboard_url=(str(payload["dashboard_url"]) if payload.get("dashboard_url") else None),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -164,6 +166,7 @@ def start_proxy_process(
         command.extend(["--auth-token", auth_token])
 
     env = os.environ.copy()
+    env["AGENTWEAVE_EMBEDDED_DASHBOARD"] = "1"
     stdout = path.open("ab")
     creationflags = 0
     popen_kwargs: dict[str, object] = {}
@@ -194,6 +197,7 @@ def start_proxy_process(
         command=command,
         log_file=str(path),
         started_at=time.time(),
+        dashboard_url=f"http://localhost:{port}/dashboard/",
     )
     write_state(state)
     return state
