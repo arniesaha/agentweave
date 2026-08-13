@@ -208,6 +208,9 @@ Config: `~/.cloudflared/config.yml`
 ## Cost Tracking
 
 The proxy calculates `cost.usd` per span using a pricing table in `sdk/python/agentweave/pricing.py`.
+When a model has no verified price, the proxy omits `cost.usd`, sets
+`agentweave.cost.status=unknown_model`, and emits a bounded warning with the
+normalized model name. Unknown pricing is never represented as a negative cost.
 
 **Bug fixed Mar 19:** Cache token counts weren't passed to `compute_cost`, causing ~7x inflated costs for sessions with high cache hit rates (like Nix's 99% cache hit rate). Fix: both streaming and non-streaming paths now pass `cache_read_tokens` and `cache_write_tokens`.
 

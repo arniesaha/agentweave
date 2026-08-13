@@ -365,13 +365,71 @@ class TestProxyCostAttrs:
         # gemini-2.5-flash corrected price: $0.075/1M input
         assert abs(span.attrs["cost.usd"] - 0.075) < 1e-9
 
-    def test_unknown_model_cost_is_sentinel(self):
-        from agentweave.proxy import _set_anthropic_response_attrs
-        from agentweave.pricing import UNKNOWN_COST
+    @pytest.mark.parametrize(
+        ("setter_name", "data"),
+        [
+            (
+                "_set_anthropic_response_attrs",
+                {"usage": {"input_tokens": 100, "output_tokens": 50}},
+            ),
+            (
+                "_set_openai_response_attrs",
+                {"usage": {"prompt_tokens": 100, "completion_tokens": 50}},
+            ),
+            (
+                "_set_google_response_attrs",
+                {"usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 50}},
+            ),
+        ],
+    )
+    def test_unknown_model_omits_numeric_cost(self, caplog, setter_name, data):
+        import agentweave.proxy as proxy
+
+        proxy._warn_unknown_cost_model.cache_clear()
         span = _FakeSpan()
-        data = {"usage": {"input_tokens": 100, "output_tokens": 50}}
-        _set_anthropic_response_attrs(span, data, elapsed_ms=10, model="my-unknown-model-xyz")
-        assert span.attrs["cost.usd"] == UNKNOWN_COST
+        with caplog.at_level("WARNING", logger="agentweave.proxy"):
+            getattr(proxy, setter_name)(
+                span,
+                data,
+                elapsed_ms=10,
+                model="Provider/My-Unknown-Model-XYZ",
+            )
+
+        assert "cost.usd" not in span.attrs
+        assert span.attrs["agentweave.cost.status"] == "unknown_model"
+        assert "model=my-unknown-model-xyz" in caplog.text
+
+    def test_streaming_cost_helper_omits_unknown_sentinel(self):
+        from agentweave.proxy import _set_computed_cost
+
+        span = _FakeSpan()
+        cost = _set_computed_cost(span, "streaming-unknown-model", 100, 50)
+
+        assert cost is None
+        assert "cost.usd" not in span.attrs
+        assert span.attrs["agentweave.cost.status"] == "unknown_model"
+
+    def test_unknown_model_warning_is_bounded(self, caplog):
+        from agentweave.proxy import _set_computed_cost, _warn_unknown_cost_model
+
+        _warn_unknown_cost_model.cache_clear()
+        with caplog.at_level("WARNING", logger="agentweave.proxy"):
+            _set_computed_cost(_FakeSpan(), "Provider/Repeat-Unknown", 1, 1)
+            _set_computed_cost(_FakeSpan(), "provider/repeat-unknown", 1, 1)
+
+        messages = [r.message for r in caplog.records if "repeat-unknown" in r.message]
+        assert len(messages) == 1
+
+    def test_claude_opus_5_emits_non_negative_cost(self):
+        from agentweave.proxy import _set_anthropic_response_attrs
+
+        span = _FakeSpan()
+        data = {"usage": {"input_tokens": 1_000_000, "output_tokens": 0}}
+        _set_anthropic_response_attrs(span, data, elapsed_ms=10, model="claude-opus-5")
+
+        assert span.attrs["cost.usd"] == 5.0
+        assert span.attrs["cost.usd"] >= 0
+        assert "agentweave.cost.status" not in span.attrs
 
     def test_no_cost_when_no_tokens(self):
         """cost.usd should not be set when token counts are zero."""
