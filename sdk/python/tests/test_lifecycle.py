@@ -137,3 +137,68 @@ def test_status_cli_json_uses_state_dir(monkeypatch, tmp_path):
     payload = json.loads(result.output)
     assert payload["status"] == "running"
     assert payload["proxy"]["pid"] == 123
+
+
+def test_init_cli_starts_proxy_and_prints_next_steps(monkeypatch):
+    from typer.testing import CliRunner
+
+    import agentweave.lifecycle as lifecycle
+    from agentweave.cli import app
+
+    state = lifecycle.ProxyState(
+        pid=123,
+        host="127.0.0.1",
+        port=4100,
+        url="http://localhost:4100",
+        command=["agentweave", "proxy", "start"],
+        log_file="/tmp/agentweave.log",
+        started_at=1.0,
+    )
+    started = {}
+    monkeypatch.setattr(lifecycle, "current_status", lambda: ("stopped", None))
+
+    def fake_start_proxy_process(**kwargs):
+        started.update(kwargs)
+        return state
+
+    monkeypatch.setattr(lifecycle, "start_proxy_process", fake_start_proxy_process)
+
+    result = CliRunner().invoke(
+        app,
+        ["init", "--port", "4100", "--endpoint", "http://tempo:4318"],
+    )
+
+    assert result.exit_code == 0
+    assert started["port"] == 4100
+    assert started["endpoint"] == "http://tempo:4318"
+    assert "AgentWeave initialized" in result.output
+    assert "http://localhost:4100" in result.output
+    assert "native OpenTelemetry" in result.output
+
+
+def test_init_cli_is_idempotent_when_proxy_is_running(monkeypatch):
+    from typer.testing import CliRunner
+
+    import agentweave.lifecycle as lifecycle
+    from agentweave.cli import app
+
+    state = lifecycle.ProxyState(
+        pid=123,
+        host="127.0.0.1",
+        port=4000,
+        url="http://localhost:4000",
+        command=["agentweave", "proxy", "start"],
+        log_file="/tmp/agentweave.log",
+        started_at=1.0,
+    )
+    monkeypatch.setattr(lifecycle, "current_status", lambda: ("running", state))
+    monkeypatch.setattr(
+        lifecycle,
+        "start_proxy_process",
+        lambda **kwargs: pytest.fail("init should reuse the running proxy"),
+    )
+
+    result = CliRunner().invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "proxy already running" in result.output

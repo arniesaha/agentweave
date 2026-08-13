@@ -52,6 +52,59 @@ def _format_started_at(started_at: float) -> str:
 # ---------------------------------------------------------------------------
 
 
+@app.command("init")
+def init(
+    port: int = typer.Option(4000, "--port", "-p", help="Proxy port to listen on."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Proxy host to bind to."),
+    endpoint: Optional[str] = typer.Option(
+        None,
+        "--endpoint",
+        "-e",
+        help="OTLP HTTP endpoint (e.g. http://localhost:4318).",
+    ),
+    agent_id: Optional[str] = typer.Option(
+        None, "--agent-id", help="Default agent ID tag for traced calls."
+    ),
+    capture_prompts: bool = typer.Option(
+        False,
+        "--capture-prompts",
+        help="Record the first 512 characters of prompts and responses.",
+    ),
+) -> None:
+    """Initialize a local AgentWeave proxy with safe, repeatable defaults."""
+    from agentweave.lifecycle import current_status, start_proxy_process
+
+    current, existing = current_status()
+    if current == "running" and existing:
+        state = existing
+        action = "already running"
+    else:
+        try:
+            state = start_proxy_process(
+                host=host,
+                port=port,
+                endpoint=endpoint,
+                agent_id=agent_id,
+                capture_prompts=capture_prompts,
+            )
+        except RuntimeError as exc:
+            console.print(f"[red]Initialization failed:[/red] {exc}")
+            raise typer.Exit(code=1)
+        action = "started"
+
+    console.print(f"[green]AgentWeave initialized[/green] — proxy {action}")
+    console.print(f"  Proxy    : [cyan]{state.url}[/cyan]")
+    console.print(f"  Logs     : [dim]{state.log_file}[/dim]")
+    console.print()
+    console.print("Next:")
+    console.print("  • Verify setup: [bold]agentweave doctor --check-proxy[/bold]")
+    console.print(f"  • Proxy mode: [bold]export ANTHROPIC_BASE_URL={state.url}[/bold]")
+    console.print(
+        "  • Claude Code Remote Control users: keep the Anthropic URL unchanged and "
+        "configure native OpenTelemetry export instead."
+    )
+
+
 @app.command("start")
 def start(
     port: int = typer.Option(4000, "--port", "-p", help="Port to listen on."),
