@@ -11,6 +11,7 @@ from agentweave.trace_analysis import (
     TraceQuestionError,
     answer_payload,
     parse_window,
+    plan_tail,
     plan_question,
     query_tempo,
 )
@@ -48,6 +49,12 @@ def test_query_tempo_returns_only_valid_trace_citations(monkeypatch):
                 "startTimeUnixNano": "123",
                 "spanSets": [{"spans": [{"attributes": [{
                     "key": "prov.agent.id", "value": {"stringValue": "nix"}
+                }, {
+                    "key": "prov.llm.model", "value": {"stringValue": "gpt-test"}
+                }, {
+                    "key": "prov.llm.prompt_tokens", "value": {"intValue": "10"}
+                }, {
+                    "key": "prov.llm.completion_tokens", "value": {"intValue": "5"}
                 }]}]}],
             },
             {"traceID": "not-a-trace"},
@@ -75,6 +82,9 @@ def test_query_tempo_returns_only_valid_trace_citations(monkeypatch):
     )
     assert [item.trace_id for item in citations] == ["a" * 32]
     assert citations[0].agent_id == "nix"
+    assert citations[0].model == "gpt-test"
+    assert citations[0].prompt_tokens == 10
+    assert citations[0].completion_tokens == 5
     assert "limit=5" in captured["url"]
     assert "start=6400" in captured["url"]
 
@@ -99,3 +109,11 @@ def test_empty_answer_is_not_reported_as_failure_and_citations_are_complete():
     assert empty["summary"].startswith("No matching data")
     assert empty["citations"] == []
     assert empty["traceql"] == plan.traceql
+
+
+def test_tail_plan_is_allowlisted_and_validates_session():
+    plan = plan_tail(session_id="agent:main:run-42")
+    assert "span.prov.llm.model != nil" in plan.traceql
+    assert 'span.prov.session.id = "agent:main:run-42"' in plan.traceql
+    with pytest.raises(TraceQuestionError, match="session ID"):
+        plan_tail(session_id='bad" }')
