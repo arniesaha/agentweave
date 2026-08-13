@@ -218,6 +218,61 @@ def status(
 # ---------------------------------------------------------------------------
 
 
+@trace_app.command("ask")
+def trace_ask(
+    question: str = typer.Argument(help="A supported natural-language trace question."),
+    tempo_url: str = typer.Option(
+        "http://localhost:3200", "--tempo-url", help="Tempo query base URL."
+    ),
+    session_id: Optional[str] = typer.Option(None, "--session", help="Session identifier."),
+    trace_id: Optional[str] = typer.Option(None, "--trace-id", help="32-character trace ID."),
+    window: str = typer.Option("24h", "--window", help="Bounded window such as 15m, 6h, or 1d."),
+    limit: int = typer.Option(20, "--limit", min=1, max=100, help="Maximum matching traces."),
+    timeout: float = typer.Option(10.0, "--timeout", min=0.1, help="Tempo timeout in seconds."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    verbose: bool = typer.Option(False, "--verbose", help="Show the rendered TraceQL query."),
+) -> None:
+    """Ask a constrained, read-only question about traces in Tempo."""
+    from agentweave.trace_analysis import (
+        TempoQueryError,
+        TraceQuestionError,
+        answer_payload,
+        parse_window,
+        plan_question,
+        query_tempo,
+    )
+
+    try:
+        plan = plan_question(question, session_id=session_id, trace_id=trace_id)
+        citations = query_tempo(
+            tempo_url,
+            plan,
+            window_seconds=parse_window(window),
+            limit=limit,
+            timeout_seconds=timeout,
+        )
+    except TraceQuestionError as exc:
+        console.print(f"[red]Unsupported trace question:[/red] {exc}")
+        raise typer.Exit(code=2)
+    except TempoQueryError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    payload = answer_payload(plan, citations)
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    console.print(payload["summary"])
+    if verbose:
+        console.print(f"[dim]TraceQL: {plan.traceql}[/dim]")
+    for citation in citations:
+        duration = f" ({citation.duration_ms:.1f} ms)" if citation.duration_ms is not None else ""
+        console.print(
+            f"  [cyan]{citation.trace_id}[/cyan]  {citation.root_service} / "
+            f"{citation.root_span}{duration}"
+        )
+
+
 @trace_app.command("show")
 def trace_show(
     trace_id: str = typer.Argument(help="The trace ID to display."),
