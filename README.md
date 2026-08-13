@@ -432,6 +432,18 @@ are capped at seven days, results are capped at 100 traces, and every result is
 cited by trace ID. Ambiguous or unsupported questions fail closed; this preview
 does not execute model-generated TraceQL or perform automated actions.
 
+For deterministic analysis of traffic observed by a running proxy:
+
+```bash
+agentweave trace analyze --proxy-url http://localhost:4000
+```
+
+The proxy's read-only `GET /v1/analysis` endpoint compares error rate, P95
+latency, and average cost with the immediately preceding window. It also flags
+per-session tool retry loops and cost spikes. Results use
+`diagnostic.anomaly` and `diagnostic.optimization` event names, include the
+supporting session IDs, and are directly consumable by OpenClaw or dashboards.
+
 AgentWeave emits standard OTLP HTTP — works with any compatible backend:
 
 | Backend | Endpoint |
