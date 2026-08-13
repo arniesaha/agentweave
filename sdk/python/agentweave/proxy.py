@@ -49,6 +49,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 from collections import OrderedDict
 import json
@@ -78,9 +79,43 @@ from agentweave.health import (
     _global_threshold as _health_global_threshold,
 )
 from agentweave.budget import get_tracker as _get_budget_tracker
-from agentweave.pricing import compute_cost
+from agentweave.pricing import UNKNOWN_COST, _normalize_model_name, compute_cost
 
 logger = logging.getLogger("agentweave.proxy")
+
+
+@functools.lru_cache(maxsize=256)
+def _warn_unknown_cost_model(normalized_model: str) -> None:
+    """Warn once per recently seen unknown model without unbounded state."""
+    logger.warning(
+        "No pricing available for model=%s; omitting cost.usd",
+        normalized_model,
+    )
+
+
+def _set_computed_cost(
+    span: Any,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> float | None:
+    """Set a valid cost, or mark unknown pricing without emitting a sentinel."""
+    cost_usd = compute_cost(
+        model,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+    )
+    if cost_usd == UNKNOWN_COST:
+        span.set_attribute(schema.COST_STATUS, "unknown_model")
+        _warn_unknown_cost_model(_normalize_model_name(model))
+        return None
+    span.set_attribute(schema.COST_USD, cost_usd)
+    return cost_usd
 
 # --- Upstream base URLs ---
 _ANTHROPIC_BASE = "https://api.anthropic.com"
@@ -1598,11 +1633,12 @@ async def _stream_and_trace(
         # Pass cache token breakdown so each bucket is priced at the correct rate
         # (cache_read is ~10x cheaper, cache_write slightly more than regular input).
         if input_tokens > 0 or output_tokens > 0:
-            span.set_attribute(schema.COST_USD, compute_cost(
+            _set_computed_cost(
+                span,
                 model, input_tokens, output_tokens,
                 cache_read_tokens=cache_read,
                 cache_write_tokens=cache_write,
-            ))
+            )
 
         # Warn when OpenAI streaming completes with no token usage data.
         # Chat Completions needs stream_options.include_usage=true; Responses API
@@ -1877,12 +1913,11 @@ def _set_anthropic_response_attrs(span: Any, data: dict, elapsed_ms: int, model:
     # (cache_read ~10x cheaper, cache_write slightly above regular input rate).
     cost_usd = None
     if model and (pt > 0 or ct > 0):
-        cost_usd = compute_cost(
-            model, pt, ct,
+        cost_usd = _set_computed_cost(
+            span, model, pt, ct,
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
         )
-        span.set_attribute(schema.COST_USD, cost_usd)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
@@ -1916,8 +1951,7 @@ def _set_google_response_attrs(span: Any, data: dict, elapsed_ms: int, model: st
     # Cost tracking
     cost_usd = None
     if model and (pt > 0 or ct > 0):
-        cost_usd = compute_cost(model, pt, ct)
-        span.set_attribute(schema.COST_USD, cost_usd)
+        cost_usd = _set_computed_cost(span, model, pt, ct)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)
@@ -1961,8 +1995,7 @@ def _set_openai_response_attrs(span: Any, data: dict, elapsed_ms: int, model: st
     # Cost tracking
     cost_usd = None
     if model and (pt > 0 or ct > 0):
-        cost_usd = compute_cost(model, pt, ct)
-        span.set_attribute(schema.COST_USD, cost_usd)
+        cost_usd = _set_computed_cost(span, model, pt, ct)
 
     # OTel gen_ai.* dual-emit
     span.set_attribute(schema.GEN_AI_USAGE_INPUT_TOKENS, pt)

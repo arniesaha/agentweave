@@ -103,9 +103,10 @@ PROV_LLM_STOP_REASON = "prov.llm.stop_reason"
 PROV_LLM_PROMPT_PREVIEW = "prov.llm.prompt_preview"    # first 512 chars of prompt
 PROV_LLM_RESPONSE_PREVIEW = "prov.llm.response_preview"  # first 512 chars of response
 
-# Cost tracking — USD per LLM call
-# -1.0 means model was not found in the pricing table (unknown cost)
+# Cost tracking — USD per LLM call. COST_USD is omitted when pricing is
+# unavailable; COST_STATUS explains why the numeric attribute is absent.
 COST_USD = "cost.usd"
+COST_STATUS = "agentweave.cost.status"
 
 # --- Provider IDs ---
 PROVIDER_ANTHROPIC = "anthropic"
