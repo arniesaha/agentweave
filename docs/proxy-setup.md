@@ -58,6 +58,8 @@ Restart=always
 RestartSec=5
 Environment=HOME=/home/youruser
 Environment=PATH=/home/youruser/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Dedicated OpenClaw proxy only; omit this on a shared proxy.
+Environment=AGENTWEAVE_HARNESS=openclaw
 
 [Install]
 WantedBy=default.target
@@ -82,7 +84,8 @@ Add to `~/.openclaw/openclaw.json`:
         "baseUrl": "http://localhost:4000",
         "headers": {
           "X-AgentWeave-Agent-Id": "nix-v1",
-          "X-AgentWeave-Agent-Type": "main"
+          "X-AgentWeave-Agent-Type": "main",
+          "X-AgentWeave-Harness": "openclaw"
         },
         "models": []
       }
@@ -101,7 +104,7 @@ Add to `~/.claude/settings.json`:
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:4000",
-    "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-mac\nX-AgentWeave-Session-Id: claude-code-main\nX-AgentWeave-Project: claude-code"
+    "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-mac\nX-AgentWeave-Session-Id: claude-code-main\nX-AgentWeave-Project: claude-code\nX-AgentWeave-Harness: claude-code"
   }
 }
 ```
@@ -136,11 +139,20 @@ With the single-proxy architecture, the `X-AgentWeave-Agent-Id` header is how ev
 ```python
 client = anthropic.Anthropic(
     base_url="http://localhost:4000",
-    default_headers={"X-AgentWeave-Agent-Id": "my-agent-v1"},
+    default_headers={
+        "X-AgentWeave-Agent-Id": "my-agent-v1",
+        "X-AgentWeave-Harness": "my-harness",
+    },
 )
 ```
 
 If no `X-AgentWeave-Agent-Id` header is sent, spans are attributed to `unattributed`.
+
+`X-AgentWeave-Harness` takes precedence over `AGENTWEAVE_HARNESS`. Empty or
+whitespace-only header values fall back to the environment value. If neither is
+set, `prov.harness` is omitted for backward compatibility. Use the environment
+fallback only for a dedicated single-harness proxy; shared proxies should send
+the per-request header and must not infer harness identity from model/provider.
 
 ## OpenAI / Codex streaming note
 

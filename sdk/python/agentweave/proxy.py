@@ -102,6 +102,7 @@ _SKIP_HEADERS_ALWAYS = {
     "x-agentweave-turn-depth",
     "x-agentweave-session-key",
     "x-agentweave-task-label",
+    "x-agentweave-harness",
     "x-agentweave-parent-span-id",
     "x-agentweave-parent-trace-id",
 }
@@ -127,6 +128,24 @@ def _normalize_trace_id(raw: str) -> int | None:
     if _TRACE_ID_RE.match(raw):
         return int(raw, 16)
     return int(hashlib.sha256(raw.encode()).hexdigest()[:32], 16)
+
+
+def _resolve_harness(
+    header_value: str | None,
+    keyed_context_value: str | None,
+    env_value: str | None,
+) -> str | None:
+    """Resolve explicit harness identity without inferring it from traffic.
+
+    The first non-empty value wins in header, keyed bridge context, environment
+    order. Values are stripped so an empty/whitespace-only header falls through
+    instead of suppressing a dedicated proxy's environment default.
+    """
+    for value in (header_value, keyed_context_value, env_value):
+        cleaned = value.strip() if value else ""
+        if cleaned:
+            return cleaned
+    return None
 
 
 def _context_for_trace_id(trace_id_int: int):
@@ -283,6 +302,7 @@ _session_context: dict[str, str] = {
         "prov.task.label": os.getenv("AGENTWEAVE_TASK_LABEL", ""),
         "prov.agent.type": os.getenv("AGENTWEAVE_AGENT_TYPE", ""),
         "prov.project": os.getenv("AGENTWEAVE_PROJECT", ""),
+        "prov.harness": os.getenv("AGENTWEAVE_HARNESS", ""),
     }.items() if v
 }
 
@@ -498,6 +518,7 @@ async def set_session_context(body: dict):
         "prov.agent.type": body.get("agent_type", ""),
         "prov.agent.id": body.get("agent_id", ""),
         "prov.project": body.get("project", ""),
+        "prov.harness": body.get("harness", ""),
     }.items() if v}
 
     force = bool(body.get("force", False))
@@ -1155,6 +1176,12 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         or os.getenv("AGENTWEAVE_TASK_LABEL")
         or None
     )
+    # Harness identity is always explicit; never infer it from model/provider.
+    harness: str | None = _resolve_harness(
+        request.headers.get("x-agentweave-harness"),
+        _active_ctx.get("prov.harness"),
+        os.getenv("AGENTWEAVE_HARNESS"),
+    )
     turn: int | None = None
     turn_raw = request.headers.get("x-agentweave-turn")
     if turn_raw is not None:
@@ -1283,6 +1310,7 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         parent_span_id_raw=parent_span_id_raw,
         parent_trace_id_raw=parent_trace_id_raw,
         task_label=task_label,
+        harness=harness,
     )
 
     try:
@@ -1367,6 +1395,7 @@ async def _request_and_trace(
     parent_span_id_raw: str | None = None,
     parent_trace_id_raw: str | None = None,
     task_label: str | None = None,
+    harness: str | None = None,
 ) -> Response:
     tracer = get_tracer()
     _span_ctx = _llm_parent_context(det_trace_id_int, traceparent)
@@ -1380,7 +1409,8 @@ async def _request_and_trace(
                            parent_session_id=parent_session_id,
                            agent_type=agent_type, turn_depth=turn_depth,
                            traceparent=traceparent,
-                           task_label=task_label)
+                           task_label=task_label,
+                           harness=harness)
         if turn_count is not None:
             span.set_attribute(schema.AGENT_TURN_COUNT, turn_count)
         start = time.perf_counter()
@@ -1476,6 +1506,7 @@ async def _stream_and_trace(
     parent_span_id_raw: str | None = None,
     parent_trace_id_raw: str | None = None,
     task_label: str | None = None,
+    harness: str | None = None,
 ) -> AsyncIterator[bytes]:
     tracer = get_tracer()
     _span_ctx = _llm_parent_context(det_trace_id_int, traceparent)
@@ -1489,7 +1520,8 @@ async def _stream_and_trace(
                        parent_session_id=parent_session_id,
                        agent_type=agent_type, turn_depth=turn_depth,
                        traceparent=traceparent,
-                       task_label=task_label)
+                       task_label=task_label,
+                       harness=harness)
     if turn_count is not None:
         span.set_attribute(schema.AGENT_TURN_COUNT, turn_count)
 
@@ -2025,6 +2057,7 @@ def _set_request_attrs(
     turn_depth: int | None = None,
     traceparent: str | None = None,
     task_label: str | None = None,
+    harness: str | None = None,
 ) -> None:
     span.set_attribute(schema.PROV_ACTIVITY_TYPE, schema.ACTIVITY_LLM_CALL)
     span.set_attribute(schema.PROV_LLM_PROVIDER, provider)
@@ -2048,6 +2081,8 @@ def _set_request_attrs(
     if project is not None:
         span.set_attribute(schema.PROV_PROJECT, project)
         span.set_attribute(schema.LANGFUSE_TRACE_METADATA_PROJECT, project)
+    if harness is not None:
+        span.set_attribute(schema.PROV_HARNESS, harness)
     if turn is not None:
         span.set_attribute(schema.PROV_SESSION_TURN, turn)
     if det_trace_id_raw is not None:

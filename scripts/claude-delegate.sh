@@ -97,7 +97,8 @@ fi
 
 # Build the multiline ANTHROPIC_CUSTOM_HEADERS block.
 headers="X-AgentWeave-Agent-Id: ${agent_id}
-X-AgentWeave-Session-Id: ${session_id}"
+X-AgentWeave-Session-Id: ${session_id}
+X-AgentWeave-Harness: claude-code"
 [[ -n "$parent"     ]] && headers+=$'\n'"X-AgentWeave-Parent-Session-Id: ${parent}"
 [[ -n "$project"    ]] && headers+=$'\n'"X-AgentWeave-Project: ${project}"
 [[ -n "$task_label" ]] && headers+=$'\n'"X-AgentWeave-Task-Label: ${task_label}"
