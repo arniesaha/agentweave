@@ -2,7 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
+  base: '/dashboard/',
   plugins: [react()],
+  build: {
+    outDir: '../sdk/python/agentweave/dashboard_dist',
+    emptyOutDir: true,
+  },
   server: {
     proxy: {
       '/tempo': {

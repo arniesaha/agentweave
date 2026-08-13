@@ -58,6 +58,7 @@ Issues = "https://github.com/arniesaha/agentweave/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["agentweave"]
 artifacts = [
+    "agentweave/dashboard_dist/**",
     "agentweave/openclaw_bridge_dist/index.js",
     "agentweave/openclaw_bridge_dist/openclaw.plugin.json",
     "agentweave/openclaw_bridge_dist/package.json",

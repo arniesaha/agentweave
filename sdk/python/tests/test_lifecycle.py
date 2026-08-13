@@ -63,6 +63,8 @@ def test_start_proxy_process_writes_state(monkeypatch, tmp_path):
     assert payload["pid"] == 12345
     assert payload["port"] == 4100
     assert payload["log_file"].endswith("proxy.log")
+    assert payload["dashboard_url"] == "http://localhost:4100/dashboard/"
+    assert launched["kwargs"]["env"]["AGENTWEAVE_EMBEDDED_DASHBOARD"] == "1"
 
 
 def test_start_proxy_process_refuses_running_state(monkeypatch, tmp_path):
