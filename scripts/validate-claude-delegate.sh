@@ -113,5 +113,6 @@ want "prov.session.id"        "$SESSION_ID"
 want "prov.parent.session.id" "$PARENT"
 want "prov.project"           "$PROJECT"
 want "prov.task.label"        "$TASK"
+want "prov.harness"           "claude-code"
 
 ts "PASS — delegated attribution propagated end-to-end"

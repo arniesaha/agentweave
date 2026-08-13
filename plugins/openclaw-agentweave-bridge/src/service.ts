@@ -458,6 +458,7 @@ function startUpstreamRootSpanFromSessionState(
       session_key: sessionKey,
       agent_id: agentId,
       agent_type: agentType,
+      harness: "openclaw",
       // Force the proxy to attribute LLM calls to the upstream identity.
       force: true,
     }
@@ -668,6 +669,7 @@ export function createAgentWeaveBridgeService() {
                   session_key: sessionKey,
                   agent_id: effectiveAgentId,
                   agent_type: effectiveAgentType,
+                  harness: "openclaw",
                   // Force the proxy to attribute LLM calls to upstream identity
                   // (same as sub-agents) so codex/model spans match the run.
                   force: Boolean(upstream) || effectiveAgentType === "subagent",
@@ -795,6 +797,7 @@ export function createAgentWeaveBridgeService() {
                       parent_session_id: mainSessionId,
                       agent_id: subagentId,
                       agent_type: "subagent",
+                      harness: "openclaw",
                       task_label: taskLabel ?? `subagent ${sessionKey.split(":")[1] || "unknown"}`,
                       force: true,
                     }),

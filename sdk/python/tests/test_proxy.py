@@ -29,6 +29,7 @@ from agentweave.proxy import (
     _set_openai_response_attrs,
     _set_request_attrs,
     _detect_repository_name,
+    _resolve_harness,
     _anthropic_response_text,
     _google_response_text,
     _SKIP_HEADERS_ALWAYS,
@@ -2225,6 +2226,98 @@ class TestAttributeResolution:
             or os.getenv("AGENTWEAVE_SESSION_ID")
         )
         assert session_id == "env-session"
+
+
+class TestHarnessAttribution:
+    """Explicit harness identity reaches every proxy-generated LLM span (#267)."""
+
+    def test_header_precedes_keyed_context_and_env(self):
+        assert _resolve_harness(" claude-code ", "openclaw", "env-harness") == "claude-code"
+
+    def test_empty_header_falls_back_to_keyed_context_then_env(self):
+        assert _resolve_harness("   ", " openclaw ", "env-harness") == "openclaw"
+        assert _resolve_harness("", None, " dedicated-proxy ") == "dedicated-proxy"
+
+    def test_missing_harness_remains_absent(self, monkeypatch):
+        assert _resolve_harness(None, None, None) is None
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={},
+        )
+        assert "prov.harness" not in span.attrs
+
+    def test_harness_sets_span_attribute(self):
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model="test-model", provider="anthropic",
+            agent_id="agent-1", agent_model="test-model",
+            path="v1/messages", body={}, harness="claude-code",
+        )
+        assert span.attrs["prov.harness"] == "claude-code"
+
+    def test_harness_header_is_not_forwarded_upstream(self):
+        assert "x-agentweave-harness" in _SKIP_HEADERS_ALWAYS
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_streaming_and_non_streaming_pass_resolved_harness(
+        self, monkeypatch, stream,
+    ):
+        from unittest.mock import AsyncMock, patch
+        from fastapi.responses import JSONResponse
+        from fastapi.testclient import TestClient
+        from agentweave.config import AgentWeaveConfig
+        from agentweave.proxy import app
+
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        monkeypatch.setenv("AGENTWEAVE_HARNESS", "env-harness")
+        captured: list[str | None] = []
+
+        async def fake_request(**kwargs):
+            captured.append(kwargs.get("harness"))
+            return JSONResponse({"ok": True})
+
+        async def fake_stream(**kwargs):
+            captured.append(kwargs.get("harness"))
+            yield b"data: [DONE]\n\n"
+
+        with patch.object(proxy_module, "_request_and_trace", side_effect=fake_request), \
+             patch.object(proxy_module, "_stream_and_trace", side_effect=fake_stream), \
+             patch.object(proxy_module, "_stream_preflight", new=AsyncMock(return_value=None)):
+            response = TestClient(app).post(
+                "/v1/messages",
+                json={
+                    "model": "claude-3-haiku-20240307",
+                    "max_tokens": 1,
+                    "stream": stream,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                headers={
+                    "x-api-key": "sk-ant-test",
+                    "x-agentweave-harness": "claude-code",
+                },
+            )
+
+        assert response.status_code == 200
+        assert captured == ["claude-code"]
+
+    def test_session_context_accepts_openclaw_harness(self, monkeypatch):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
+        response = TestClient(app).post("/session", json={
+            "session_key": "agent:main:harness",
+            "session_id": "session-1",
+            "harness": "openclaw",
+            "force": True,
+        })
+
+        assert response.status_code == 200
+        assert proxy_module._forced_session_contexts["agent:main:harness"]["prov.harness"] == "openclaw"
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ Add the `env` block to `~/.claude/settings.json`:
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://192.168.1.70:30400",
-    "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-mac\nX-AgentWeave-Session-Id: claude-code-main\nX-AgentWeave-Project: claude-code"
+    "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-mac\nX-AgentWeave-Session-Id: claude-code-main\nX-AgentWeave-Project: claude-code\nX-AgentWeave-Harness: claude-code"
   }
 }
 ```
@@ -33,7 +33,7 @@ Add the `env` block to `~/.claude/settings.json`:
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://192.168.1.70:30400",
-    "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-nas\nX-AgentWeave-Session-Id: claude-code-main\nX-AgentWeave-Project: claude-code"
+    "ANTHROPIC_CUSTOM_HEADERS": "X-AgentWeave-Agent-Id: claude-code-nas\nX-AgentWeave-Session-Id: claude-code-main\nX-AgentWeave-Project: claude-code\nX-AgentWeave-Harness: claude-code"
   }
 }
 ```
@@ -45,6 +45,7 @@ All Claude Code instances share the single proxy on port 30400. Attribution is d
 - `X-AgentWeave-Agent-Id` — identifies the Claude Code instance (e.g., `claude-code-mac`, `claude-code-nas`)
 - `X-AgentWeave-Session-Id` — groups spans into a session
 - `X-AgentWeave-Project` — project-level grouping
+- `X-AgentWeave-Harness` — stable caller type (`claude-code` here)
 
 Multiple headers are `\n`-separated in the JSON string.
 
@@ -53,8 +54,8 @@ Changes take effect on **new** Claude Code sessions only.
 ## How it works
 
 - `ANTHROPIC_BASE_URL` redirects API calls from `api.anthropic.com` to the proxy
-- `ANTHROPIC_CUSTOM_HEADERS` sends `X-AgentWeave-Agent-Id`, `X-AgentWeave-Session-Id`,
-  and `X-AgentWeave-Project` with every request so the proxy tags spans correctly
+- `ANTHROPIC_CUSTOM_HEADERS` sends the agent, session, project, and harness
+  headers with every request so the proxy tags spans correctly
 - The proxy forwards requests to Anthropic, emits OTel spans to Tempo,
   and returns the response transparently
 - The proxy is pass-through — OAuth tokens from the Claude Code SDK pass through untouched
