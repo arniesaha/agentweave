@@ -788,6 +788,17 @@ async def get_agent_health_config():
     }
 
 
+@app.get("/v1/analysis", include_in_schema=True)
+async def get_trace_analysis():
+    """Return read-only anomaly and session optimization diagnostics."""
+    from agentweave.analysis import analysis_payload
+    from agentweave.health import _spans, _spans_lock
+
+    with _spans_lock:
+        spans = list(_spans)
+    return analysis_payload(spans)
+
+
 # ---------------------------------------------------------------------------
 # Claude Code hooks endpoints
 # ---------------------------------------------------------------------------

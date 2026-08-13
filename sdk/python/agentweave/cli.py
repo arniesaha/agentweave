@@ -273,6 +273,47 @@ def trace_ask(
         )
 
 
+@trace_app.command("analyze")
+def trace_analyze(
+    proxy_url: str = typer.Option(
+        "http://localhost:4000", "--proxy-url", help="AgentWeave proxy base URL."
+    ),
+    timeout: float = typer.Option(5.0, "--timeout", min=0.1, help="Request timeout in seconds."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Show deterministic anomaly and session optimization diagnostics."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        f"{proxy_url.rstrip('/')}/v1/analysis",
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        console.print(f"[red]Analysis query failed:[/red] {exc}")
+        raise typer.Exit(code=1)
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    anomalies = payload.get("anomalies") or []
+    suggestions = payload.get("suggestions") or []
+    console.print(f"[bold]Anomalies[/bold] ({len(anomalies)})")
+    for finding in anomalies:
+        console.print(f"  [{finding.get('severity', 'warning')}]{finding.get('message', '')}[/]")
+        console.print(f"    sessions: {', '.join(finding.get('session_ids') or [])}")
+    console.print(f"[bold]Optimization suggestions[/bold] ({len(suggestions)})")
+    for finding in suggestions:
+        console.print(f"  {finding.get('message', '')}")
+        console.print(f"    sessions: {', '.join(finding.get('session_ids') or [])}")
+    if not anomalies and not suggestions:
+        console.print("[green]No evidence-backed findings in the current in-memory window.[/green]")
+
+
 @trace_app.command("show")
 def trace_show(
     trace_id: str = typer.Argument(help="The trace ID to display."),
