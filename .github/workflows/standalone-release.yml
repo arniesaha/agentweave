@@ -20,7 +20,7 @@ jobs:
         include:
           - runner: ubuntu-latest
             asset: linux-x86_64
-          - runner: macos-13
+          - runner: macos-15-intel
             asset: macos-x86_64
           - runner: macos-14
             asset: macos-arm64
