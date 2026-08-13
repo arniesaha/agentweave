@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-latest
+          - runner: ubuntu-22.04
             asset: linux-x86_64
           - runner: macos-15-intel
             asset: macos-x86_64
