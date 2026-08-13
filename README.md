@@ -424,6 +424,7 @@ agentweave trace ask "Why did this session fail?" --session agent:main:run-42 \
 agentweave trace ask "Compare agent errors" --window 6h --json
 agentweave trace ask "Show the slowest calls" --limit 10
 agentweave trace ask "Show expensive calls" --window 1d
+agentweave trace tail --tempo-url http://localhost:3200 --session agent:main:run-42
 ```
 
 Supported questions cover failures for an explicit session or trace, agent

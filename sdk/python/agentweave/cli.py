@@ -317,6 +317,75 @@ def trace_analyze(
         console.print("[green]No evidence-backed findings in the current in-memory window.[/green]")
 
 
+@trace_app.command("tail")
+def trace_tail(
+    tempo_url: str = typer.Option(
+        "http://localhost:3200", "--tempo-url", help="Tempo query base URL."
+    ),
+    session_id: Optional[str] = typer.Option(None, "--session", help="Follow one session."),
+    since: str = typer.Option("5m", "--since", help="Initial lookback such as 5m or 1h."),
+    interval: float = typer.Option(2.0, "--interval", min=0.2, help="Polling interval in seconds."),
+    limit: int = typer.Option(50, "--limit", min=1, max=100, help="Maximum traces per poll."),
+    once: bool = typer.Option(False, "--once", help="Poll once and exit."),
+    json_output: bool = typer.Option(False, "--json", help="Emit one JSON object per trace."),
+) -> None:
+    """Live-tail LLM traces from Tempo."""
+    from agentweave.trace_analysis import (
+        TempoQueryError,
+        TraceQuestionError,
+        parse_window,
+        plan_tail,
+        query_tempo,
+    )
+
+    try:
+        plan = plan_tail(session_id=session_id)
+        window_seconds = parse_window(since)
+    except TraceQuestionError as exc:
+        console.print(f"[red]Invalid tail options:[/red] {exc}")
+        raise typer.Exit(code=2)
+    seen: set[str] = set()
+    if not json_output:
+        console.print("[dim]Following LLM traces; press Ctrl-C to stop.[/dim]")
+    try:
+        while True:
+            try:
+                citations = query_tempo(
+                    tempo_url,
+                    plan,
+                    window_seconds=window_seconds,
+                    limit=limit,
+                    timeout_seconds=max(5.0, interval * 2),
+                )
+            except TempoQueryError as exc:
+                console.print(f"[red]{exc}[/red]")
+                if once:
+                    raise typer.Exit(code=1)
+                time.sleep(interval)
+                continue
+            fresh = sorted(
+                (item for item in citations if item.trace_id not in seen),
+                key=lambda item: item.start_time_unix_nano or "",
+            )
+            for item in fresh:
+                seen.add(item.trace_id)
+                if json_output:
+                    typer.echo(json.dumps(item.to_dict(), sort_keys=True))
+                    continue
+                tokens = (item.prompt_tokens or 0) + (item.completion_tokens or 0)
+                cost = f"${item.cost_usd:.4f}" if item.cost_usd is not None else "—"
+                latency = f"{item.duration_ms:.0f}ms" if item.duration_ms is not None else "—"
+                console.print(
+                    f"[cyan]{item.trace_id}[/cyan]  {item.agent_id or 'unknown'}  "
+                    f"{item.model or 'unknown'}  tokens={tokens or '—'}  cost={cost}  {latency}"
+                )
+            if once:
+                return
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return
+
+
 @trace_app.command("show")
 def trace_show(
     trace_id: str = typer.Argument(help="The trace ID to display."),

@@ -44,6 +44,9 @@ class TraceCitation:
     start_time_unix_nano: str | None
     agent_id: str | None = None
     cost_usd: float | None = None
+    model: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -139,6 +142,23 @@ def plan_question(
     )
 
 
+def plan_tail(*, session_id: str | None = None) -> QueryPlan:
+    """Build the allowlisted live-tail query, optionally scoped to a session."""
+
+    filters = ["span.prov.llm.model != nil"]
+    if session_id:
+        filters.append(f'span.prov.session.id = "{_validate_session_id(session_id)}"')
+    selected = (
+        "span.prov.agent.id, span.prov.llm.model, span.prov.llm.prompt_tokens, "
+        "span.prov.llm.completion_tokens, span.cost.usd"
+    )
+    return QueryPlan(
+        "tail",
+        f"{{ {' && '.join(filters)} }} | select({selected})",
+        "recent LLM calls",
+    )
+
+
 def _citation(item: dict[str, Any]) -> TraceCitation | None:
     trace_id = str(item.get("traceID") or "")
     if not _TRACE_ID.fullmatch(trace_id):
@@ -163,6 +183,11 @@ def _citation(item: dict[str, Any]) -> TraceCitation | None:
         cost_usd = float(raw_cost) if raw_cost is not None else None
     except (TypeError, ValueError):
         cost_usd = None
+    def integer_attribute(name: str) -> int | None:
+        try:
+            return int(attributes[name]) if attributes.get(name) is not None else None
+        except (TypeError, ValueError):
+            return None
     return TraceCitation(
         trace_id=trace_id.lower(),
         root_service=str(item.get("rootServiceName") or "unknown"),
@@ -173,6 +198,9 @@ def _citation(item: dict[str, Any]) -> TraceCitation | None:
         ),
         agent_id=str(attributes["prov.agent.id"]) if attributes.get("prov.agent.id") else None,
         cost_usd=cost_usd,
+        model=str(attributes["prov.llm.model"]) if attributes.get("prov.llm.model") else None,
+        prompt_tokens=integer_attribute("prov.llm.prompt_tokens"),
+        completion_tokens=integer_attribute("prov.llm.completion_tokens"),
     )
 
 
