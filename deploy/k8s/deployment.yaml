@@ -30,7 +30,7 @@ spec:
           # Pinned so the running build is identifiable from the cluster alone.
           # scripts/deploy.sh cross-checks this against the SDK version and
           # refuses to deploy on mismatch. Bump both together.
-          image: localhost:5000/agentweave-proxy:0.3.7
+          image: localhost:5000/agentweave-proxy:0.3.8
           imagePullPolicy: Always
           ports:
             - containerPort: 4000
