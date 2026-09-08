@@ -2812,3 +2812,174 @@ class TestSetRequestAttrsCwdRepository:
 
         assert span.attrs["prov.cwd"] == str(d)
         assert "prov.repository" not in span.attrs
+
+
+class TestRequestBodyInspection:
+    """Compressed request bodies must not fail the request.
+
+    Codex zstd-compresses request bodies by default (codex-rs feature
+    `enable_request_compression`, Stage::Stable), so every `POST
+    /codex/responses` hit `json.loads` on zstd bytes. That raises
+    UnicodeDecodeError — a ValueError, but *not* a JSONDecodeError, so the
+    old `except json.JSONDecodeError` guard missed it and FastAPI turned the
+    unhandled exception into a 500 on every codex call.
+    """
+
+    def test_plain_json_body_is_parsed(self):
+        from agentweave.proxy import _inspect_request_body
+
+        assert _inspect_request_body(b'{"model": "gpt-5"}', "") == {"model": "gpt-5"}
+
+    def test_empty_body_inspects_as_empty_dict(self):
+        from agentweave.proxy import _inspect_request_body
+
+        assert _inspect_request_body(b"", "") == {}
+
+    def test_zstd_body_is_decompressed_and_parsed(self):
+        zstandard = pytest.importorskip("zstandard")
+        from agentweave.proxy import _inspect_request_body
+
+        raw = json.dumps({"model": "gpt-5", "stream": True}).encode()
+        compressed = zstandard.ZstdCompressor(level=3).compress(raw)
+
+        assert _inspect_request_body(compressed, "zstd") == {
+            "model": "gpt-5", "stream": True,
+        }
+
+    def test_zstd_frame_without_content_size_is_decompressed(self):
+        """Codex streams its frames, so no content-size header is written."""
+        zstandard = pytest.importorskip("zstandard")
+        from agentweave.proxy import _inspect_request_body
+
+        import io as _io
+
+        raw = json.dumps({"model": "gpt-5"}).encode()
+        buf = _io.BytesIO()
+        with zstandard.ZstdCompressor(level=3).stream_writer(buf, closefd=False) as writer:
+            writer.write(raw)
+
+        assert _inspect_request_body(buf.getvalue(), "zstd") == {"model": "gpt-5"}
+
+    def test_gzip_body_is_decompressed_and_parsed(self):
+        import gzip as _gzip
+        from agentweave.proxy import _inspect_request_body
+
+        raw = _gzip.compress(json.dumps({"model": "gpt-5"}).encode())
+
+        assert _inspect_request_body(raw, "gzip") == {"model": "gpt-5"}
+
+    def test_unsupported_encoding_degrades_to_uninspectable(self):
+        from agentweave.proxy import _inspect_request_body
+
+        assert _inspect_request_body(b"\x00\x01\x02", "br") is None
+
+    def test_undecompressable_body_degrades_to_uninspectable(self):
+        from agentweave.proxy import _inspect_request_body
+
+        assert _inspect_request_body(b"not actually zstd", "zstd") is None
+
+    def test_non_utf8_body_degrades_instead_of_raising(self):
+        """The exact pre-fix crash: UnicodeDecodeError is not a JSONDecodeError."""
+        from agentweave.proxy import _inspect_request_body
+
+        with pytest.raises(UnicodeDecodeError):
+            json.loads(b"\x28\xb5\x2f\xfd\x00\x58")
+
+        assert _inspect_request_body(b"\x28\xb5\x2f\xfd\x00\x58", "") is None
+
+    def test_non_object_json_degrades_to_uninspectable(self):
+        from agentweave.proxy import _inspect_request_body
+
+        assert _inspect_request_body(b'["a"]', "") is None
+
+
+class TestCompressedRequestForwarding:
+    """Route-level: a zstd body must reach upstream untouched, not 500."""
+
+    @pytest.fixture
+    def forwarded(self, monkeypatch):
+        from fastapi.responses import JSONResponse
+        import agentweave.proxy as proxy_mod
+
+        captured: dict = {}
+
+        async def _fake_request_and_trace(**kwargs):
+            captured.update(kwargs)
+            return JSONResponse({"ok": True})
+
+        async def _fake_stream_preflight(**_kwargs):
+            return None
+
+        async def _fake_stream_and_trace(**kwargs):
+            captured.update(kwargs)
+            yield b"data: [DONE]\n\n"
+
+        monkeypatch.setattr(proxy_mod, "_request_and_trace", _fake_request_and_trace)
+        monkeypatch.setattr(proxy_mod, "_stream_preflight", _fake_stream_preflight)
+        monkeypatch.setattr(proxy_mod, "_stream_and_trace", _fake_stream_and_trace)
+        return captured
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+        from agentweave.proxy import app
+
+        return TestClient(app)
+
+    def test_zstd_codex_request_is_forwarded_verbatim(self, client, forwarded):
+        zstandard = pytest.importorskip("zstandard")
+
+        raw = json.dumps({"model": "gpt-5.6-luna", "stream": False}).encode()
+        compressed = zstandard.ZstdCompressor(level=3).compress(raw)
+
+        resp = client.post(
+            "/codex/responses",
+            content=compressed,
+            headers={"content-type": "application/json", "content-encoding": "zstd"},
+        )
+
+        assert resp.status_code == 200
+        # The body must go upstream exactly as received — it is still zstd, and
+        # content-encoding must still describe it.
+        assert forwarded["body_bytes"] == compressed
+        assert forwarded["model"] == "gpt-5.6-luna"
+        encodings = {
+            v for k, v in forwarded["headers"].items() if k.lower() == "content-encoding"
+        }
+        assert encodings == {"zstd"}
+
+    def test_uninspectable_body_is_still_forwarded_verbatim(self, client, forwarded):
+        payload = b"\x00\x01\x02not-json"
+
+        resp = client.post(
+            "/v1/chat/completions",
+            content=payload,
+            headers={"content-type": "application/json", "content-encoding": "br"},
+        )
+
+        assert resp.status_code == 200
+        assert forwarded["body_bytes"] == payload
+
+    def test_rewriting_stream_options_drops_the_stale_content_encoding(
+        self, client, forwarded
+    ):
+        """Injecting include_usage re-serializes to plain JSON.
+
+        The client's content-encoding then describes bytes that no longer
+        exist, so upstream would try to decompress uncompressed JSON.
+        """
+        zstandard = pytest.importorskip("zstandard")
+
+        raw = json.dumps({"model": "gpt-5.6-luna", "stream": True}).encode()
+        compressed = zstandard.ZstdCompressor(level=3).compress(raw)
+
+        resp = client.post(
+            "/v1/chat/completions",
+            content=compressed,
+            headers={"content-type": "application/json", "content-encoding": "zstd"},
+        )
+
+        assert resp.status_code == 200
+        sent = json.loads(forwarded["body_bytes"])
+        assert sent["stream_options"] == {"include_usage": True}
+        assert not [k for k in forwarded["headers"] if k.lower() == "content-encoding"]

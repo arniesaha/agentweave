@@ -50,7 +50,10 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import gzip
 import hashlib
+import io
+import zlib
 from collections import OrderedDict
 import json
 import pathlib
@@ -59,9 +62,16 @@ import os
 import re
 import secrets
 import time
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 import httpx
+
+try:
+    import zstandard
+except ImportError:  # pragma: no cover - proxy extras install it
+    # Optional so the SDK stays importable without the proxy extras; a
+    # zstd-encoded body then degrades to an uninspected span, not a failure.
+    zstandard = None  # type: ignore[assignment]
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -348,7 +358,7 @@ _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 app = FastAPI(
     title="AgentWeave Proxy",
     description="Multi-provider AI observability proxy (Anthropic + Google Gemini + OpenAI)",
-    version="0.3.8",
+    version="0.3.9",
 )
 
 _EMBEDDED_DASHBOARD = os.getenv("AGENTWEAVE_EMBEDDED_DASHBOARD") == "1"
@@ -517,6 +527,63 @@ def _is_streaming(provider: str, path: str, body: dict) -> bool:
     if provider == "google":
         return "streamGenerateContent" in path
     return bool(body.get("stream", False))
+
+
+# Ceiling on a decompressed request body. Inspection only needs the small
+# scalar fields near the top of the JSON, so this exists to bound a hostile or
+# malformed frame rather than to accommodate real payloads.
+_MAX_INSPECT_BODY_BYTES = 64 * 1024 * 1024
+
+
+def _decompress_zstd(raw: bytes) -> bytes:
+    if zstandard is None:
+        raise RuntimeError("zstandard is not installed")
+    # stream_reader tolerates frames written without a content-size header and
+    # lets the read be bounded; ZstdDecompressor.decompress() can do neither.
+    with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(raw)) as reader:
+        return reader.read(_MAX_INSPECT_BODY_BYTES)
+
+
+_BODY_DECOMPRESSORS: dict[str, Callable[[bytes], bytes]] = {
+    "zstd": _decompress_zstd,
+    "gzip": gzip.decompress,
+    "x-gzip": gzip.decompress,
+    "deflate": zlib.decompress,
+}
+
+
+def _inspect_request_body(body_bytes: bytes, content_encoding: str) -> dict[str, Any] | None:
+    """Parse a request body for observability. None means "could not inspect".
+
+    The body is forwarded upstream verbatim, so a failure here must degrade to
+    an untagged span rather than fail the request. Codex zstd-compresses
+    request bodies by default (codex-rs feature `enable_request_compression`,
+    Stage::Stable), and json.loads on those bytes raises UnicodeDecodeError —
+    a ValueError, but not a JSONDecodeError, so it escaped the previous guard
+    and turned every codex call into a 500.
+    """
+    if not body_bytes:
+        return {}
+    raw = body_bytes
+    encoding = content_encoding.strip().lower()
+    if encoding and encoding != "identity":
+        decompress = _BODY_DECOMPRESSORS.get(encoding)
+        if decompress is None:
+            logger.warning(
+                "cannot inspect request body: unsupported content-encoding %r", encoding
+            )
+            return None
+        try:
+            raw = decompress(body_bytes)
+        except Exception as exc:
+            logger.warning("cannot inspect %s request body: %s", encoding, exc)
+            return None
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        # Includes UnicodeDecodeError (non-UTF-8 bytes) and JSONDecodeError.
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 # ---------------------------------------------------------------------------
@@ -1162,12 +1229,14 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         return denied
 
     body_bytes = await request.body()
-    body: dict[str, Any] = {}
-    if body_bytes:
-        try:
-            body = json.loads(body_bytes)
-        except json.JSONDecodeError:
-            pass
+    inspected = _inspect_request_body(
+        body_bytes, request.headers.get("content-encoding", "")
+    )
+    body: dict[str, Any] = inspected if inspected is not None else {}
+    # An uninspectable body must be forwarded byte-for-byte: rewriting it from
+    # the empty placeholder would send an empty request upstream.
+    body_is_rewritable = inspected is not None
+    body_was_rewritten = False
 
     provider = _detect_provider(path)
     # ChatGPT-mode tokens (Bearer eyJ…) reach api.openai.com only to be rejected.
@@ -1187,7 +1256,12 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
     # support stream_options — usage arrives automatically in the
     # response.completed SSE event (parsed by _parse_openai_sse).
     _is_chat_completions = "chat/completions" in path
-    if is_stream and _is_chat_completions and provider in ("openai", "codex"):
+    if (
+        is_stream
+        and _is_chat_completions
+        and provider in ("openai", "codex")
+        and body_is_rewritable
+    ):
         stream_opts = body.get("stream_options")
         if not isinstance(stream_opts, dict):
             stream_opts = {}
@@ -1195,6 +1269,10 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         if stream_opts.get("include_usage") is not True:
             stream_opts["include_usage"] = True
             body_bytes = json.dumps(body).encode("utf-8")
+            # The re-serialized body is plain JSON, so the client's
+            # content-encoding no longer describes it; forward_headers must drop
+            # it below or upstream will try to decompress uncompressed bytes.
+            body_was_rewritten = True
 
     # Resolve the active forced session context for this request (issue #149).
     # Per-key lookup (concurrent-safe): if the request carries X-AgentWeave-Session-Key
@@ -1331,6 +1409,13 @@ async def proxy(path: str, request: Request) -> StreamingResponse | JSONResponse
         k: v for k, v in request.headers.items()
         if k.lower() not in _SKIP_HEADERS_ALWAYS
     }
+    if body_was_rewritten:
+        # body_bytes was re-serialized as plain JSON above; the client's
+        # content-encoding would make upstream decompress uncompressed bytes.
+        # (content-length is already in _SKIP_HEADERS_ALWAYS; httpx recomputes it.)
+        for _h in [k for k in forward_headers if k.lower() == "content-encoding"]:
+            forward_headers.pop(_h)
+
     # When proxy auth is enabled, the "authorization" header is the proxy
     # token — strip it and rely on x-api-key / x-goog-api-key for upstream.
     # In open mode (no token), forward authorization so SDKs that send the
