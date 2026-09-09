@@ -302,6 +302,54 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("langfuse.session.id", "main")
   })
 
+  it("prefers native context and execution identity over legacy session fields", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:legacy-route",
+      sessionId: "legacy-route",
+      contextId: "ctx-9c01",
+      executionId: "exec-9c01-turn-3",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "ctx-9c01")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "ctx-9c01")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.openclaw.context.id", "ctx-9c01")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.openclaw.execution.id", "exec-9c01-turn-3")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:legacy-route")
+  })
+
+  it("maps native parent identity without consulting another active session", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:parent",
+      contextId: "ctx-parent",
+      executionId: "exec-parent",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:child",
+      contextId: "ctx-child",
+      executionId: "exec-child",
+      parentContextId: "ctx-parent",
+      parentExecutionId: "exec-parent",
+      channel: "cli",
+      source: "sessions_spawn",
+      ts: Date.now(),
+      seq: 2,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.parent.session.id", "ctx-parent")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.parent.execution.id", "exec-parent")
+  })
+
   it("sets cwd and repository on message.queued when provided by the event", () => {
     fire({
       type: "message.queued",
@@ -442,6 +490,43 @@ describe("createAgentWeaveBridgeService", () => {
   it("ignores model.usage for unknown sessionKey", () => {
     fire({ type: "model.usage", sessionKey: "nonexistent", provider: "anthropic", model: "haiku", usage: { input: 10, output: 5 }, costUsd: 0.001, ts: Date.now(), seq: 1 })
     expect(mockSpan.addEvent).not.toHaveBeenCalled()
+  })
+
+  it("matches a late model event by executionId after its route key is unavailable", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:late-event",
+      contextId: "ctx-late",
+      executionId: "exec-late",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    fire({
+      type: "model.call.completed",
+      executionId: "exec-late",
+      provider: "openai",
+      model: "gpt-5",
+      ts: Date.now(),
+      seq: 2,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.provider", "openai")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-5")
+  })
+
+  it("keeps concurrent execution identities isolated and drops events for a finished one", () => {
+    fire({ type: "message.queued", sessionKey: "agent:main:a", contextId: "ctx-a", executionId: "exec-a", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
+    fire({ type: "message.queued", sessionKey: "agent:main:b", contextId: "ctx-b", executionId: "exec-b", channel: "cli", source: "user", ts: Date.now(), seq: 2 })
+    fire({ type: "model.call.completed", executionId: "exec-a", provider: "anthropic", model: "claude-a", ts: Date.now(), seq: 3 })
+    fire({ type: "model.call.completed", executionId: "exec-b", provider: "openai", model: "gpt-b", ts: Date.now(), seq: 4 })
+    fire({ type: "message.processed", sessionKey: "agent:main:a", outcome: "completed", ts: Date.now(), seq: 5 })
+    fire({ type: "model.call.completed", executionId: "exec-a", provider: "anthropic", model: "must-not-attach", ts: Date.now(), seq: 6 })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "claude-a")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-b")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.llm.model", "must-not-attach")
   })
 
   it("adds tool.loop event to active span", () => {
