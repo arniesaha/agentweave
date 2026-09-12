@@ -1,7 +1,7 @@
 # OpenClaw Native OTel Parity Report
 
-**Issue:** [#285](https://github.com/arniesaha/agentweave/issues/285)  
-**Observation started:** 2026-09-12T11:59:08-07:00  
+**Issue:** [#285](https://github.com/arniesaha/agentweave/issues/285)
+**Observation started:** 2026-09-12T11:59:08-07:00
 **Status:** Native trace exporter active; observed parity and limits recorded
 
 ## Environment

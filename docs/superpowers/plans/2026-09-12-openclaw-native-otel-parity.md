@@ -137,4 +137,3 @@
 - [ ] Push `fix/issue-285` and open a PR referencing #285 with the rollout result, parity summary, Codex conclusion, test/deploy evidence, and rollback status.
 - [ ] Comment on #285 with what changed, caveats/blocked matrix rows, and the PR link.
 - [ ] Do not merge. Issue closure remains post-merge and requires Nix to rerun deploy/verify and link the Grafana dashboard.
-

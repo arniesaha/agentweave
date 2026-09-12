@@ -1,7 +1,7 @@
 # OpenClaw Native OTel Parity Rollout — Design
 
-**Issue:** [#285](https://github.com/arniesaha/agentweave/issues/285)  
-**Date:** 2026-09-12  
+**Issue:** [#285](https://github.com/arniesaha/agentweave/issues/285)
+**Date:** 2026-09-12
 **Status:** Approved for specification review
 
 ## Context
@@ -148,4 +148,3 @@ The report feeds later issues without implementing them:
 - #280 owns deduplication and retirement criteria.
 - A connected Codex result permits retirement analysis of `codexModelCallTraceparent`; an orphaned
   result makes that carry a candidate for focused upstreaming.
-
