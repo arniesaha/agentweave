@@ -2,7 +2,7 @@
 
 **Issue:** [#285](https://github.com/arniesaha/agentweave/issues/285)  
 **Observation started:** 2026-09-12T11:59:08-07:00  
-**Status:** Pre-change baseline complete; native rollout not yet applied
+**Status:** Native trace exporter active; parity matrix in progress
 
 ## Environment
 
@@ -47,18 +47,67 @@ Repository test baseline:
 
 ## Exporter Startup
 
-Pending rollout. Required evidence:
+The live configuration was changed at 2026-09-12 12:39 PDT after creating owner-readable backups:
+
+- `/home/Arnab/.openclaw/backups/openclaw.json.issue-285.20260912T120009-0700`
+- `/home/Arnab/.openclaw/backups/gateway.systemd.env.issue-285.20260912T120009-0700`
+
+The bridge entry and proxy URL were left unchanged. `diagnostics.otel.endpoint` is now
+`http://10.43.221.47:4318`, `plugins.entries["diagnostics-otel"]` is enabled, and a dedicated
+systemd drop-in supplies `prov.agent.id=nix-v1,prov.project=nix` through
+`OTEL_RESOURCE_ATTRIBUTES`.
+
+One gateway restart completed successfully. The gateway moved from PID `27972` to PID `1713137`,
+became ready at 12:39:40 PDT, and passed the native deep connectivity probe on OpenClaw 2026.9.2.
+
+The read-only `gateway stability --type telemetry.exporter` snapshot reported:
 
 - exporter: `diagnostics-otel`
 - signal: `traces`
-- status: `started`
+- outcome: `started`
 - transport: `otlp-http-protobuf`
-- endpoint mode: `configured`
+- mode/reason: `configured`
+
+The first configuration also activated metrics because `diagnostics.otel.metrics` defaults to true.
+The collector has only a traces pipeline, so the stability snapshot recorded a metrics
+`export_failed` event after 60 seconds. Setting `diagnostics.otel.metrics=false` hot-reloaded the
+plugin without changing the gateway PID. The replacement snapshot contains one healthy configured
+traces route and no metrics failure.
+
+Tempo returned 19 native `resource.service.name = "openclaw"` traces immediately after restart,
+versus zero in the pre-change 24-hour query. Trace
+`41e354b60f16fde79ad615a84a2937bf` proved the exporter resource carries `service.name=openclaw`,
+`prov.agent.id=nix-v1`, and `prov.project=nix`; its instrumentation scope is `openclaw`.
 
 ## Fail-open Smoke Test
 
-Pending rollout. The smoke test must show both a successful model response and continued bridge
-telemetry, irrespective of whether native export succeeds.
+At 2026-09-12T12:52:50-07:00, a disposable Codex gateway turn used session key
+`agent:coder:issue-285-smoke`. It completed successfully in 7,037 ms with the exact synthetic reply
+requested, proving model execution remained healthy.
+
+Native trace `37568843a5fb88287b0fc9d363ce7b7a` contains this connected hierarchy:
+
+```text
+openclaw.harness.run (span 90572f6686f15367)
+└─ openclaw.run (span 750e10db11d9ae0e)
+   ├─ openclaw.context.assembled (span f62a823596ce12f5)
+   └─ openclaw.model.call (span f6b0f7241a7be9fa)
+      └─ agentweave-proxy llm.gpt-5.5 (span a093f5ca87e09708)
+```
+
+The proxy span's `prov.trace.parent` names the native model span and its actual parent span ID and
+trace ID match. Native model attributes include provider/model, OpenAI ChatGPT Responses API,
+request/response sizes, TTFB, prompt statistics, and full input/output/cache/reasoning/total token
+breakdown.
+
+Native usage trace `e90807c5522f5f090c1e6f6e8aa8e41b` is a separate root
+`openclaw.model.usage` span for the same 818 input, 13 output, 39,424 cache-read, and 40,255 total
+tokens. Thus the lifecycle/model-call tree is connected, but the duplicate usage observation is not.
+
+The bridge received the smoke turn's `session.state`, `model.call.*`, and `model.usage` events, but
+the CLI-driven RPC path emitted no `message.queued`/`message.processed` pair. Consequently the bridge
+had no active `openclaw.turn` span and logged that its usage lookup found no active span. A normal
+message-ingress workload is still required to prove native spans alongside a bridge turn span.
 
 ## Parity Matrix
 
