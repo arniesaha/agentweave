@@ -7,7 +7,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc",
-    "build:bundle": "esbuild index.ts --bundle --platform=node --format=esm --target=node18 --external:openclaw --outfile=bundle/index.js",
+    "build:bundle": "esbuild index.ts --bundle --platform=node --format=esm --target=node18 --external:openclaw --banner:js='import{createRequire as __openclawCreateRequire}from\"node:module\";const require=__openclawCreateRequire(import.meta.url);' --outfile=bundle/index.js",
     "verify:bundle": "node scripts/verify-bundle.mjs"
   },
   "dependencies": {
