@@ -46,3 +46,36 @@ parenting before retiring the Codex traceparent carry. Do not remove the
 proxy/header path until those checks and collector deduplication are proven.
 If native export is unhealthy, keep the current bridge/proxy configuration;
 telemetry failure must not block the model request.
+
+## Native collector adapter
+
+The Collector provides a narrow adapter for spans whose resource
+`service.name` is `openclaw` and whose span name is `openclaw.model.call`.
+After PII and OpenClaw content stripping, it copies the following observed
+native fields without deleting them or overwriting an existing target:
+
+| Native source | AgentWeave field |
+|---|---|
+| `openclaw.provider` | `prov.llm.provider` |
+| `gen_ai.request.model` (or `openclaw.model` when absent) | `prov.llm.model` |
+| `gen_ai.usage.input_tokens` | `prov.llm.prompt_tokens` |
+| `gen_ai.usage.output_tokens` | `prov.llm.completion_tokens` |
+| `gen_ai.usage.cache_read.input_tokens` | `tokens.cache_read` |
+| `gen_ai.usage.cache_creation.input_tokens` | `tokens.cache_write` |
+
+It also marks selected spans with `prov.harness=openclaw` and
+`prov.source=native`. The pinned native usage fixture establishes that
+`gen_ai.usage.input_tokens` is cache-inclusive, so the adapter copies that
+value directly and does not add cache buckets again. It deliberately excludes
+`openclaw.model.usage` and does not set `prov.activity.type`, avoiding a
+second LLM-call classification when a proxy child exists.
+
+The current native export has no trustworthy session/call identity and bypasses
+the AgentWeave cost normalizer. Consequently, native session correlation and
+cost attribution remain separate follow-ups: this adapter emits neither
+`prov.session.*` nor `cost.usd` (including a misleading zero value).
+
+Another OTel-emitting runtime should get its own selected Collector transform
+and a content-free fixture captured from that runtime's observed contract. It
+must prove its own source fields and token semantics, rather than extending
+OpenClaw's transform or assuming its cache convention applies.
