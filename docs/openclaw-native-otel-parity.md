@@ -220,11 +220,19 @@ Go 4 passed. The first Python run had 2 failures because an unrelated empty `/tm
 directory made the repository-detection tests identify `/tmp` as a repo; with
 `TMPDIR=/var/tmp`, the full suite passed. No repository-detection code was changed.
 
-The repository change is documentation only. `scripts/deploy.sh` would rebuild, push, and restart
-the live AgentWeave proxy even though this branch changes no proxy or collector code. It was not
-run before merge; the Nix post-merge checklist requires deploy plus verify, then issue closure
-only if both pass. #285 is not deployment-complete while that gate and the blocked parity rows
-remain open.
+On 2026-09-13 01:35–01:39 PDT, the requested `bash scripts/deploy.sh` gate completed with exit 0.
+It rebuilt and pushed `agentweave-proxy:0.3.9` (registry digest
+`sha256:7b8777a64c0cef7bf7440accea5503931c2c0a2a86c769db78d615a774f614a8`),
+left the collector manifests unchanged, rolled the proxy because the tag was unchanged, and
+confirmed proxy health `ok` at version `0.3.9`. This repository branch changes documentation only;
+the deploy was a same-version proxy refresh, not installation of the OpenClaw setting, which
+remains machine-local.
+
+The independent post-deploy `bash scripts/verify.sh` passed 4/4 checks at 01:39 PDT, and OpenClaw
+exporter stability still reported one `diagnostics-otel` trace route with outcome `started` and
+mode `configured`. The one-hour trace-quality gate returned `warn` with 0 failures, 14 records,
+and 16 missing-token/cost warnings. PR merge and issue closure remain pending; Nix must repeat
+deploy plus verify after merge under the repository's post-merge checklist.
 
 ## Caveats
 
@@ -236,5 +244,8 @@ remain open.
   rejected by the main agent's model policy; the default `gpt-5.6-sol` attempt fell back to
   `claude-sonnet-4-6`. Its `ok` result is not evidence of native gateway export.
 - `captureContent=true` predates this change, but enabling native export now sends full captured
-  model content to the collector. Review this separately before declaring native telemetry
-  a replacement for the bridge.
+  model content to the collector. The current collector's `attributes/strip_pii` processor
+  deletes only five Claude account/organization attributes; it does not delete
+  `gen_ai.input.messages`, `gen_ai.output.messages`, `input.value`, `output.value`, or
+  `openclaw.content.*`. Review this exposure before declaring native telemetry a replacement
+  for the bridge or broadening its destination.
