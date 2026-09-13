@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime"
+import type { HostDiagnosticEvent } from "./host-diagnostic-contract.js"
 import { createAgentWeaveBridgeService } from "./service.js"
 
 // ── Mock OTel APIs ────────────────────────────────────────────────────────────
@@ -48,22 +48,6 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
 // here so tests exercise the real attribution path.
 const TRUSTED_LIFECYCLE_TYPES = new Set(["session.state", "message.queued"])
 
-// The deployed OpenClaw fork (bf598e8, src/infra/diagnostic-events.ts)
-// adds these two content-preview fields to its published 2026.9.2 event
-// types. Keep the delta explicit; every other fixture field must come from
-// the published diagnostic union. Review this delta on each host upgrade.
-type QueuedEvent = Extract<DiagnosticEventPayload, { type: "message.queued" }> & {
-  inputPreview?: string
-}
-type SessionStateEvent = Extract<DiagnosticEventPayload, { type: "session.state" }> & {
-  inputPreview?: string
-  taskLabel?: string
-}
-type HostDiagnosticEvent =
-  | Exclude<DiagnosticEventPayload, { type: "message.queued" | "session.state" }>
-  | QueuedEvent
-  | SessionStateEvent
-
 interface HarnessState {
   listeners: Set<(evt: unknown) => void>
   trustedListeners: Set<(evt: unknown, privateData: unknown) => void>
@@ -104,7 +88,7 @@ function fire(evt: HostDiagnosticEvent, privateData?: unknown) {
 // diagnostic event union. The branch is compile-only and never dispatches.
 if (false) {
   // @ts-expect-error contextId is not emitted on message.queued by OpenClaw.
-  fire({ type: "message.queued", source: "test", contextId: "phantom" })
+  fire({ type: "message.queued", source: "test", ts: 1, seq: 1, contextId: "phantom" })
 }
 
 // Build ctx in the shape service.ts reads: ctx.config.plugins.entries["agentweave-bridge"].config
