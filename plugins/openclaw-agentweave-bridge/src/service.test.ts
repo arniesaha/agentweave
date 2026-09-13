@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime"
 import { createAgentWeaveBridgeService } from "./service.js"
 
 // ── Mock OTel APIs ────────────────────────────────────────────────────────────
@@ -47,6 +48,22 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
 // here so tests exercise the real attribution path.
 const TRUSTED_LIFECYCLE_TYPES = new Set(["session.state", "message.queued"])
 
+// The deployed OpenClaw fork (bf598e8, src/infra/diagnostic-events.ts)
+// adds these two content-preview fields to its published 2026.9.2 event
+// types. Keep the delta explicit; every other fixture field must come from
+// the published diagnostic union. Review this delta on each host upgrade.
+type QueuedEvent = Extract<DiagnosticEventPayload, { type: "message.queued" }> & {
+  inputPreview?: string
+}
+type SessionStateEvent = Extract<DiagnosticEventPayload, { type: "session.state" }> & {
+  inputPreview?: string
+  taskLabel?: string
+}
+type HostDiagnosticEvent =
+  | Exclude<DiagnosticEventPayload, { type: "message.queued" | "session.state" }>
+  | QueuedEvent
+  | SessionStateEvent
+
 interface HarnessState {
   listeners: Set<(evt: unknown) => void>
   trustedListeners: Set<(evt: unknown, privateData: unknown) => void>
@@ -62,7 +79,7 @@ interface HarnessState {
 // must skip them to avoid creating the root span twice, and the trusted
 // listener processes them with privateData. Mirror that dual-delivery so the
 // public-listener skip (the double-span guard) is actually exercised.
-function fire(evt: object, privateData?: unknown) {
+function fire(evt: HostDiagnosticEvent, privateData?: unknown) {
   const g = globalThis as Record<string, unknown>
   const state = g.__openclawDiagnosticEventsState as HarnessState | undefined
   if (!state || (state.listeners.size === 0 && state.trustedListeners.size === 0)) {
@@ -81,6 +98,13 @@ function fire(evt: object, privateData?: unknown) {
   for (const listener of state.listeners) {
     listener(evt)
   }
+}
+
+// This must fail to type-check if fixtures ever cease to use OpenClaw's real
+// diagnostic event union. The branch is compile-only and never dispatches.
+if (false) {
+  // @ts-expect-error contextId is not emitted on message.queued by OpenClaw.
+  fire({ type: "message.queued", source: "test", contextId: "phantom" })
 }
 
 // Build ctx in the shape service.ts reads: ctx.config.plugins.entries["agentweave-bridge"].config
@@ -180,11 +204,10 @@ describe("createAgentWeaveBridgeService", () => {
 
   it("uses task labels as a safe input fallback for lifecycle spans", () => {
     fire({
-      type: "message.queued",
-      sessionKey: "agent:main:task-session",
+      type: "session.state",
+      sessionKey: "agent:main:parent:subagent:task-session",
       sessionId: "task-session",
-      channel: "cron",
-      source: "cron-isolated",
+      state: "processing",
       taskLabel: "Daily portfolio briefing",
       ts: Date.now(),
       seq: 1,
@@ -320,24 +343,7 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:legacy-route")
   })
 
-  it("sets cwd and repository on message.queued when provided by the event", () => {
-    fire({
-      type: "message.queued",
-      sessionKey: "agent:main:repo-session",
-      sessionId: "repo-session",
-      channel: "cli",
-      source: "user",
-      cwd: "/home/arnab/dev/agentweave",
-      repository: "arniesaha/agentweave",
-      ts: Date.now(),
-      seq: 1,
-    })
-
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.cwd", "/home/arnab/dev/agentweave")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.repository", "arniesaha/agentweave")
-  })
-
-  it("omits cwd and repository on message.queued when the event does not provide them", () => {
+  it("does not invent cwd or repository on a host message.queued event", () => {
     fire({
       type: "message.queued",
       sessionKey: "agent:main:no-repo-session",
@@ -367,24 +373,6 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.uuid", "018f-openclaw-sub-0009")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:parent:subagent:worker-u")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("langfuse.session.id", "018f-openclaw-sub-0009")
-  })
-
-  it("sets cwd and repository on session.state subagent roots when provided by the event", () => {
-    fire({
-      type: "session.state",
-      sessionKey: "agent:main:parent:subagent:worker-c",
-      sessionId: "worker-c",
-      state: "processing",
-      raw_data: {
-        cwd: "/home/arnab/dev/agentweave/plugins/openclaw-agentweave-bridge",
-        repository: "arniesaha/agentweave",
-      },
-      ts: Date.now(),
-      seq: 1,
-    })
-
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.cwd", "/home/arnab/dev/agentweave/plugins/openclaw-agentweave-bridge")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.repository", "arniesaha/agentweave")
   })
 
   it("sets Langfuse input preview on session.state subagent roots", () => {
@@ -478,6 +466,7 @@ describe("createAgentWeaveBridgeService", () => {
       callId: "call-late",
       provider: "openai",
       model: "gpt-5",
+      durationMs: 25,
       ts: Date.now(),
       seq: 3,
     })
@@ -491,10 +480,10 @@ describe("createAgentWeaveBridgeService", () => {
     fire({ type: "message.queued", sessionKey: "agent:main:b", channel: "cli", source: "user", ts: Date.now(), seq: 2 })
     fire({ type: "model.call.started", runId: "run-a", callId: "call-a", sessionKey: "agent:main:a", provider: "anthropic", model: "claude-a", ts: Date.now(), seq: 3 })
     fire({ type: "model.call.started", runId: "run-b", callId: "call-b", sessionKey: "agent:main:b", provider: "openai", model: "gpt-b", ts: Date.now(), seq: 4 })
-    fire({ type: "model.call.completed", runId: "run-a", callId: "call-a", provider: "anthropic", model: "claude-a", ts: Date.now(), seq: 5 })
-    fire({ type: "model.call.completed", runId: "run-b", callId: "call-b", provider: "openai", model: "gpt-b", ts: Date.now(), seq: 6 })
-    fire({ type: "message.processed", sessionKey: "agent:main:a", outcome: "completed", ts: Date.now(), seq: 7 })
-    fire({ type: "model.call.completed", runId: "run-a", callId: "call-a", provider: "anthropic", model: "must-not-attach", ts: Date.now(), seq: 8 })
+    fire({ type: "model.call.completed", runId: "run-a", callId: "call-a", provider: "anthropic", model: "claude-a", durationMs: 25, ts: Date.now(), seq: 5 })
+    fire({ type: "model.call.completed", runId: "run-b", callId: "call-b", provider: "openai", model: "gpt-b", durationMs: 25, ts: Date.now(), seq: 6 })
+    fire({ type: "message.processed", sessionKey: "agent:main:a", channel: "cli", outcome: "completed", ts: Date.now(), seq: 7 })
+    fire({ type: "model.call.completed", runId: "run-a", callId: "call-a", provider: "anthropic", model: "must-not-attach", durationMs: 25, ts: Date.now(), seq: 8 })
 
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "claude-a")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-b")

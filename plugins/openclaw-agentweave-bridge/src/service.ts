@@ -3,8 +3,13 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto"
 import { NodeSDK } from "@opentelemetry/sdk-node"
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import { BatchSpanProcessor, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base"
-// @ts-ignore — provided by host at runtime, not in plugin's local node_modules
-import { onDiagnosticEvent, onModelDiagnosticEvent, onTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
+// Runtime imports stay external in the bundle. The local fork exports the two
+// opt-in listeners below, while the pinned public 2026.9.2 package does not.
+import { onDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
+// @ts-expect-error fork-only export (bf598e8); review on host/package upgrade.
+import { onModelDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
+// @ts-expect-error fork-only export (bf598e8); review on host/package upgrade.
+import { onTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
 import { resolveCost } from "./pricing.js"
 
 interface ActiveTurn {

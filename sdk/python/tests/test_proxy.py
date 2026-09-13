@@ -2836,7 +2836,7 @@ class TestRequestBodyInspection:
         assert _inspect_request_body(b"", "") == {}
 
     def test_zstd_body_is_decompressed_and_parsed(self):
-        zstandard = pytest.importorskip("zstandard")
+        import zstandard
         from agentweave.proxy import _inspect_request_body
 
         raw = json.dumps({"model": "gpt-5", "stream": True}).encode()
@@ -2848,7 +2848,7 @@ class TestRequestBodyInspection:
 
     def test_zstd_frame_without_content_size_is_decompressed(self):
         """Codex streams its frames, so no content-size header is written."""
-        zstandard = pytest.importorskip("zstandard")
+        import zstandard
         from agentweave.proxy import _inspect_request_body
 
         import io as _io
@@ -2927,7 +2927,7 @@ class TestCompressedRequestForwarding:
         return TestClient(app)
 
     def test_zstd_codex_request_is_forwarded_verbatim(self, client, forwarded):
-        zstandard = pytest.importorskip("zstandard")
+        import zstandard
 
         raw = json.dumps({"model": "gpt-5.6-luna", "stream": False}).encode()
         compressed = zstandard.ZstdCompressor(level=3).compress(raw)
@@ -2968,7 +2968,7 @@ class TestCompressedRequestForwarding:
         The client's content-encoding then describes bytes that no longer
         exist, so upstream would try to decompress uncompressed JSON.
         """
-        zstandard = pytest.importorskip("zstandard")
+        import zstandard
 
         raw = json.dumps({"model": "gpt-5.6-luna", "stream": True}).encode()
         compressed = zstandard.ZstdCompressor(level=3).compress(raw)

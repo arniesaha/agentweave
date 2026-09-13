@@ -78,15 +78,24 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # OpenClaw's published diagnostic types require Node >=24.15.
+          node-version: "24"
 
       - name: Install dependencies
         working-directory: plugins/openclaw-agentweave-bridge
-        run: npm install
+        run: npm ci --ignore-scripts
+
+      - name: Type-check against the pinned OpenClaw event contract
+        working-directory: plugins/openclaw-agentweave-bridge
+        run: npm run build
 
       - name: Run tests
         working-directory: plugins/openclaw-agentweave-bridge
         run: npm test
+
+      - name: Verify production bundle remains external to OpenClaw
+        working-directory: plugins/openclaw-agentweave-bridge
+        run: npm run build:bundle && npm run verify:bundle
 
   preflights:
     name: Repository preflights
