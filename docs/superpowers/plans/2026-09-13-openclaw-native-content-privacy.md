@@ -91,7 +91,8 @@ docker run --rm -v "$AGENTWEAVE_TEST_COLLECTOR_CONFIG:/conf/collector.yaml:ro" o
 ```
 
 Expected: exit 0. The temporary file contains only collector configuration, never credentials.
-- [ ] **Step 3: Review the diff and commit.** `git diff --check && git diff -- deploy/k8s/monitoring/otel-collector.yaml`, then `git add deploy/k8s/monitoring/otel-collector.yaml && git commit -m 'fix(k8s): strip native OpenClaw content at ingress (#291)'`.
+- [ ] **Step 3: Verify green before production.** Run a temporary collector from the pinned image on `127.0.0.1:4319`, using the extracted config with only the Tempo exporter address changed to `http://192.168.1.70:30418`. Run `AGENTWEAVE_OTLP_ENDPOINT=http://127.0.0.1:4319 python3 scripts/verify-native-content-privacy.py`; it must exit 0. Stop and remove only that temporary container after the probe.
+- [ ] **Step 4: Review the diff and commit.** `git diff --check && git diff -- deploy/k8s/monitoring/otel-collector.yaml`, then `git add deploy/k8s/monitoring/otel-collector.yaml docs/superpowers/plans/2026-09-13-openclaw-native-content-privacy.md && git commit -m 'fix(k8s): strip native OpenClaw content at ingress (#291)'`.
 
 ### Task 3: Source setting, rollout, and post-deploy evidence
 

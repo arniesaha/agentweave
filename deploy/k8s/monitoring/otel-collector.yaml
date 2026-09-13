@@ -64,6 +64,31 @@ data:
           - key: organization.id
             action: delete
 
+      # Defense in depth for OpenClaw native spans. Source capture is disabled
+      # on the gateway, but a future config regression must not send model
+      # input/output or tool content to Tempo. Other services are unaffected.
+      attributes/strip_openclaw_content:
+        include:
+          match_type: strict
+          services: [openclaw]
+        actions:
+          - pattern: '^openclaw\.content\..*'
+            action: delete
+          - key: gen_ai.input.messages
+            action: delete
+          - key: gen_ai.output.messages
+            action: delete
+          - key: gen_ai.tool.definitions
+            action: delete
+          - key: gen_ai.tool.call.arguments
+            action: delete
+          - key: gen_ai.tool.call.result
+            action: delete
+          - key: input.value
+            action: delete
+          - key: output.value
+            action: delete
+
     exporters:
       otlphttp/tempo:
         endpoint: http://tempo.monitoring.svc.cluster.local:4318
@@ -75,7 +100,7 @@ data:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, attributes/strip_pii, batch]
+          processors: [memory_limiter, attributes/strip_pii, attributes/strip_openclaw_content, batch]
           exporters: [otlphttp/tempo, debug]
 
 ---
