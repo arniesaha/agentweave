@@ -27,7 +27,7 @@ The manual steps below remain available for custom layouts.
 
 ## Prerequisites
 
-- OpenClaw installed (`openclaw` CLI available)
+- OpenClaw installed (`openclaw` CLI available); Node.js 24.15+ for source builds
 - AgentWeave proxy running, for example `http://localhost:4000`
 - An OTLP collector or Tempo endpoint reachable over HTTP, for example `http://localhost:4318`
 
@@ -35,7 +35,7 @@ The manual steps below remain available for custom layouts.
 
 ```bash
 cd /path/to/agentweave/plugins/openclaw-agentweave-bridge
-npm install
+npm ci --ignore-scripts
 ```
 
 ## Step 2 — Register plugin in OpenClaw config
@@ -116,7 +116,7 @@ Or use the AgentWeave dashboard Session Explorer:
 Repeat these steps on every OpenClaw machine:
 
 1. Copy or clone `plugins/openclaw-agentweave-bridge` to a stable local path.
-2. Run `npm install` in the plugin directory.
+2. Run `npm ci --ignore-scripts` in the plugin directory.
 3. Add the `agentweave-bridge` entry to that machine's `openclaw.json`.
 4. Set machine-specific `agentId` / `project` values.
 5. Restart OpenClaw.

@@ -8,7 +8,7 @@ plugin_dir="$repo_root/plugins/openclaw-agentweave-bridge"
 dist_dir="$repo_root/sdk/python/agentweave/openclaw_bridge_dist"
 
 echo "==> Building bundle in $plugin_dir"
-( cd "$plugin_dir" && npm ci && npm run build:bundle && npm run verify:bundle )
+( cd "$plugin_dir" && npm ci --ignore-scripts && npm run build && npm test -- --silent --reporter=dot && npm run build:bundle && npm run verify:bundle )
 
 echo "==> Staging artifacts into $dist_dir"
 mkdir -p "$dist_dir"

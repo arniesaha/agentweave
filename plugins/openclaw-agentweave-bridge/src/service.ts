@@ -3,9 +3,16 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto"
 import { NodeSDK } from "@opentelemetry/sdk-node"
 import { resourceFromAttributes } from "@opentelemetry/resources"
 import { BatchSpanProcessor, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base"
-// @ts-ignore — provided by host at runtime, not in plugin's local node_modules
-import { onDiagnosticEvent, onModelDiagnosticEvent, onTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime"
+// Namespace import keeps the optional fork-only listeners truly optional at
+// module-load time on older/public hosts, not merely guarded after loading.
+import * as diagnosticRuntime from "openclaw/plugin-sdk/diagnostic-runtime"
+import type { HostDiagnosticEvent, HostDiagnosticPrivateData } from "./host-diagnostic-contract.js"
 import { resolveCost } from "./pricing.js"
+
+const onDiagnosticEvent = diagnosticRuntime.onDiagnosticEvent
+const optionalRuntime = diagnosticRuntime as unknown as Record<string, unknown>
+const onModelDiagnosticEvent = optionalRuntime.onModelDiagnosticEvent
+const onTrustedDiagnosticEvent = optionalRuntime.onTrustedDiagnosticEvent
 
 interface ActiveTurn {
   span: Span
@@ -127,10 +134,8 @@ function subscribeToDiagnosticEvents(
   //    silently buckets as "unknown" on the dashboard).
   // 3. `onTrustedDiagnosticEvent` delivers `session.state`/`message.queued`
   //    paired with the opt-in `privateData` bag (carrying the seeded
-  //    `clientContext`). This is the preferred path for upstream attribution;
-  //    the dispatcher still falls back to `clientContext` on the public event
-  //    payload for older runtimes that forwarded it there before this channel
-  //    existed.
+  //    `clientContext`). This is the only contracted path for upstream
+  //    attribution; the public event type does not contain clientContext.
   //
   // `onModelDiagnosticEvent` and `onTrustedDiagnosticEvent` were added to the
   // plugin-sdk in separate openclaw PRs; older runtimes export only
@@ -141,8 +146,7 @@ function subscribeToDiagnosticEvents(
   // not also process session.state/message.queued — those arrive (with
   // privateData) via onTrustedDiagnosticEvent below, so processing them here
   // too would create the root span twice. Without the trusted channel we handle
-  // them on the public stream, where the dispatcher reads any clientContext off
-  // the event payload (older-runtime fallback).
+  // them on the public stream with local attribution only.
   const publicListener = hasTrusted
     ? (evt: unknown) => {
         const type = (evt as { type?: string }).type
@@ -280,17 +284,8 @@ function truncatePreview(value: string, maxChars = 1000): string {
   return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`
 }
 
-function resolveInputPreview(evt: Record<string, unknown>, fallback?: string): string | undefined {
-  const rawData = (evt.raw_data ?? evt.rawData) as Record<string, unknown> | undefined
-  const preview = firstString(
-    evt.inputPreview,
-    evt.inputSummary,
-    evt.promptPreview,
-    rawData?.inputPreview,
-    rawData?.inputSummary,
-    rawData?.promptPreview,
-    fallback,
-  )
+function resolveInputPreview(evt: { inputPreview?: string }, fallback?: string): string | undefined {
+  const preview = firstString(evt.inputPreview, fallback)
   return preview ? truncatePreview(preview) : undefined
 }
 
@@ -301,7 +296,6 @@ function applyLangfuseAgentTurnAttrs(span: Span, params: {
   agentId?: string
   agentType?: string
   parentSessionId?: string
-  repository?: string
   taskLabel?: string
   inputPreview?: string
 }): void {
@@ -318,21 +312,11 @@ function applyLangfuseAgentTurnAttrs(span: Span, params: {
   if (params.agentType) span.setAttribute("langfuse.trace.metadata.agent_type", params.agentType)
   if (params.sessionKey) span.setAttribute("langfuse.trace.metadata.session_key", params.sessionKey)
   if (params.parentSessionId) span.setAttribute("langfuse.trace.metadata.parent_session_id", params.parentSessionId)
-  if (params.repository) span.setAttribute("langfuse.trace.metadata.repository", params.repository)
   span.setAttribute("langfuse.trace.metadata.activity_type", "agent_turn")
   if (params.inputPreview) {
     span.setAttribute("prov.input.preview", params.inputPreview)
     span.setAttribute("langfuse.observation.input", params.inputPreview)
   }
-}
-
-function applyExecutionContextAttrs(span: Span, evt: Record<string, unknown>): void {
-  const rawData = (evt.raw_data ?? evt.rawData) as Record<string, unknown> | undefined
-  const cwd = firstString(evt.cwd, rawData?.cwd)
-  const repository = firstString(evt.repository, rawData?.repository)
-
-  if (cwd) span.setAttribute("prov.cwd", cwd)
-  if (repository) span.setAttribute("prov.repository", repository)
 }
 
 function findTurnForModelUsage(sessionKey: string, sessionId: string): { key: string; turn: ActiveTurn; reason: string } | null {
@@ -378,7 +362,7 @@ function findTurnForModelCall(sessionKey: string, sessionId: string, runId?: str
  * (endOnIdle), since no message.processed event fires for this path.
  */
 function startUpstreamRootSpanFromSessionState(
-  e: Record<string, unknown>,
+  e: Extract<HostDiagnosticEvent, { type: "session.state" }>,
   sessionKey: string,
   upstream: UpstreamAgentContext,
   config: BridgeConfig,
@@ -401,18 +385,10 @@ function startUpstreamRootSpanFromSessionState(
   span.setAttribute("prov.agent.id", agentId)
   span.setAttribute("prov.agent.type", agentType)
   span.setAttribute("prov.activity.type", "agent_turn")
-  const channel = firstString(e.channel)
-  if (channel) span.setAttribute("channel", channel)
   if (config.project) span.setAttribute("prov.project", config.project)
   applyUpstreamContextAttrs(span, upstream)
   const taskLabel = upstream.taskLabel ?? firstString(e.taskLabel)
   if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
-  applyExecutionContextAttrs(span, e)
-  const repository = firstString(
-    e.repository,
-    (e.raw_data as { repository?: unknown } | undefined)?.repository,
-    (e.rawData as { repository?: unknown } | undefined)?.repository,
-  )
   const inputPreview = resolveInputPreview(e, taskLabel)
 
   let parentSid: string | undefined
@@ -429,7 +405,6 @@ function startUpstreamRootSpanFromSessionState(
     agentId,
     agentType,
     parentSessionId: parentSid,
-    repository,
     taskLabel,
     inputPreview,
   })
@@ -540,19 +515,16 @@ export function createAgentWeaveBridgeService() {
       initSdk(config)
 
       unsubscribe = subscribeToDiagnosticEvents((evt: unknown, privateData?: unknown) => {
-        const e = evt as { type?: string; sessionKey?: string; sessionId?: string; channel?: string; source?: string; outcome?: string; error?: string; durationMs?: number; provider?: string; model?: string; costUsd?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; toolName?: string; level?: string; detector?: string; count?: number; queueDepth?: number; taskLabel?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string; cwd?: string; repository?: string; raw_data?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string }; rawData?: { cwd?: string; repository?: string; inputPreview?: string; inputSummary?: string; promptPreview?: string } }
-        // Upstream attribution prefers the trusted privateData channel
-        // (session.state/message.queued on runtimes that export
-        // onTrustedDiagnosticEvent), falling back to the public event payload
-        // for the older runtime window that forwarded clientContext on the
-        // event itself before the trusted channel existed. privateData wins
-        // when present; on the trusted runtime the public listener skips these
-        // types, so the payload fallback only ever applies when there is no
-        // trusted delivery. No upstream context on either → nix-v1 fallback.
-        const clientContext =
-          (privateData as { clientContext?: unknown } | undefined)?.clientContext ??
-          (e as { clientContext?: unknown }).clientContext
-        console.log("[agentweave-bridge] event:", e.type, "sessionKey:", e.sessionKey, "source:", e.source)
+        const e = evt as HostDiagnosticEvent
+        // The host's public event union has no clientContext. Upstream
+        // attribution is accepted only from the trusted privateData channel;
+        // older hosts without it use local attribution.
+        const clientContext = (privateData as HostDiagnosticPrivateData | undefined)?.clientContext
+        console.log(
+          "[agentweave-bridge] event:", e.type,
+          "sessionKey:", "sessionKey" in e ? e.sessionKey : undefined,
+          "source:", "source" in e ? e.source : undefined,
+        )
         try {
           switch (e.type) {
             case "message.queued": {
@@ -589,11 +561,9 @@ export function createAgentWeaveBridgeService() {
               if (e.channel) span.setAttribute("channel", e.channel)
               if (config.project) span.setAttribute("prov.project", config.project)
               applyUpstreamContextAttrs(span, upstream)
-              const taskLabel = upstream?.taskLabel ?? e.taskLabel?.trim()
+              const taskLabel = upstream?.taskLabel
               if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
-              applyExecutionContextAttrs(span, e as Record<string, unknown>)
-              const repository = firstString(e.repository, e.raw_data?.repository, e.rawData?.repository)
-              const inputPreview = resolveInputPreview(e as Record<string, unknown>, taskLabel)
+              const inputPreview = resolveInputPreview(e, taskLabel)
 
               // Link to parent session: an explicit upstream parent wins;
               // otherwise fall back to the sub-agent concurrent-turn heuristic.
@@ -623,7 +593,6 @@ export function createAgentWeaveBridgeService() {
                 agentId: effectiveAgentId,
                 agentType: effectiveAgentType,
                 parentSessionId: parentSid,
-                repository,
                 taskLabel,
                 inputPreview,
               })
@@ -739,7 +708,7 @@ export function createAgentWeaveBridgeService() {
 
             case "session.state": {
               const sessionKey = e.sessionKey ?? ""
-              const state = (e as any).state as string | undefined
+              const state = e.state
               // Detect OpenClaw native sub-agent sessions (agent:*:subagent:*)
               // These don't emit message.queued, only session.state transitions
               if (sessionKey.includes(":subagent:") && !activeTurns.has(sessionKey)) {
@@ -761,11 +730,9 @@ export function createAgentWeaveBridgeService() {
                   span.setAttribute("prov.agent.type", "subagent")
                   span.setAttribute("prov.activity.type", "agent_turn")
                   if (config.project) span.setAttribute("prov.project", config.project)
-                  applyExecutionContextAttrs(span, e as Record<string, unknown>)
-                  const taskLabel = firstString((e as any).taskLabel)
+                  const taskLabel = firstString(e.taskLabel)
                   if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
-                  const inputPreview = resolveInputPreview(e as Record<string, unknown>, taskLabel)
-                  const repository = firstString((e as any).repository, (e as any).raw_data?.repository, (e as any).rawData?.repository)
+                  const inputPreview = resolveInputPreview(e, taskLabel)
                   // Link to active main session as parent
                   const mainKey = Array.from(activeTurns.keys()).find(k =>
                     k.startsWith("agent:main:") && !k.includes(":subagent:"))
@@ -785,7 +752,6 @@ export function createAgentWeaveBridgeService() {
                     agentId: subagentId,
                     agentType: "subagent",
                     parentSessionId,
-                    repository,
                     taskLabel,
                     inputPreview,
                   })
@@ -856,7 +822,7 @@ export function createAgentWeaveBridgeService() {
               if (!sessionKey.includes(":subagent:")) {
                 const upstream = resolveUpstreamContext(clientContext)
                 if (state === "processing" && upstream && !activeTurns.has(sessionKey)) {
-                  startUpstreamRootSpanFromSessionState(e as Record<string, unknown>, sessionKey, upstream, config)
+                  startUpstreamRootSpanFromSessionState(e, sessionKey, upstream, config)
                 } else if (state === "idle") {
                   endUpstreamRootSpanOnIdle(sessionKey)
                 }
