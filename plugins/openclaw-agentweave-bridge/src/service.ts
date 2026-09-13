@@ -10,7 +10,6 @@ import { resolveCost } from "./pricing.js"
 interface ActiveTurn {
   span: Span
   ctx: Context
-  executionId?: string
   /** True for spans started from session.state (gateway-agent / subagent paths)
    *  that must be ended on the session.state idle transition rather than a
    *  message.processed event (which never fires for those paths). */
@@ -80,7 +79,8 @@ function resolveAgentId(
 }
 
 const activeTurns = new Map<string, ActiveTurn>()
-const activeTurnsByExecutionId = new Map<string, ActiveTurn>()
+const activeTurnsByRunId = new Map<string, ActiveTurn>()
+const activeTurnsByCallId = new Map<string, ActiveTurn>()
 let sdk: NodeSDK | null = null
 let unsubscribe: (() => void) | null = null
 
@@ -261,49 +261,15 @@ function resolveOpenClawSessionId(sessionKey: string, eventSessionId: unknown): 
   return { sessionId: canonicalUuid ?? sessionKey, canonicalUuid }
 }
 
-/** Neutral execution identity emitted by current OpenClaw runtimes.
- *
- * `contextId` is the stable conversation/run grouping and `executionId` is a
- * single attempt/turn. Route keys remain diagnostic-only compatibility data.
- */
-interface OpenClawExecutionIdentity {
-  sessionId: string
-  canonicalUuid?: string
-  contextId?: string
-  executionId?: string
-  parentContextId?: string
-  parentExecutionId?: string
-}
-
-function resolveExecutionIdentity(evt: Record<string, unknown>, sessionKey: string): OpenClawExecutionIdentity {
-  const raw = (evt.raw_data ?? evt.rawData) as Record<string, unknown> | undefined
-  const legacy = resolveOpenClawSessionId(sessionKey, evt.sessionId)
-  const contextId = firstString(evt.contextId, raw?.contextId)
-  return {
-    sessionId: contextId ?? legacy.sessionId,
-    canonicalUuid: legacy.canonicalUuid,
-    contextId,
-    executionId: firstString(evt.executionId, raw?.executionId),
-    parentContextId: firstString(evt.parentContextId, raw?.parentContextId),
-    parentExecutionId: firstString(evt.parentExecutionId, raw?.parentExecutionId),
-  }
-}
-
-function applyExecutionIdentityAttrs(span: Span, identity: OpenClawExecutionIdentity): void {
-  if (identity.contextId) span.setAttribute("prov.openclaw.context.id", identity.contextId)
-  if (identity.executionId) span.setAttribute("prov.openclaw.execution.id", identity.executionId)
-  if (identity.parentExecutionId) span.setAttribute("prov.parent.execution.id", identity.parentExecutionId)
-}
-
 function setActiveTurn(key: string, turn: ActiveTurn): void {
   activeTurns.set(key, turn)
-  if (turn.executionId) activeTurnsByExecutionId.set(turn.executionId, turn)
 }
 
 function deleteActiveTurn(key: string): void {
   const turn = activeTurns.get(key)
-  if (turn?.executionId && activeTurnsByExecutionId.get(turn.executionId) === turn) {
-    activeTurnsByExecutionId.delete(turn.executionId)
+  if (turn) {
+    for (const [runId, mapped] of activeTurnsByRunId) if (mapped === turn) activeTurnsByRunId.delete(runId)
+    for (const [callId, mapped] of activeTurnsByCallId) if (mapped === turn) activeTurnsByCallId.delete(callId)
   }
   activeTurns.delete(key)
 }
@@ -369,25 +335,17 @@ function applyExecutionContextAttrs(span: Span, evt: Record<string, unknown>): v
   if (repository) span.setAttribute("prov.repository", repository)
 }
 
-function findTurnForModelUsage(sessionKey: string, sessionId: string, executionId?: string): { key: string; turn: ActiveTurn; reason: string } | null {
+function findTurnForModelUsage(sessionKey: string, sessionId: string): { key: string; turn: ActiveTurn; reason: string } | null {
   const activeKeys = Array.from(activeTurns.keys())
-
-  if (executionId) {
-    const turn = activeTurnsByExecutionId.get(executionId)
-    if (turn) {
-      const key = activeKeys.find(candidate => activeTurns.get(candidate) === turn) ?? executionId
-      return { key, turn, reason: "executionId-exact" }
-    }
-  }
 
   if (sessionKey && activeTurns.has(sessionKey)) {
     return { key: sessionKey, turn: activeTurns.get(sessionKey)!, reason: "sessionKey-exact" }
   }
 
   if (sessionId) {
-    const bySessionId = activeKeys.find(key => getSpanSessionId(activeTurns.get(key)!) === sessionId)
-    if (bySessionId) {
-      return { key: bySessionId, turn: activeTurns.get(bySessionId)!, reason: "sessionId-span-attr" }
+    const bySessionId = activeKeys.filter(key => getSpanSessionId(activeTurns.get(key)!) === sessionId)
+    if (bySessionId.length === 1) {
+      return { key: bySessionId[0], turn: activeTurns.get(bySessionId[0])!, reason: "sessionId-span-attr" }
     }
 
     if (activeTurns.has(sessionId)) {
@@ -395,23 +353,17 @@ function findTurnForModelUsage(sessionKey: string, sessionId: string, executionI
     }
   }
 
-  const usageSubagentId = sessionKey.includes(":subagent:") ? sessionKey.split(":subagent:")[1] : ""
-  if (usageSubagentId) {
-    const bySubagentSuffix = activeKeys.find(key => key.includes(":subagent:") && key.endsWith(`:subagent:${usageSubagentId}`))
-    if (bySubagentSuffix) {
-      return { key: bySubagentSuffix, turn: activeTurns.get(bySubagentSuffix)!, reason: "subagent-suffix" }
-    }
-  }
-
-  if (sessionKey.startsWith("agent:main:")) {
-    const activeSubagents = activeKeys.filter(key => key.includes(":subagent:"))
-    if (activeSubagents.length > 0) {
-      const latestSubagent = activeSubagents[activeSubagents.length - 1]
-      return { key: latestSubagent, turn: activeTurns.get(latestSubagent)!, reason: "main-key-fallback-to-active-subagent" }
-    }
-  }
-
   return null
+}
+
+function findTurnForModelCall(sessionKey: string, sessionId: string, runId?: string, callId?: string) {
+  const keyedCallId = runId && callId ? `${runId}:${callId}` : undefined
+  const mapped = (keyedCallId && activeTurnsByCallId.get(keyedCallId)) || (runId && activeTurnsByRunId.get(runId))
+  if (mapped) {
+    const key = Array.from(activeTurns.keys()).find(candidate => activeTurns.get(candidate) === mapped)
+    return key ? { key, turn: mapped, reason: "runId-callId-exact" } : null
+  }
+  return findTurnForModelUsage(sessionKey, sessionId)
 }
 
 /**
@@ -431,7 +383,7 @@ function startUpstreamRootSpanFromSessionState(
   upstream: UpstreamAgentContext,
   config: BridgeConfig,
 ): void {
-  const identity = resolveExecutionIdentity(e, sessionKey)
+  const identity = resolveOpenClawSessionId(sessionKey, e.sessionId)
   const effectiveSessionId = upstream.sessionId ?? identity.sessionId
   const agentId = upstream.agentId ?? config.agentId ?? "nix-v1"
   const agentType = upstream.agentType ?? "main"
@@ -445,7 +397,6 @@ function startUpstreamRootSpanFromSessionState(
   if (identity.canonicalUuid && identity.canonicalUuid !== sessionKey) {
     span.setAttribute("prov.session.uuid", identity.canonicalUuid)
   }
-  applyExecutionIdentityAttrs(span, identity)
   span.setAttribute("prov.harness", "openclaw")
   span.setAttribute("prov.agent.id", agentId)
   span.setAttribute("prov.agent.type", agentType)
@@ -465,7 +416,7 @@ function startUpstreamRootSpanFromSessionState(
   const inputPreview = resolveInputPreview(e, taskLabel)
 
   let parentSid: string | undefined
-  const nativeParentSid = upstream.parentSessionId ?? identity.parentContextId
+  const nativeParentSid = upstream.parentSessionId
   if (nativeParentSid) {
     parentSid = nativeParentSid
     span.setAttribute("prov.parent.session.id", parentSid)
@@ -508,7 +459,7 @@ function startUpstreamRootSpanFromSessionState(
     process.env.OPENAI_API_BASE = proxyBaseUrl
   }
 
-  setActiveTurn(sessionKey, { span, ctx: spanCtx, endOnIdle: true, executionId: identity.executionId })
+  setActiveTurn(sessionKey, { span, ctx: spanCtx, endOnIdle: true })
   console.log(`[agentweave-bridge] started root span for ${agentType} session:`, effectiveSessionId, "agent:", agentId)
 
   if (proxyBaseUrl) {
@@ -607,7 +558,7 @@ export function createAgentWeaveBridgeService() {
             case "message.queued": {
               const sessionKey = e.sessionKey ?? ""
               if (!sessionKey) break
-              const identity = resolveExecutionIdentity(e as Record<string, unknown>, sessionKey)
+              const identity = resolveOpenClawSessionId(sessionKey, e.sessionId)
 
               const { agentId, agentType, parentSessionKey } = resolveAgentId(sessionKey, config, activeTurns, e.source)
 
@@ -631,7 +582,6 @@ export function createAgentWeaveBridgeService() {
               if (identity.canonicalUuid && identity.canonicalUuid !== sessionKey) {
                 span.setAttribute("prov.session.uuid", identity.canonicalUuid)
               }
-              applyExecutionIdentityAttrs(span, identity)
               span.setAttribute("prov.harness", "openclaw")
               span.setAttribute("prov.agent.id", effectiveAgentId)
               span.setAttribute("prov.agent.type", effectiveAgentType)
@@ -648,7 +598,7 @@ export function createAgentWeaveBridgeService() {
               // Link to parent session: an explicit upstream parent wins;
               // otherwise fall back to the sub-agent concurrent-turn heuristic.
               let parentSid: string | undefined
-              const nativeParentSid = upstream?.parentSessionId ?? identity.parentContextId
+              const nativeParentSid = upstream?.parentSessionId
               if (nativeParentSid) {
                 parentSid = nativeParentSid
                 span.setAttribute("prov.parent.session.id", parentSid)
@@ -710,7 +660,7 @@ export function createAgentWeaveBridgeService() {
                 process.env.OPENAI_API_BASE = proxyBaseUrl
               }
 
-              setActiveTurn(sessionKey, { span, ctx: spanCtx, executionId: identity.executionId })
+              setActiveTurn(sessionKey, { span, ctx: spanCtx })
               console.log(`[agentweave-bridge] started root span for ${effectiveAgentType} session:`, effectiveSessionId, "agent:", effectiveAgentId)
 
               // Push session context into the proxy so its _session_context dict
@@ -721,7 +671,6 @@ export function createAgentWeaveBridgeService() {
               if (proxyBaseUrlForSession) {
                 // Upstream parent wins; else the sub-agent concurrent-turn heuristic.
                 const proxyParentSid = upstream?.parentSessionId
-                  ?? identity.parentContextId
                   ?? (effectiveAgentType === "subagent"
                     ? (parentSessionKey
                       ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:")))
@@ -796,7 +745,7 @@ export function createAgentWeaveBridgeService() {
               if (sessionKey.includes(":subagent:") && !activeTurns.has(sessionKey)) {
                 if (state === "processing") {
                   const subagentId = config.subagentId ?? `${config.agentId ?? "nix"}-subagent-v1`
-                  const identity = resolveExecutionIdentity(e as Record<string, unknown>, sessionKey)
+                  const identity = resolveOpenClawSessionId(sessionKey, e.sessionId)
                   const sessionId = identity.sessionId
                   const tracer = trace.getTracer("openclaw-agentweave-bridge")
                   const span = tracer.startSpan("openclaw.subagent")
@@ -807,7 +756,6 @@ export function createAgentWeaveBridgeService() {
                   if (identity.canonicalUuid && identity.canonicalUuid !== sessionKey) {
                     span.setAttribute("prov.session.uuid", identity.canonicalUuid)
                   }
-                  applyExecutionIdentityAttrs(span, identity)
                   span.setAttribute("prov.harness", "openclaw")
                   span.setAttribute("prov.agent.id", subagentId)
                   span.setAttribute("prov.agent.type", "subagent")
@@ -822,10 +770,7 @@ export function createAgentWeaveBridgeService() {
                   const mainKey = Array.from(activeTurns.keys()).find(k =>
                     k.startsWith("agent:main:") && !k.includes(":subagent:"))
                   let parentSessionId: string | undefined
-                  if (identity.parentContextId) {
-                    span.setAttribute("prov.parent.session.id", identity.parentContextId)
-                    parentSessionId = identity.parentContextId
-                  } else if (mainKey) {
+                  if (mainKey) {
                     const mainTurn = activeTurns.get(mainKey)
                     if (mainTurn) {
                       const mainSessionId = (mainTurn.span as any)._attributes?.["session.id"] || mainKey
@@ -845,7 +790,7 @@ export function createAgentWeaveBridgeService() {
                     inputPreview,
                   })
                   const spanCtx = trace.setSpan(context.active(), span)
-                  setActiveTurn(sessionKey, { span, ctx: spanCtx, executionId: identity.executionId })
+                  setActiveTurn(sessionKey, { span, ctx: spanCtx })
 
                   // Force the proxy to attribute LLM calls to this sub-agent session
                   const proxyUrl = normalizeProxyBaseUrl(config.proxyUrl) || "http://192.168.1.70:30400"
@@ -922,11 +867,10 @@ export function createAgentWeaveBridgeService() {
             case "model.usage": {
               const sessionKey = e.sessionKey ?? ""
               const sessionId = e.sessionId ?? ""
-              const executionId = firstString((e as Record<string, unknown>).executionId)
               const activeKeys = Array.from(activeTurns.keys())
               console.log(`[agentweave-bridge] model.usage lookup incoming sessionKey=${sessionKey || "<empty>"} sessionId=${sessionId || "<empty>"} activeTurns=[${activeKeys.join(", ")}]`)
 
-              const match = findTurnForModelUsage(sessionKey, sessionId, executionId)
+              const match = findTurnForModelUsage(sessionKey, sessionId)
               if (!match) {
                 console.log(`[agentweave-bridge] model.usage no active span found for sessionKey=${sessionKey || "<empty>"} sessionId=${sessionId || "<empty>"}`)
                 break
@@ -975,23 +919,29 @@ export function createAgentWeaveBridgeService() {
               break
             }
 
-            case "model.call.completed": {
+            case "model.call.started":
+            case "model.call.completed":
+            case "model.call.error": {
               // OpenClaw's embedded codex/Responses runner emits this — NOT
               // `model.usage` (which only fires from the legacy openai-compat
               // HTTP path). Without a handler, codex turn spans land in
               // Tempo without `prov.llm.{provider,model}`, so the dashboard's
               // "Calls by Model" panel can't bucket them.
               //
-              // The event does NOT carry token counts today, so we only
-              // stamp identity attributes here. Cost stays at whatever
-              // `model.usage` set later in the turn (often 0 for codex
-              // until openclaw enriches this event with usage). Followup
-              // tracked separately.
               const sessionKey = e.sessionKey ?? ""
               const sessionId = e.sessionId ?? ""
-              const executionId = firstString((e as Record<string, unknown>).executionId)
-              const match = findTurnForModelUsage(sessionKey, sessionId, executionId)
+              const runId = firstString((e as Record<string, unknown>).runId)
+              const callId = firstString((e as Record<string, unknown>).callId)
+              const match = findTurnForModelCall(sessionKey, sessionId, runId, callId)
               if (!match) break
+              if (runId) {
+                activeTurnsByRunId.set(runId, match.turn)
+                match.turn.span.setAttribute("prov.openclaw.run.id", runId)
+              }
+              if (runId && callId) {
+                activeTurnsByCallId.set(`${runId}:${callId}`, match.turn)
+                match.turn.span.setAttribute("prov.openclaw.call.id", callId)
+              }
               const provider = e.provider ?? ""
               const model = e.model ?? ""
               if (!provider && !model) break
