@@ -1,5 +1,11 @@
 # OpenClaw Integration: Distributed Tracing
 
+> **Target architecture:** Native OpenTelemetry plus this bridge is the
+> primary integration. The provider proxy is optional enrichment, not a
+> prerequisite for model execution. See
+> [OpenClaw native OpenTelemetry architecture](./openclaw-native-otel-architecture.md)
+> for identity mapping, parity, deduplication, and the session-header migration.
+
 How to wire OpenClaw (or any agent host) into AgentWeave's distributed
 tracing so every user message produces a connected trace tree in Tempo.
 

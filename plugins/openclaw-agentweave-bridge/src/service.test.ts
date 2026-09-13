@@ -302,6 +302,24 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("langfuse.session.id", "main")
   })
 
+  it("uses a canonical transcript sessionId without inventing execution identity", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:legacy-route",
+      sessionId: "018f-openclaw-session-9c01",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", "018f-openclaw-session-9c01")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", "018f-openclaw-session-9c01")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.openclaw.context.id", expect.anything())
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.openclaw.execution.id", expect.anything())
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:legacy-route")
+  })
+
   it("sets cwd and repository on message.queued when provided by the event", () => {
     fire({
       type: "message.queued",
@@ -442,6 +460,52 @@ describe("createAgentWeaveBridgeService", () => {
   it("ignores model.usage for unknown sessionKey", () => {
     fire({ type: "model.usage", sessionKey: "nonexistent", provider: "anthropic", model: "haiku", usage: { input: 10, output: 5 }, costUsd: 0.001, ts: Date.now(), seq: 1 })
     expect(mockSpan.addEvent).not.toHaveBeenCalled()
+  })
+
+  it("matches a model completion by runId and callId when its route key is absent", () => {
+    fire({
+      type: "message.queued",
+      sessionKey: "agent:main:late-event",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    fire({ type: "model.call.started", runId: "run-late", callId: "call-late", sessionKey: "agent:main:late-event", provider: "openai", model: "gpt-5", ts: Date.now(), seq: 2 })
+    fire({
+      type: "model.call.completed",
+      runId: "run-late",
+      callId: "call-late",
+      provider: "openai",
+      model: "gpt-5",
+      ts: Date.now(),
+      seq: 3,
+    })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.provider", "openai")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-5")
+  })
+
+  it("keeps concurrent model runs isolated and drops events for a finished turn", () => {
+    fire({ type: "message.queued", sessionKey: "agent:main:a", channel: "cli", source: "user", ts: Date.now(), seq: 1 })
+    fire({ type: "message.queued", sessionKey: "agent:main:b", channel: "cli", source: "user", ts: Date.now(), seq: 2 })
+    fire({ type: "model.call.started", runId: "run-a", callId: "call-a", sessionKey: "agent:main:a", provider: "anthropic", model: "claude-a", ts: Date.now(), seq: 3 })
+    fire({ type: "model.call.started", runId: "run-b", callId: "call-b", sessionKey: "agent:main:b", provider: "openai", model: "gpt-b", ts: Date.now(), seq: 4 })
+    fire({ type: "model.call.completed", runId: "run-a", callId: "call-a", provider: "anthropic", model: "claude-a", ts: Date.now(), seq: 5 })
+    fire({ type: "model.call.completed", runId: "run-b", callId: "call-b", provider: "openai", model: "gpt-b", ts: Date.now(), seq: 6 })
+    fire({ type: "message.processed", sessionKey: "agent:main:a", outcome: "completed", ts: Date.now(), seq: 7 })
+    fire({ type: "model.call.completed", runId: "run-a", callId: "call-a", provider: "anthropic", model: "must-not-attach", ts: Date.now(), seq: 8 })
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "claude-a")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.llm.model", "gpt-b")
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.llm.model", "must-not-attach")
+  })
+
+  it("does not attach a main-key usage event to an unrelated active subagent", () => {
+    fire({ type: "session.state", sessionKey: "agent:main:parent:subagent:worker", state: "processing", ts: Date.now(), seq: 1 })
+    mockSpan.setAttribute.mockClear()
+    fire({ type: "model.usage", sessionKey: "agent:main:parent", provider: "openai", model: "wrong-model", usage: { input: 10 }, ts: Date.now(), seq: 2 })
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.llm.model", "wrong-model")
   })
 
   it("adds tool.loop event to active span", () => {
