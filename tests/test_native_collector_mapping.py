@@ -167,6 +167,8 @@ def test_assert_mapped_trace_accepts_exact_mapped_synthetic_trace():
         ("existing-target", "prov.llm.provider", "wrong-provider"),
         ("existing-target", "prov.llm.prompt_tokens", 10),
         ("existing-target", "prov.llm.completion_tokens", 3),
+        ("existing-target", "gen_ai.usage.input_tokens", 10),
+        ("existing-target", "gen_ai.usage.output_tokens", 3),
         ("native-usage", "gen_ai.usage.input_tokens", 78),
         ("native-usage", "openclaw.provider", "changed-usage-provider"),
         ("unrelated", "openclaw.provider", "changed-other-provider"),
@@ -207,6 +209,27 @@ def test_assert_mapped_trace_rejects_content_leak_or_mutated_untouched_spans():
         mapping_probe().assert_mapped_trace(trace, "c" * 32)
 
 
+def test_fetch_trace_never_exceeds_its_deadline(monkeypatch):
+    probe = mapping_probe()
+    clock = iter((0.0, 59.5, 59.75, 60.0))
+    request_timeouts: list[float] = []
+    sleeps: list[float] = []
+
+    def timeout(*args, **kwargs):
+        request_timeouts.append(kwargs["timeout"])
+        raise TimeoutError
+
+    monkeypatch.setattr(probe.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(probe.time, "sleep", sleeps.append)
+    monkeypatch.setattr(probe.urllib.request, "urlopen", timeout)
+
+    with pytest.raises(RuntimeError, match="within 60 seconds"):
+        probe.fetch_trace("e" * 32)
+
+    assert request_timeouts == [0.5]
+    assert sleeps == [0.25]
+
+
 def collector_config() -> str:
     """Extract the ConfigMap literal without parsing a different YAML shape."""
     lines = MANIFEST.read_text().splitlines(keepends=True)
@@ -217,6 +240,34 @@ def collector_config() -> str:
             break
         body.append(line)
     return textwrap.dedent("".join(body))
+
+
+def local_collector_config(receiver_port: int, grpc_port: int, capture_port: int) -> str:
+    """Retarget every temporary receiver/exporter endpoint to loopback."""
+    config = collector_config()
+    config = config.replace("endpoint: 0.0.0.0:4318", f"endpoint: 127.0.0.1:{receiver_port}", 1)
+    config = config.replace("endpoint: 0.0.0.0:4317", f"endpoint: 127.0.0.1:{grpc_port}", 1)
+    config = config.replace(
+        "endpoint: http://tempo.monitoring.svc.cluster.local:4318",
+        f"endpoint: http://127.0.0.1:{capture_port}\n    encoding: json",
+        1,
+    )
+    return config.replace("exporters: [otlphttp/tempo, debug]", "exporters: [otlphttp/tempo]", 1)
+
+
+def loopback_port() -> int:
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        return reservation.getsockname()[1]
+
+
+def test_local_collector_config_has_only_loopback_receivers():
+    config = local_collector_config(receiver_port=43180, grpc_port=43181, capture_port=43182)
+
+    assert "endpoint: 127.0.0.1:43180" in config
+    assert "endpoint: 127.0.0.1:43181" in config
+    assert "endpoint: 0.0.0.0:4318" not in config
+    assert "endpoint: 0.0.0.0:4317" not in config
 
 
 def fixture_attributes() -> dict[str, object]:
@@ -370,18 +421,10 @@ def test_pinned_collector_executes_native_mapping_locally_without_production_end
     capture_server = ThreadingHTTPServer(("127.0.0.1", 0), CaptureHandler)
     capture_thread = threading.Thread(target=capture_server.serve_forever, daemon=True)
     capture_thread.start()
-    with socket.socket() as receiver_socket:
-        receiver_socket.bind(("127.0.0.1", 0))
-        receiver_port = receiver_socket.getsockname()[1]
+    receiver_port = loopback_port()
+    grpc_port = loopback_port()
     capture_port = capture_server.server_address[1]
-    config = collector_config()
-    config = config.replace("endpoint: 0.0.0.0:4318", f"endpoint: 127.0.0.1:{receiver_port}", 1)
-    config = config.replace(
-        "endpoint: http://tempo.monitoring.svc.cluster.local:4318",
-        f"endpoint: http://127.0.0.1:{capture_port}\n    encoding: json",
-        1,
-    )
-    config = config.replace("exporters: [otlphttp/tempo, debug]", "exporters: [otlphttp/tempo]", 1)
+    config = local_collector_config(receiver_port, grpc_port, capture_port)
     collector = None
     try:
         with tempfile.TemporaryDirectory() as tempdir:

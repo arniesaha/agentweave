@@ -133,6 +133,8 @@ def assert_mapped_trace(trace: dict, expected_trace_id: str) -> None:
             "openclaw.provider": "existing-provider",
             PROBE_CASE: "existing-target",
             "gen_ai.request.model": "replacement-must-not-win",
+            "gen_ai.usage.input_tokens": 9,
+            "gen_ai.usage.output_tokens": 2,
             "prov.llm.model": "existing-model",
             "prov.harness": "openclaw",
             "prov.source": "native",
@@ -242,21 +244,24 @@ def fetch_trace(trace_id: str) -> dict:
     """Poll Tempo only until every synthetic span is queryable."""
     url = f"{TEMPO_URL}/api/traces/{trace_id}"
     deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            with urllib.request.urlopen(url, timeout=15) as response:
+            with urllib.request.urlopen(url, timeout=min(15, remaining)) as response:
                 trace = json.load(response)
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 raise
-            time.sleep(1)
-            continue
         except TimeoutError:
-            time.sleep(1)
-            continue
-        if len(_trace_spans(trace)) >= 5:
-            return trace
-        time.sleep(1)
+            pass
+        else:
+            if len(_trace_spans(trace)) >= 5:
+                return trace
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(1, remaining))
     raise RuntimeError("synthetic spans did not appear together in Tempo within 60 seconds")
 
 
