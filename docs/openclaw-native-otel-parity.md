@@ -243,9 +243,35 @@ deploy plus verify after merge under the repository's post-merge checklist.
 - The headless isolated probe used the default route after an explicit Anthropic override was
   rejected by the main agent's model policy; the default `gpt-5.6-sol` attempt fell back to
   `claude-sonnet-4-6`. Its `ok` result is not evidence of native gateway export.
-- `captureContent=true` predates this change, but enabling native export now sends full captured
-  model content to the collector. The current collector's `attributes/strip_pii` processor
+- Before #291, `captureContent=true` predated native export, and enabling that export sent full
+  captured model content to the collector. The pre-#291 collector's `attributes/strip_pii` processor
   deletes only five Claude account/organization attributes; it does not delete
   `gen_ai.input.messages`, `gen_ai.output.messages`, `input.value`, `output.value`, or
   `openclaw.content.*`. Review this exposure before declaring native telemetry a replacement
   for the bridge or broadening its destination.
+
+## 2026-09-13 Privacy Follow-up (#291)
+
+The historical observations above were made with content capture enabled and are not retroactively
+redacted. For #291, the live gateway's `diagnostics.otel.captureContent` was changed from `true` to
+`false` after an owner-only backup at
+`/home/Arnab/.openclaw/backups/openclaw.json.issue-291.20260913T163235Z`. A normalized
+configuration comparison showed no other field changed. The gateway restarted successfully, its
+systemd unit remained active, and the trace exporter stability snapshot said `started` and
+`configured`.
+
+A synthetic post-restart `chat.send` turn produced native trace
+`70ca85aeba78441b7aec8b60284a59d1`. Its `openclaw.model.call` still had model, usage,
+request/response-size, and latency attribute names, but no `gen_ai.input.messages`,
+`gen_ai.output.messages`, `input.value`, `output.value`, or `openclaw.content.*` names. The turn
+also retained a proxy child span. This verifies source-side native content capture is off for one
+real turn; it does not assert that all proxy or bridge previews are absent.
+
+The #291 collector change adds a second, service-scoped guard before batching/export. An isolated
+collector using the pinned production image accepted a harmless synthetic native span with
+content-bearing attribute names and stripped all of them, while preserving model/usage attributes.
+A simultaneous synthetic span from another service retained the same attributes, confirming the
+rule's `service.name=openclaw` boundary. The probe is
+`scripts/verify-native-content-privacy.py`. Production collector deployment and post-deploy
+validation are tracked by #291; only observations after that deployment can prove the live
+collector guard.
