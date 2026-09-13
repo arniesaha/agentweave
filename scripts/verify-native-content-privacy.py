@@ -116,8 +116,9 @@ def main() -> None:
     missing = RETAINED - native
     if missing:
         raise AssertionError(f"native model/usage metadata was stripped: {sorted(missing)}")
-    if "gen_ai.input.messages" not in other:
-        raise AssertionError("unrelated service was changed by OpenClaw-only rule")
+    changed_other = FORBIDDEN - other
+    if changed_other:
+        raise AssertionError(f"unrelated service lost attributes: {sorted(changed_other)}")
     print(f"PASS native content stripped; model/usage retained; other service unchanged; synthetic trace {trace_id}")
 
 
