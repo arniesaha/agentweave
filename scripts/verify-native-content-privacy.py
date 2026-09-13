@@ -23,6 +23,7 @@ FORBIDDEN = {
     "openclaw.content.output_messages",
     "openclaw.content.tool_input",
     "openclaw.content.tool_output",
+    "openclaw.content.unanticipated_field",
     "input.value",
     "output.value",
 }

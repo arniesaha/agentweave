@@ -243,8 +243,8 @@ deploy plus verify after merge under the repository's post-merge checklist.
 - The headless isolated probe used the default route after an explicit Anthropic override was
   rejected by the main agent's model policy; the default `gpt-5.6-sol` attempt fell back to
   `claude-sonnet-4-6`. Its `ok` result is not evidence of native gateway export.
-- `captureContent=true` predates this change, but enabling native export now sends full captured
-  model content to the collector. The current collector's `attributes/strip_pii` processor
+- Before #291, `captureContent=true` predated native export, and enabling that export sent full
+  captured model content to the collector. The pre-#291 collector's `attributes/strip_pii` processor
   deletes only five Claude account/organization attributes; it does not delete
   `gen_ai.input.messages`, `gen_ai.output.messages`, `input.value`, `output.value`, or
   `openclaw.content.*`. Review this exposure before declaring native telemetry a replacement
