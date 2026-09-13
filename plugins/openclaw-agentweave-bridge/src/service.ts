@@ -6,7 +6,7 @@ import { BatchSpanProcessor, SimpleSpanProcessor } from "@opentelemetry/sdk-trac
 // Namespace import keeps the optional fork-only listeners truly optional at
 // module-load time on older/public hosts, not merely guarded after loading.
 import * as diagnosticRuntime from "openclaw/plugin-sdk/diagnostic-runtime"
-import type { HostDiagnosticEvent } from "./host-diagnostic-contract.js"
+import type { HostDiagnosticEvent, HostDiagnosticPrivateData } from "./host-diagnostic-contract.js"
 import { resolveCost } from "./pricing.js"
 
 const onDiagnosticEvent = diagnosticRuntime.onDiagnosticEvent
@@ -134,10 +134,8 @@ function subscribeToDiagnosticEvents(
   //    silently buckets as "unknown" on the dashboard).
   // 3. `onTrustedDiagnosticEvent` delivers `session.state`/`message.queued`
   //    paired with the opt-in `privateData` bag (carrying the seeded
-  //    `clientContext`). This is the preferred path for upstream attribution;
-  //    the dispatcher still falls back to `clientContext` on the public event
-  //    payload for older runtimes that forwarded it there before this channel
-  //    existed.
+  //    `clientContext`). This is the only contracted path for upstream
+  //    attribution; the public event type does not contain clientContext.
   //
   // `onModelDiagnosticEvent` and `onTrustedDiagnosticEvent` were added to the
   // plugin-sdk in separate openclaw PRs; older runtimes export only
@@ -148,8 +146,7 @@ function subscribeToDiagnosticEvents(
   // not also process session.state/message.queued — those arrive (with
   // privateData) via onTrustedDiagnosticEvent below, so processing them here
   // too would create the root span twice. Without the trusted channel we handle
-  // them on the public stream, where the dispatcher reads any clientContext off
-  // the event payload (older-runtime fallback).
+  // them on the public stream with local attribution only.
   const publicListener = hasTrusted
     ? (evt: unknown) => {
         const type = (evt as { type?: string }).type
@@ -519,17 +516,10 @@ export function createAgentWeaveBridgeService() {
 
       unsubscribe = subscribeToDiagnosticEvents((evt: unknown, privateData?: unknown) => {
         const e = evt as HostDiagnosticEvent
-        // Upstream attribution prefers the trusted privateData channel
-        // (session.state/message.queued on runtimes that export
-        // onTrustedDiagnosticEvent), falling back to the public event payload
-        // for the older runtime window that forwarded clientContext on the
-        // event itself before the trusted channel existed. privateData wins
-        // when present; on the trusted runtime the public listener skips these
-        // types, so the payload fallback only ever applies when there is no
-        // trusted delivery. No upstream context on either → nix-v1 fallback.
-        const clientContext =
-          (privateData as { clientContext?: unknown } | undefined)?.clientContext ??
-          (e as { clientContext?: unknown }).clientContext
+        // The host's public event union has no clientContext. Upstream
+        // attribution is accepted only from the trusted privateData channel;
+        // older hosts without it use local attribution.
+        const clientContext = (privateData as HostDiagnosticPrivateData | undefined)?.clientContext
         console.log(
           "[agentweave-bridge] event:", e.type,
           "sessionKey:", "sessionKey" in e ? e.sessionKey : undefined,

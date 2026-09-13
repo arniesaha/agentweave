@@ -21,6 +21,7 @@ following additions relative to the published 2026.9.2 type declarations:
 |---|---|---|
 | `message.queued` | `inputPreview` | `src/infra/diagnostic-events.ts`, `DiagnosticMessageQueuedEvent` |
 | `session.state` | `inputPreview`, `taskLabel` | `src/infra/diagnostic-events.ts`, `DiagnosticSessionStateEvent` |
+| Trusted `privateData` | opaque `clientContext` | `src/infra/diagnostic-events.ts`, `DiagnosticEventPrivateData` |
 
 The fork also exports `onModelDiagnosticEvent` and `onTrustedDiagnosticEvent` from the same SDK
 subpath. Production uses a namespace import and checks for those two optional functions at runtime;
@@ -30,7 +31,10 @@ that load-time boundary.
 
 The shared contract declares only this explicit delta. It does not declare `contextId`,
 `executionId`, `cwd`, `repository`, or `raw_data` on those events. Dead production reads of the
-last three fields were removed when the dispatcher adopted the host type. Before an OpenClaw host upgrade,
+last three fields were removed when the dispatcher adopted the host type. The bridge also no
+longer reads `clientContext` from the public event payload: the published union omits it, so
+upstream attribution uses only the trusted `privateData` channel. Older hosts without that
+channel still process public events, but use local attribution. Before an OpenClaw host upgrade,
 compare the new host source and published `DiagnosticEventPayload` with this table, update the pin
 and the delta together, then run `npm ci --ignore-scripts`, `npm run build`, `npm test`, and
 `npm run build:bundle && npm run verify:bundle`. A green test suite against the old pin is not

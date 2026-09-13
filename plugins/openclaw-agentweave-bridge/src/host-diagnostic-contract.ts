@@ -1,4 +1,4 @@
-import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime"
+import type { DiagnosticEventPayload, DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime"
 
 // The deployed OpenClaw fork (bf598e8, src/infra/diagnostic-events.ts)
 // extends the published 2026.9.2 union with these two preview fields.
@@ -16,3 +16,9 @@ export type HostDiagnosticEvent =
   | Exclude<DiagnosticEventPayload, { type: "message.queued" | "session.state" }>
   | QueuedEvent
   | SessionStateEvent
+
+// The fork also adds this opaque attribution bag to trusted privateData,
+// never to the public event. It is intentionally parsed as unknown downstream.
+export type HostDiagnosticPrivateData = DiagnosticEventPrivateData & {
+  clientContext?: unknown
+}

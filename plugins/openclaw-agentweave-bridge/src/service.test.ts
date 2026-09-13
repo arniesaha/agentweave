@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import type { HostDiagnosticEvent } from "./host-diagnostic-contract.js"
+import type { HostDiagnosticEvent, HostDiagnosticPrivateData } from "./host-diagnostic-contract.js"
 import { createAgentWeaveBridgeService } from "./service.js"
 
 // ── Mock OTel APIs ────────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ interface HarnessState {
 // must skip them to avoid creating the root span twice, and the trusted
 // listener processes them with privateData. Mirror that dual-delivery so the
 // public-listener skip (the double-span guard) is actually exercised.
-function fire(evt: HostDiagnosticEvent, privateData?: unknown) {
+function fire(evt: HostDiagnosticEvent, privateData?: HostDiagnosticPrivateData) {
   const g = globalThis as Record<string, unknown>
   const state = g.__openclawDiagnosticEventsState as HarnessState | undefined
   if (!state || (state.listeners.size === 0 && state.trustedListeners.size === 0)) {
@@ -759,10 +759,10 @@ describe("createAgentWeaveBridgeService — legacy runtime without trusted chann
     vi.resetModules()
   })
 
-  it("reads clientContext off the public event payload when onTrustedDiagnosticEvent is absent", async () => {
+  it("uses local attribution when the trusted listener is unavailable", async () => {
     vi.resetModules()
     // Legacy runtime: only the public channel exists — no onTrustedDiagnosticEvent
-    // and no onModelDiagnosticEvent — and clientContext rides the event payload.
+    // and no onModelDiagnosticEvent. Public events contain no clientContext.
     vi.doMock("openclaw/plugin-sdk/diagnostic-runtime", () => ({
       onDiagnosticEvent(listener: (evt: unknown) => void) {
         const g = globalThis as Record<string, unknown>
@@ -784,28 +784,21 @@ describe("createAgentWeaveBridgeService — legacy runtime without trusted chann
     const g = globalThis as Record<string, unknown>
     const listeners = g.__legacyDiagnosticListeners as Set<(evt: unknown) => void> | undefined
     expect(listeners && listeners.size).toBeGreaterThan(0)
+    const event: HostDiagnosticEvent = {
+      type: "message.queued",
+      sessionKey: "agent:main:legacy-public",
+      sessionId: "018f-openclaw-main-legacy",
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    }
     for (const listener of listeners!) {
-      listener({
-        type: "session.state",
-        sessionKey: "agent:main:paperclip-conductor",
-        sessionId: "018f-openclaw-main-legacy",
-        state: "processing",
-        clientContext: {
-          schemaVersion: "agentweave.context.v1",
-          source: "paperclip",
-          sessionId: "legacy-run",
-          agentId: "Conductor",
-          agentType: "paperclip",
-          paperclip: { runId: "legacy-run", issueId: "AGE-12" },
-        },
-        ts: Date.now(),
-        seq: 1,
-      })
+      listener(event)
     }
 
-    // Without the payload fallback this downgrades to nix-v1 — pin the fix.
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "Conductor")
-    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "paperclip")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.id", "nix-v1")
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.agent.type", "main")
 
     await legacy.stop()
   })
