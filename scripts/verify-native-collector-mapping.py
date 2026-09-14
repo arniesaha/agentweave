@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -69,6 +70,7 @@ def _assert_no_forbidden(attributes: dict) -> None:
 def assert_mapped_trace(trace: dict, expected_trace_id: str) -> None:
     """Assert the exact safe adapter behavior in a Tempo trace response."""
     spans = _trace_spans(trace)
+    tempo_trace_id = base64.b64encode(bytes.fromhex(expected_trace_id)).decode("ascii")
     expected_names = {
         "cached",
         "no-cache",
@@ -79,7 +81,7 @@ def assert_mapped_trace(trace: dict, expected_trace_id: str) -> None:
     assert expected_names <= spans.keys(), "synthetic spans did not appear together in Tempo"
     for name in expected_names:
         service, span, _ = spans[name]
-        assert span.get("traceId") == expected_trace_id, f"{name} has a different trace ID"
+        assert span.get("traceId") in (expected_trace_id, tempo_trace_id), f"{name} has a different trace ID"
         expected_service = "other-runtime" if name == "unrelated" else "openclaw"
         assert service == expected_service, f"{name} has service {service!r}"
 
