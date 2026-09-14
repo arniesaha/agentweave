@@ -68,6 +68,8 @@ def synthetic_tempo_trace(trace_id: str) -> dict:
         "prov.llm.completion_tokens": 25,
         "tokens.cache_read": 50,
         "tokens.cache_write": 8,
+        "openclaw.session.correlation_id": "hmac-sha256:v1:probe-key:cached-session",
+        "prov.session.id": "hmac-sha256:v1:probe-key:cached-session",
     }
     no_cache = {
         "agentweave.probe.case": "no-cache",
@@ -81,6 +83,7 @@ def synthetic_tempo_trace(trace_id: str) -> dict:
         "prov.llm.model": "fallback-model",
         "prov.llm.prompt_tokens": 12,
         "prov.llm.completion_tokens": 3,
+        "openclaw.session_id": "raw-session-id-must-not-map",
     }
     existing_target = {
         "agentweave.probe.case": "existing-target",
@@ -94,6 +97,8 @@ def synthetic_tempo_trace(trace_id: str) -> dict:
         "prov.llm.provider": "existing-provider",
         "prov.llm.prompt_tokens": 9,
         "prov.llm.completion_tokens": 2,
+        "openclaw.session.correlation_id": "hmac-sha256:v1:probe-key:replacement-must-not-win",
+        "prov.session.id": "hmac-sha256:v1:probe-key:existing-session",
     }
     usage = {"agentweave.probe.case": "native-usage", "gen_ai.usage.input_tokens": 77, "openclaw.provider": "usage-provider"}
     unrelated = {
@@ -161,6 +166,8 @@ def test_assert_mapped_trace_accepts_tempo_base64_trace_id():
         ("cached", "prov.llm.completion_tokens", 26),
         ("cached", "tokens.cache_read", 51),
         ("cached", "tokens.cache_write", 9),
+        ("cached", "openclaw.session.correlation_id", "hmac-sha256:v1:probe-key:wrong-session"),
+        ("cached", "prov.session.id", "hmac-sha256:v1:probe-key:wrong-session"),
         ("cached", "openclaw.provider", "changed-source-provider"),
         ("cached", "gen_ai.request.model", "changed-source-model"),
         ("cached", "gen_ai.usage.input_tokens", 101),
@@ -174,12 +181,15 @@ def test_assert_mapped_trace_accepts_tempo_base64_trace_id():
         ("no-cache", "prov.llm.prompt_tokens", 13),
         ("no-cache", "prov.llm.completion_tokens", 4),
         ("no-cache", "openclaw.model", "changed-fallback-source"),
+        ("no-cache", "openclaw.session_id", "raw-session-id-was-changed"),
         ("existing-target", "prov.llm.model", "replacement-must-not-win"),
         ("existing-target", "prov.harness", "wrong-harness"),
         ("existing-target", "prov.source", "wrong-source"),
         ("existing-target", "prov.llm.provider", "wrong-provider"),
         ("existing-target", "prov.llm.prompt_tokens", 10),
         ("existing-target", "prov.llm.completion_tokens", 3),
+        ("existing-target", "openclaw.session.correlation_id", "hmac-sha256:v1:probe-key:wrong-source"),
+        ("existing-target", "prov.session.id", "hmac-sha256:v1:probe-key:wrong-existing-target"),
         ("existing-target", "gen_ai.usage.input_tokens", 10),
         ("existing-target", "gen_ai.usage.output_tokens", 3),
         ("native-usage", "gen_ai.usage.input_tokens", 78),
@@ -360,6 +370,13 @@ def test_native_mapping_skips_malformed_sources_and_preserves_existing_targets()
     assert 'IsString(span.attributes["openclaw.model"])' in fallback
     assert 'span.attributes["prov.llm.model"] == nil' in fallback
 
+    correlation = mapping_statement("prov.session.id", "openclaw.session.correlation_id")
+    assert 'resource.attributes["service.name"] == "openclaw"' in correlation
+    assert 'span.name == "openclaw.model.call"' in correlation
+    assert 'span.attributes["openclaw.session.correlation_id"] != nil' in correlation
+    assert 'IsString(span.attributes["openclaw.session.correlation_id"])' in correlation
+    assert 'span.attributes["prov.session.id"] == nil' in correlation
+
 
 def test_manifest_orders_mapping_after_both_strippers_and_limits_it_to_native_model_calls():
     config = collector_config()
@@ -367,11 +384,11 @@ def test_manifest_orders_mapping_after_both_strippers_and_limits_it_to_native_mo
     assert "processors: [memory_limiter, attributes/strip_pii, attributes/strip_openclaw_content, transform/openclaw_native, batch]" in config
     statements = mapping_statements()
     mapping = "\n".join(statements)
-    assert len(statements) == 9
+    assert len(statements) == 10
     for statement in statements:
         assert 'resource.attributes["service.name"] == "openclaw"' in statement
         assert 'span.name == "openclaw.model.call"' in statement
-    for forbidden in ("prov.session.", "cost.usd", "prov.activity.type"):
+    for forbidden in ("cost.usd", "prov.activity.type"):
         assert forbidden not in mapping
 
 
