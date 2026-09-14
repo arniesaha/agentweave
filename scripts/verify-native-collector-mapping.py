@@ -18,7 +18,15 @@ TEMPO_URL = os.environ.get("AGENTWEAVE_TEMPO_URL", "http://192.168.1.70:31989").
 CONTENT_MARKER = "openclaw.content.input_messages"
 PROBE_CASE = "agentweave.probe.case"
 FORBIDDEN_PREFIXES = ("prov.session.",)
-FORBIDDEN_KEYS = {"cost.usd", "prov.activity.type", CONTENT_MARKER}
+FORBIDDEN_KEYS = {
+    "cost.usd",
+    "prov.activity.type",
+    CONTENT_MARKER,
+    "openclaw.session_id",
+    "openclaw.sessionId",
+    "openclaw.session_key",
+    "openclaw.sessionKey",
+}
 
 
 def attribute(key: str, value: str | int) -> dict:
@@ -127,7 +135,6 @@ def assert_mapped_trace(trace: dict, expected_trace_id: str) -> None:
             "prov.llm.model": "fallback-model",
             "prov.llm.prompt_tokens": 12,
             "prov.llm.completion_tokens": 3,
-            "openclaw.session_id": "raw-session-id-must-not-map",
         },
     )
     assert "tokens.cache_read" not in no_cache and "tokens.cache_write" not in no_cache

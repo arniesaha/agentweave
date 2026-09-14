@@ -88,6 +88,14 @@ data:
             action: delete
           - key: output.value
             action: delete
+          - key: openclaw.session_id
+            action: delete
+          - key: openclaw.sessionId
+            action: delete
+          - key: openclaw.session_key
+            action: delete
+          - key: openclaw.sessionKey
+            action: delete
 
       transform/openclaw_native:
         error_mode: ignore

@@ -83,7 +83,6 @@ def synthetic_tempo_trace(trace_id: str) -> dict:
         "prov.llm.model": "fallback-model",
         "prov.llm.prompt_tokens": 12,
         "prov.llm.completion_tokens": 3,
-        "openclaw.session_id": "raw-session-id-must-not-map",
     }
     existing_target = {
         "agentweave.probe.case": "existing-target",
@@ -181,7 +180,6 @@ def test_assert_mapped_trace_accepts_tempo_base64_trace_id():
         ("no-cache", "prov.llm.prompt_tokens", 13),
         ("no-cache", "prov.llm.completion_tokens", 4),
         ("no-cache", "openclaw.model", "changed-fallback-source"),
-        ("no-cache", "openclaw.session_id", "raw-session-id-was-changed"),
         ("existing-target", "prov.llm.model", "replacement-must-not-win"),
         ("existing-target", "prov.harness", "wrong-harness"),
         ("existing-target", "prov.source", "wrong-source"),
@@ -228,6 +226,22 @@ def test_assert_mapped_trace_rejects_content_leak_or_mutated_untouched_spans():
         if any(attr["key"] == "agentweave.probe.case" and attr["value"]["stringValue"] == "cached" for attr in span["attributes"])
     )
     cached["attributes"].append({"key": "openclaw.content.input_messages", "value": any_value("harmless-content-marker")})
+    with pytest.raises(AssertionError):
+        mapping_probe().assert_mapped_trace(trace, "c" * 32)
+
+
+def test_assert_mapped_trace_rejects_raw_openclaw_session_id():
+    trace = synthetic_tempo_trace("c" * 32)
+    no_cache = next(
+        span
+        for batch in trace["batches"]
+        for scoped in batch["scopeSpans"]
+        for span in scoped["spans"]
+        if any(attr["key"] == "agentweave.probe.case" and attr["value"]["stringValue"] == "no-cache" for attr in span["attributes"])
+    )
+    no_cache["attributes"].append(
+        {"key": "openclaw.session_id", "value": any_value("raw-session-id-must-not-export")},
+    )
     with pytest.raises(AssertionError):
         mapping_probe().assert_mapped_trace(trace, "c" * 32)
 
@@ -390,6 +404,18 @@ def test_manifest_orders_mapping_after_both_strippers_and_limits_it_to_native_mo
         assert 'span.name == "openclaw.model.call"' in statement
     for forbidden in ("cost.usd", "prov.activity.type"):
         assert forbidden not in mapping
+
+
+def test_manifest_strips_raw_openclaw_session_ids_before_native_mapping():
+    config = collector_config()
+    strip_start = config.index("attributes/strip_openclaw_content:")
+    mapping_start = config.index("transform/openclaw_native:")
+    strip_config = config[strip_start:mapping_start]
+
+    strip_lines = strip_config.splitlines()
+    for key in ("openclaw.session_id", "openclaw.sessionId", "openclaw.session_key", "openclaw.sessionKey"):
+        key_index = strip_lines.index(f"      - key: {key}")
+        assert strip_lines[key_index + 1].strip() == "action: delete"
 
 
 def test_pinned_collector_accepts_extracted_configuration():
