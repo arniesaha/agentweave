@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import gzip
 import importlib.util
 import json
@@ -135,6 +136,18 @@ def span_attributes(trace: dict, case: str) -> dict[str, str | int]:
 
 def test_assert_mapped_trace_accepts_exact_mapped_synthetic_trace():
     mapping_probe().assert_mapped_trace(synthetic_tempo_trace("a" * 32), "a" * 32)
+
+
+def test_assert_mapped_trace_accepts_tempo_base64_trace_id():
+    trace_id = "00112233445566778899aabbccddeeff"
+    trace = synthetic_tempo_trace(trace_id)
+    encoded_id = base64.b64encode(bytes.fromhex(trace_id)).decode()
+    for batch in trace["batches"]:
+        for scoped in batch["scopeSpans"]:
+            for span in scoped["spans"]:
+                span["traceId"] = encoded_id
+
+    mapping_probe().assert_mapped_trace(trace, trace_id)
 
 
 @pytest.mark.parametrize(
