@@ -17,6 +17,10 @@ const onTrustedDiagnosticEvent = optionalRuntime.onTrustedDiagnosticEvent
 interface ActiveTurn {
   span: Span
   ctx: Context
+  /** Session identity used only to match later host diagnostic events. */
+  lookupSessionId?: string
+  /** Opaque OpenClaw-owned token received through trusted lifecycle private data. */
+  sessionCorrelationId?: string
   /** True for spans started from session.state (gateway-agent / subagent paths)
    *  that must be ended on the session.state idle transition rather than a
    *  message.processed event (which never fires for those paths). */
@@ -188,7 +192,7 @@ function subscribeToDiagnosticEvents(
 }
 
 function getSpanSessionId(turn: ActiveTurn): string | undefined {
-  return (turn.span as any)?._attributes?.["session.id"] as string | undefined
+  return turn.lookupSessionId ?? (turn.span as any)?._attributes?.["session.id"] as string | undefined
 }
 
 function firstString(...values: unknown[]): string | undefined {
@@ -196,6 +200,21 @@ function firstString(...values: unknown[]): string | undefined {
     if (typeof value !== "string") continue
     const trimmed = value.trim()
     if (trimmed) return trimmed
+  }
+  return undefined
+}
+
+function resolveUpstreamParentSessionAttribution(
+  parentSessionId: string | undefined,
+  sessionCorrelationId: string | undefined,
+): string | undefined {
+  if (!parentSessionId) return undefined
+  if (!sessionCorrelationId) return parentSessionId
+
+  for (const [sessionKey, turn] of activeTurns) {
+    if ((sessionKey === parentSessionId || turn.lookupSessionId === parentSessionId) && turn.sessionCorrelationId) {
+      return turn.sessionCorrelationId
+    }
   }
   return undefined
 }
@@ -366,19 +385,22 @@ function startUpstreamRootSpanFromSessionState(
   sessionKey: string,
   upstream: UpstreamAgentContext,
   config: BridgeConfig,
+  sessionCorrelationId?: string,
 ): void {
   const identity = resolveOpenClawSessionId(sessionKey, e.sessionId)
   const effectiveSessionId = upstream.sessionId ?? identity.sessionId
+  const attributedSessionId = sessionCorrelationId ?? effectiveSessionId
+  const exportedSessionKey = sessionCorrelationId ? undefined : sessionKey
   const agentId = upstream.agentId ?? config.agentId ?? "nix-v1"
   const agentType = upstream.agentType ?? "main"
 
   const tracer = trace.getTracer("openclaw-agentweave-bridge")
   const span = tracer.startSpan("openclaw.turn")
-  span.setAttribute("session_id", effectiveSessionId)
-  span.setAttribute("session.id", effectiveSessionId)
-  span.setAttribute("prov.session.id", effectiveSessionId)
-  span.setAttribute("prov.session.key", sessionKey)
-  if (identity.canonicalUuid && identity.canonicalUuid !== sessionKey) {
+  span.setAttribute("session_id", attributedSessionId)
+  span.setAttribute("session.id", attributedSessionId)
+  span.setAttribute("prov.session.id", attributedSessionId)
+  if (exportedSessionKey) span.setAttribute("prov.session.key", exportedSessionKey)
+  if (!sessionCorrelationId && identity.canonicalUuid && identity.canonicalUuid !== sessionKey) {
     span.setAttribute("prov.session.uuid", identity.canonicalUuid)
   }
   span.setAttribute("prov.harness", "openclaw")
@@ -391,16 +413,17 @@ function startUpstreamRootSpanFromSessionState(
   if (taskLabel) span.setAttribute("prov.task.label", taskLabel)
   const inputPreview = resolveInputPreview(e, taskLabel)
 
-  let parentSid: string | undefined
-  const nativeParentSid = upstream.parentSessionId
-  if (nativeParentSid) {
-    parentSid = nativeParentSid
+  const parentSid = resolveUpstreamParentSessionAttribution(
+    upstream.parentSessionId,
+    sessionCorrelationId,
+  )
+  if (parentSid) {
     span.setAttribute("prov.parent.session.id", parentSid)
     process.env.AGENTWEAVE_PARENT_SESSION_ID = parentSid
   }
   applyLangfuseAgentTurnAttrs(span, {
-    sessionId: effectiveSessionId,
-    sessionKey,
+    sessionId: attributedSessionId,
+    sessionKey: exportedSessionKey,
     project: config.project,
     agentId,
     agentType,
@@ -434,7 +457,13 @@ function startUpstreamRootSpanFromSessionState(
     process.env.OPENAI_API_BASE = proxyBaseUrl
   }
 
-  setActiveTurn(sessionKey, { span, ctx: spanCtx, endOnIdle: true })
+  setActiveTurn(sessionKey, {
+    span,
+    ctx: spanCtx,
+    endOnIdle: true,
+    lookupSessionId: effectiveSessionId,
+    sessionCorrelationId,
+  })
   console.log(`[agentweave-bridge] started root span for ${agentType} session:`, effectiveSessionId, "agent:", agentId)
 
   if (proxyBaseUrl) {
@@ -519,7 +548,11 @@ export function createAgentWeaveBridgeService() {
         // The host's public event union has no clientContext. Upstream
         // attribution is accepted only from the trusted privateData channel;
         // older hosts without it use local attribution.
-        const clientContext = (privateData as HostDiagnosticPrivateData | undefined)?.clientContext
+        const trustedPrivateData = privateData as HostDiagnosticPrivateData | undefined
+        const clientContext = trustedPrivateData?.clientContext
+        // `privateData` is passed only by onTrustedDiagnosticEvent for lifecycle
+        // events; public and model callbacks invoke this listener without it.
+        const sessionCorrelationId = trustedPrivateData?.sessionCorrelationId
         console.log(
           "[agentweave-bridge] event:", e.type,
           "sessionKey:", "sessionKey" in e ? e.sessionKey : undefined,
@@ -539,19 +572,20 @@ export function createAgentWeaveBridgeService() {
               // the local nix-v1 fallback derived above.
               const upstream = resolveUpstreamContext(clientContext)
               const effectiveSessionId = upstream?.sessionId ?? identity.sessionId
+              const attributedSessionId = sessionCorrelationId ?? effectiveSessionId
+              const exportedSessionKey = sessionCorrelationId ? undefined : sessionKey
               const effectiveAgentId = upstream?.agentId ?? agentId
               const effectiveAgentType = upstream?.agentType ?? agentType
 
               const tracer = trace.getTracer("openclaw-agentweave-bridge")
               const span = tracer.startSpan("openclaw.turn")
-              span.setAttribute("session_id", effectiveSessionId)
-              span.setAttribute("session.id", effectiveSessionId)
-              span.setAttribute("prov.session.id", effectiveSessionId)
-              // Qualified route key stays available for attribution and
-              // parent/session heuristics after session.id switches to the
-              // OpenClaw UUID used by the native JSONL shipper.
-              span.setAttribute("prov.session.key", sessionKey)
-              if (identity.canonicalUuid && identity.canonicalUuid !== sessionKey) {
+              span.setAttribute("session_id", attributedSessionId)
+              span.setAttribute("session.id", attributedSessionId)
+              span.setAttribute("prov.session.id", attributedSessionId)
+              // Preserve the qualified route key for compatibility only when
+              // OpenClaw did not provide its opaque correlation token.
+              if (exportedSessionKey) span.setAttribute("prov.session.key", exportedSessionKey)
+              if (!sessionCorrelationId && identity.canonicalUuid && identity.canonicalUuid !== sessionKey) {
                 span.setAttribute("prov.session.uuid", identity.canonicalUuid)
               }
               span.setAttribute("prov.harness", "openclaw")
@@ -567,10 +601,11 @@ export function createAgentWeaveBridgeService() {
 
               // Link to parent session: an explicit upstream parent wins;
               // otherwise fall back to the sub-agent concurrent-turn heuristic.
-              let parentSid: string | undefined
-              const nativeParentSid = upstream?.parentSessionId
-              if (nativeParentSid) {
-                parentSid = nativeParentSid
+              let parentSid = resolveUpstreamParentSessionAttribution(
+                upstream?.parentSessionId,
+                sessionCorrelationId,
+              )
+              if (parentSid) {
                 span.setAttribute("prov.parent.session.id", parentSid)
                 process.env.AGENTWEAVE_PARENT_SESSION_ID = parentSid
               } else if (agentType === "subagent") {
@@ -579,16 +614,21 @@ export function createAgentWeaveBridgeService() {
                   ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:"))
                 if (parentKey) {
                   const parentTurn = activeTurns.get(parentKey)
-                  if (parentTurn) {
-                    span.setAttribute("prov.parent.session.id", parentKey)
-                    process.env.AGENTWEAVE_PARENT_SESSION_ID = parentKey
+                  // A tokenized child may reference only an active parent's
+                  // opaque attribution. Do not fall back to a raw route key.
+                  const resolvedParentSessionId = sessionCorrelationId
+                    ? parentTurn?.sessionCorrelationId
+                    : parentKey
+                  if (resolvedParentSessionId) {
+                    span.setAttribute("prov.parent.session.id", resolvedParentSessionId)
+                    process.env.AGENTWEAVE_PARENT_SESSION_ID = resolvedParentSessionId
                   }
-                  parentSid = parentKey
+                  parentSid = resolvedParentSessionId
                 }
               }
               applyLangfuseAgentTurnAttrs(span, {
-                sessionId: effectiveSessionId,
-                sessionKey,
+                sessionId: attributedSessionId,
+                sessionKey: exportedSessionKey,
                 project: config.project,
                 agentId: effectiveAgentId,
                 agentType: effectiveAgentType,
@@ -629,7 +669,12 @@ export function createAgentWeaveBridgeService() {
                 process.env.OPENAI_API_BASE = proxyBaseUrl
               }
 
-              setActiveTurn(sessionKey, { span, ctx: spanCtx })
+              setActiveTurn(sessionKey, {
+                span,
+                ctx: spanCtx,
+                lookupSessionId: effectiveSessionId,
+                sessionCorrelationId,
+              })
               console.log(`[agentweave-bridge] started root span for ${effectiveAgentType} session:`, effectiveSessionId, "agent:", effectiveAgentId)
 
               // Push session context into the proxy so its _session_context dict
@@ -716,13 +761,15 @@ export function createAgentWeaveBridgeService() {
                   const subagentId = config.subagentId ?? `${config.agentId ?? "nix"}-subagent-v1`
                   const identity = resolveOpenClawSessionId(sessionKey, e.sessionId)
                   const sessionId = identity.sessionId
+                  const attributedSessionId = sessionCorrelationId ?? sessionId
+                  const exportedSessionKey = sessionCorrelationId ? undefined : sessionKey
                   const tracer = trace.getTracer("openclaw-agentweave-bridge")
                   const span = tracer.startSpan("openclaw.subagent")
-                  span.setAttribute("session_id", sessionId)
-                  span.setAttribute("session.id", sessionId)
-                  span.setAttribute("prov.session.id", sessionId)
-                  span.setAttribute("prov.session.key", sessionKey)
-                  if (identity.canonicalUuid && identity.canonicalUuid !== sessionKey) {
+                  span.setAttribute("session_id", attributedSessionId)
+                  span.setAttribute("session.id", attributedSessionId)
+                  span.setAttribute("prov.session.id", attributedSessionId)
+                  if (exportedSessionKey) span.setAttribute("prov.session.key", exportedSessionKey)
+                  if (!sessionCorrelationId && identity.canonicalUuid && identity.canonicalUuid !== sessionKey) {
                     span.setAttribute("prov.session.uuid", identity.canonicalUuid)
                   }
                   span.setAttribute("prov.harness", "openclaw")
@@ -739,15 +786,19 @@ export function createAgentWeaveBridgeService() {
                   let parentSessionId: string | undefined
                   if (mainKey) {
                     const mainTurn = activeTurns.get(mainKey)
-                    if (mainTurn) {
-                      const mainSessionId = (mainTurn.span as any)._attributes?.["session.id"] || mainKey
+                    // A tokenized child may reference only an active parent's
+                    // opaque attribution. Do not fall back to a raw route key.
+                    const mainSessionId = sessionCorrelationId
+                      ? mainTurn?.sessionCorrelationId
+                      : mainKey
+                    if (mainSessionId) {
                       span.setAttribute("prov.parent.session.id", mainSessionId)
                       parentSessionId = mainSessionId
                     }
                   }
                   applyLangfuseAgentTurnAttrs(span, {
-                    sessionId,
-                    sessionKey,
+                    sessionId: attributedSessionId,
+                    sessionKey: exportedSessionKey,
                     project: config.project,
                     agentId: subagentId,
                     agentType: "subagent",
@@ -756,7 +807,12 @@ export function createAgentWeaveBridgeService() {
                     inputPreview,
                   })
                   const spanCtx = trace.setSpan(context.active(), span)
-                  setActiveTurn(sessionKey, { span, ctx: spanCtx })
+                  setActiveTurn(sessionKey, {
+                    span,
+                    ctx: spanCtx,
+                    lookupSessionId: sessionId,
+                    sessionCorrelationId,
+                  })
 
                   // Force the proxy to attribute LLM calls to this sub-agent session
                   const proxyUrl = normalizeProxyBaseUrl(config.proxyUrl) || "http://192.168.1.70:30400"
@@ -822,7 +878,13 @@ export function createAgentWeaveBridgeService() {
               if (!sessionKey.includes(":subagent:")) {
                 const upstream = resolveUpstreamContext(clientContext)
                 if (state === "processing" && upstream && !activeTurns.has(sessionKey)) {
-                  startUpstreamRootSpanFromSessionState(e, sessionKey, upstream, config)
+                  startUpstreamRootSpanFromSessionState(
+                    e,
+                    sessionKey,
+                    upstream,
+                    config,
+                    sessionCorrelationId,
+                  )
                 } else if (state === "idle") {
                   endUpstreamRootSpanOnIdle(sessionKey)
                 }

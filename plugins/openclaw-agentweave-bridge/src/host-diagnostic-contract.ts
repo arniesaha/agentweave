@@ -21,4 +21,6 @@ export type HostDiagnosticEvent =
 // never to the public event. It is intentionally parsed as unknown downstream.
 export type HostDiagnosticPrivateData = DiagnosticEventPrivateData & {
   clientContext?: unknown
+  /** Opaque OpenClaw-owned session pseudonym, available only on trusted lifecycle events. */
+  sessionCorrelationId?: string
 }

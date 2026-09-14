@@ -168,6 +168,115 @@ describe("createAgentWeaveBridgeService", () => {
     expect(process.env.AGENTWEAVE_SESSION_ID).toBe("018f-openclaw-main-test")
   })
 
+  it("uses the trusted opaque correlation token for turn session attribution", () => {
+    const sessionKey = "agent:main:opaque-correlation-session"
+    const correlationId = " hmac-sha256:v1:0123456789abcdef0123456789abcdef:abc "
+
+    fire(
+      {
+        type: "message.queued",
+        sessionKey,
+        sessionId: "018f-openclaw-opaque-correlation",
+        channel: "telegram",
+        source: "user",
+        queueDepth: 0,
+        ts: Date.now(),
+        seq: 1,
+      },
+      { sessionCorrelationId: correlationId },
+    )
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", correlationId)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", correlationId)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session_id", correlationId)
+    expect(mockSpan.setAttribute.mock.calls.map(([, value]) => value)).not.toContain(sessionKey)
+    expect(mockSpan.setAttribute.mock.calls.map(([, value]) => value)).not.toContain(
+      "018f-openclaw-opaque-correlation",
+    )
+  })
+
+  it("omits raw parent attribution for a tokenized session.state subagent", () => {
+    const parentKey = "agent:main:raw-parent"
+    const parentId = "018f-openclaw-raw-parent"
+    const childKey = "agent:main:raw-parent:subagent:tokenized-child"
+    const childId = "018f-openclaw-tokenized-child"
+    const correlationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:subagent"
+
+    fire({
+      type: "message.queued",
+      sessionKey: parentKey,
+      sessionId: parentId,
+      channel: "cli",
+      source: "user",
+      ts: Date.now(),
+      seq: 1,
+    })
+    mockSpan.setAttribute.mockClear()
+
+    fire(
+      {
+        type: "session.state",
+        sessionKey: childKey,
+        sessionId: childId,
+        state: "processing",
+        ts: Date.now(),
+        seq: 2,
+      },
+      { sessionCorrelationId: correlationId },
+    )
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("session.id", correlationId)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", correlationId)
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.parent.session.id", expect.anything())
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith(
+      "langfuse.trace.metadata.parent_session_id",
+      expect.anything(),
+    )
+    const attributeValues = mockSpan.setAttribute.mock.calls.map(([, value]) => value)
+    expect(attributeValues).not.toContain(childKey)
+    expect(attributeValues).not.toContain(childId)
+    expect(attributeValues).not.toContain(parentKey)
+    expect(attributeValues).not.toContain(parentId)
+  })
+
+  it("uses an active opaque parent attribution for a tokenized session.state subagent", () => {
+    const parentKey = "agent:main:opaque-parent"
+    const parentCorrelationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:parent"
+    const childCorrelationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:child"
+
+    fire(
+      {
+        type: "message.queued",
+        sessionKey: parentKey,
+        sessionId: "018f-openclaw-parent",
+        channel: "cli",
+        source: "user",
+        ts: Date.now(),
+        seq: 1,
+      },
+      { sessionCorrelationId: parentCorrelationId },
+    )
+    mockSpan.setAttribute.mockClear()
+
+    fire(
+      {
+        type: "session.state",
+        sessionKey: "agent:main:opaque-parent:subagent:child",
+        sessionId: "018f-openclaw-child",
+        state: "processing",
+        ts: Date.now(),
+        seq: 2,
+      },
+      { sessionCorrelationId: childCorrelationId },
+    )
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.parent.session.id", parentCorrelationId)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith(
+      "langfuse.trace.metadata.parent_session_id",
+      parentCorrelationId,
+    )
+  })
+
   it("sets Langfuse input preview on message.queued when OpenClaw provides one", () => {
     fire({
       type: "message.queued",
@@ -558,6 +667,42 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.key", "agent:main:paperclip-conductor")
   })
 
+  it("omits a raw upstream parent on a tokenized message.queued span", () => {
+    const rawParentSessionId = "paperclip-raw-parent"
+    const correlationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:queued-child"
+
+    fire(
+      {
+        type: "message.queued",
+        sessionKey: "agent:main:paperclip-tokenized-child",
+        sessionId: "018f-openclaw-tokenized-queued-child",
+        channel: "cli",
+        source: "user",
+        ts: Date.now(),
+        seq: 1,
+      },
+      {
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          source: "paperclip",
+          sessionId: "paperclip-child-run",
+          agentId: "Conductor",
+          agentType: "paperclip",
+          parentSessionId: rawParentSessionId,
+        },
+        sessionCorrelationId: correlationId,
+      },
+    )
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", correlationId)
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith("prov.parent.session.id", rawParentSessionId)
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith(
+      "langfuse.trace.metadata.parent_session_id",
+      rawParentSessionId,
+    )
+    expect(mockSpan.setAttribute.mock.calls.map(([, value]) => value)).not.toContain(rawParentSessionId)
+  })
+
   it("maps partial upstream context without inventing missing fields", () => {
     fire(
       {
@@ -655,6 +800,57 @@ describe("createAgentWeaveBridgeService", () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.run_id", "0fafebf4-8c84-45e4-9583-8149f2bdd16e")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.upstream.issue_id", "AGE-10")
     expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.harness", "openclaw")
+  })
+
+  it("uses an active opaque upstream parent on a tokenized session.state span", () => {
+    const parentKey = "agent:main:upstream-parent"
+    const parentSessionId = "upstream-parent-run"
+    const parentCorrelationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:upstream-parent"
+    const childCorrelationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:upstream-child"
+
+    fire(
+      {
+        type: "message.queued",
+        sessionKey: parentKey,
+        sessionId: parentSessionId,
+        channel: "cli",
+        source: "user",
+        ts: Date.now(),
+        seq: 1,
+      },
+      { sessionCorrelationId: parentCorrelationId },
+    )
+    mockSpan.setAttribute.mockClear()
+
+    fire(
+      {
+        type: "session.state",
+        sessionKey: "agent:main:upstream-child",
+        sessionId: "018f-openclaw-upstream-child",
+        state: "processing",
+        ts: Date.now(),
+        seq: 2,
+      },
+      {
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          source: "paperclip",
+          sessionId: "upstream-child-run",
+          agentId: "Conductor",
+          agentType: "paperclip",
+          parentSessionId,
+        },
+        sessionCorrelationId: childCorrelationId,
+      },
+    )
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.session.id", childCorrelationId)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith("prov.parent.session.id", parentCorrelationId)
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith(
+      "langfuse.trace.metadata.parent_session_id",
+      parentCorrelationId,
+    )
+    expect(mockSpan.setAttribute.mock.calls.map(([, value]) => value)).not.toContain(parentSessionId)
   })
 
   it("ends the session.state-created upstream root span on idle", () => {
