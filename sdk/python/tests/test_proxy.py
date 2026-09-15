@@ -1549,6 +1549,79 @@ class TestForcedSessionContextRace:
             f"Keyed request should use forced session_id, got: {captured[0]['session_id']!r}"
         )
 
+    def test_opaque_forced_context_emits_only_opaque_session_attributes(self, monkeypatch):
+        """A bridge can use its correlation token as the proxy's force key.
+
+        This exercises POST /session and the real request-attribution route:
+        only the opaque child/parent tokens may reach the LLM span.
+        """
+        from unittest.mock import AsyncMock, patch
+        from fastapi.responses import JSONResponse
+        from fastapi.testclient import TestClient
+        from agentweave.config import AgentWeaveConfig
+        from agentweave.proxy import app
+
+        child_token = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:child"
+        parent_token = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:parent"
+        raw_child = "018f-raw-openclaw-child"
+        raw_parent = "018f-raw-openclaw-parent"
+        monkeypatch.setattr(proxy_module, "_forced_session_contexts", OrderedDict())
+        monkeypatch.setattr(proxy_module, "_PROXY_TOKEN", None)
+        monkeypatch.setattr(AgentWeaveConfig, "get_or_none", staticmethod(lambda: None))
+        monkeypatch.delenv("AGENTWEAVE_SESSION_ID", raising=False)
+        monkeypatch.delenv("AGENTWEAVE_PARENT_SESSION_ID", raising=False)
+
+        client = TestClient(app)
+        response = client.post("/session", json={
+            "session_id": child_token,
+            "session_key": child_token,
+            "parent_session_id": parent_token,
+            "agent_id": "nix-v1-subagent-v1",
+            "agent_type": "subagent",
+            "harness": "openclaw",
+            "force": True,
+        })
+        assert response.status_code == 200
+
+        captured: list[dict] = []
+
+        async def fake_request(**kwargs):
+            captured.append(kwargs)
+            return JSONResponse({"ok": True})
+
+        with patch.object(proxy_module, "_request_and_trace", side_effect=fake_request), \
+             patch.object(proxy_module, "_stream_and_trace", new=AsyncMock()), \
+             patch.object(proxy_module, "_stream_preflight", new=AsyncMock(return_value=None)):
+            response = client.post(
+                "/v1/messages",
+                json={"model": "claude-3-haiku-20240307", "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "hi"}]},
+                headers={
+                    "x-api-key": "sk-ant-test",
+                    "x-agentweave-session-key": child_token,
+                },
+            )
+
+        assert response.status_code == 200
+        assert captured
+        request_attrs = captured[0]
+        span = _FakeSpan()
+        _set_request_attrs(
+            span, model=request_attrs["model"], provider=request_attrs["provider"],
+            agent_id=request_attrs["agent_id"], agent_model=request_attrs["agent_model"],
+            path=request_attrs["path"], body=request_attrs["body"],
+            session_id=request_attrs["session_id"],
+            parent_session_id=request_attrs["parent_session_id"],
+            agent_type=request_attrs["agent_type"], harness=request_attrs["harness"],
+        )
+        emitted = json.dumps(span.attrs)
+        assert request_attrs["session_id"] == child_token
+        assert request_attrs["parent_session_id"] == parent_token
+        assert child_token in emitted
+        assert parent_token in emitted
+        assert raw_child not in emitted
+        assert raw_parent not in emitted
+
     def test_session_key_header_stripped_from_forwarding(self):
         """x-agentweave-session-key must not be forwarded upstream."""
         assert "x-agentweave-session-key" in _SKIP_HEADERS_ALWAYS

@@ -121,6 +121,7 @@ describe("createAgentWeaveBridgeService", () => {
     delete (globalThis as Record<string, unknown>).__openclawDiagnosticEventsState
     delete process.env.AGENTWEAVE_TRACEPARENT
     delete process.env.AGENTWEAVE_SESSION_ID
+    delete process.env.AGENTWEAVE_SESSION_KEY
     delete process.env.AGENTWEAVE_PARENT_SESSION_ID
     service = createAgentWeaveBridgeService()
     await service.start(makeCtx())
@@ -935,6 +936,161 @@ describe("createAgentWeaveBridgeService", () => {
     // No upstream context + not a subagent key → no span created from session.state.
     expect(mockSpan.setAttribute).not.toHaveBeenCalled()
   })
+
+  it("posts only the opaque correlation identity for a tokenized queued turn", async () => {
+    const rawSessionKey = "agent:main:raw-queued-key"
+    const rawSessionId = "018f-raw-queued-id"
+    const rawParentId = "paperclip-raw-queued-parent"
+    const correlationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:queued"
+    const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => new Response())
+    vi.stubGlobal("fetch", fetchMock)
+    process.env.AGENTWEAVE_PARENT_SESSION_ID = rawParentId
+    await service.stop()
+    service = createAgentWeaveBridgeService()
+    await service.start(makeCtx({ proxyUrl: "http://proxy.test" }))
+
+    fire(
+      {
+        type: "message.queued",
+        sessionKey: rawSessionKey,
+        sessionId: rawSessionId,
+        channel: "cli",
+        source: "user",
+        ts: Date.now(),
+        seq: 1,
+      },
+      {
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          sessionId: "upstream-raw-queued-child",
+          parentSessionId: rawParentId,
+        },
+        sessionCorrelationId: correlationId,
+      },
+    )
+
+    const init = fetchMock.mock.calls[0]![1]!
+    const body = JSON.parse(String(init.body))
+    expect(fetchMock).toHaveBeenCalledWith("http://proxy.test/session", expect.anything())
+    expect(body).toMatchObject({ session_id: correlationId, session_key: correlationId })
+    expect(process.env.AGENTWEAVE_SESSION_ID).toBe(correlationId)
+    expect(process.env.AGENTWEAVE_SESSION_KEY).toBe(correlationId)
+    expect(process.env.AGENTWEAVE_PARENT_SESSION_ID).toBeUndefined()
+    expect(JSON.stringify({ body, headers: init.headers })).not.toContain(rawSessionKey)
+    expect(JSON.stringify({ body, headers: init.headers })).not.toContain(rawSessionId)
+    expect(JSON.stringify({ body, headers: init.headers })).not.toContain(rawParentId)
+    expect(JSON.stringify({ body, headers: init.headers })).not.toContain("upstream-raw-queued-child")
+  })
+
+  it("posts only opaque child and parent tokens for a tokenized upstream root", async () => {
+    const rawSessionKey = "agent:main:raw-upstream-key"
+    const rawSessionId = "018f-raw-upstream-id"
+    const rawUpstreamSessionId = "paperclip-raw-upstream-child"
+    const rawParentId = "paperclip-raw-upstream-parent"
+    const correlationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:upstream-child"
+    const parentCorrelationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:upstream-parent"
+    const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => new Response())
+    vi.stubGlobal("fetch", fetchMock)
+    await service.stop()
+    service = createAgentWeaveBridgeService()
+    await service.start(makeCtx({ proxyUrl: "http://proxy.test" }))
+
+    fire(
+      {
+        type: "message.queued",
+        sessionKey: "agent:main:opaque-parent",
+        sessionId: rawParentId,
+        channel: "cli",
+        source: "user",
+        ts: Date.now(),
+        seq: 1,
+      },
+      { sessionCorrelationId: parentCorrelationId },
+    )
+    fetchMock.mockClear()
+
+    fire(
+      {
+        type: "session.state",
+        sessionKey: rawSessionKey,
+        sessionId: rawSessionId,
+        state: "processing",
+        ts: Date.now(),
+        seq: 2,
+      },
+      {
+        clientContext: {
+          schemaVersion: "agentweave.context.v1",
+          sessionId: rawUpstreamSessionId,
+          parentSessionId: rawParentId,
+        },
+        sessionCorrelationId: correlationId,
+      },
+    )
+
+    const init = fetchMock.mock.calls[0]![1]!
+    const body = JSON.parse(String(init.body))
+    expect(body).toMatchObject({
+      session_id: correlationId,
+      session_key: correlationId,
+      parent_session_id: parentCorrelationId,
+    })
+    for (const rawValue of [rawSessionKey, rawSessionId, rawUpstreamSessionId, rawParentId]) {
+      expect(JSON.stringify({ body, headers: init.headers })).not.toContain(rawValue)
+    }
+  })
+
+  it("posts opaque identities without a key-derived label for a tokenized native subagent", async () => {
+    const rawParentKey = "agent:main:raw-native-parent"
+    const rawParentId = "018f-raw-native-parent"
+    const rawChildKey = "agent:main:raw-native-parent:subagent:worker"
+    const rawChildId = "018f-raw-native-child"
+    const parentCorrelationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:native-parent"
+    const childCorrelationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:native-child"
+    const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => new Response())
+    vi.stubGlobal("fetch", fetchMock)
+    await service.stop()
+    service = createAgentWeaveBridgeService()
+    await service.start(makeCtx({ proxyUrl: "http://proxy.test" }))
+
+    fire(
+      {
+        type: "message.queued",
+        sessionKey: rawParentKey,
+        sessionId: rawParentId,
+        channel: "cli",
+        source: "user",
+        ts: Date.now(),
+        seq: 1,
+      },
+      { sessionCorrelationId: parentCorrelationId },
+    )
+    fetchMock.mockClear()
+
+    fire(
+      {
+        type: "session.state",
+        sessionKey: rawChildKey,
+        sessionId: rawChildId,
+        state: "processing",
+        ts: Date.now(),
+        seq: 2,
+      },
+      { sessionCorrelationId: childCorrelationId },
+    )
+
+    const init = fetchMock.mock.calls[0]![1]!
+    const body = JSON.parse(String(init.body))
+    expect(body).toMatchObject({
+      session_id: childCorrelationId,
+      session_key: childCorrelationId,
+      parent_session_id: parentCorrelationId,
+    })
+    expect(body).not.toHaveProperty("task_label")
+    for (const rawValue of [rawParentKey, rawParentId, rawChildKey, rawChildId]) {
+      expect(JSON.stringify({ body, headers: init.headers })).not.toContain(rawValue)
+    }
+  })
 })
 
 // Older OpenClaw runtimes forwarded `clientContext` on the public event payload
@@ -947,6 +1103,7 @@ describe("createAgentWeaveBridgeService — legacy runtime without trusted chann
     delete (globalThis as Record<string, unknown>).__legacyDiagnosticListeners
     delete process.env.AGENTWEAVE_TRACEPARENT
     delete process.env.AGENTWEAVE_SESSION_ID
+    delete process.env.AGENTWEAVE_SESSION_KEY
     delete process.env.AGENTWEAVE_PARENT_SESSION_ID
   })
 

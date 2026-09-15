@@ -390,6 +390,7 @@ function startUpstreamRootSpanFromSessionState(
   const identity = resolveOpenClawSessionId(sessionKey, e.sessionId)
   const effectiveSessionId = upstream.sessionId ?? identity.sessionId
   const attributedSessionId = sessionCorrelationId ?? effectiveSessionId
+  const proxySessionKey = sessionCorrelationId ?? sessionKey
   const exportedSessionKey = sessionCorrelationId ? undefined : sessionKey
   const agentId = upstream.agentId ?? config.agentId ?? "nix-v1"
   const agentType = upstream.agentType ?? "main"
@@ -420,6 +421,8 @@ function startUpstreamRootSpanFromSessionState(
   if (parentSid) {
     span.setAttribute("prov.parent.session.id", parentSid)
     process.env.AGENTWEAVE_PARENT_SESSION_ID = parentSid
+  } else {
+    delete process.env.AGENTWEAVE_PARENT_SESSION_ID
   }
   applyLangfuseAgentTurnAttrs(span, {
     sessionId: attributedSessionId,
@@ -447,7 +450,11 @@ function startUpstreamRootSpanFromSessionState(
     process.env.AGENTWEAVE_PARENT_TRACE_ID = parentTraceIdHex
     process.env.AGENTWEAVE_PARENT_SPAN_ID = parentSpanIdHex
   }
-  process.env.AGENTWEAVE_SESSION_ID = effectiveSessionId
+  // The bridge environment is consumed by in-process SDKs. Once OpenClaw has
+  // supplied a trusted correlation token, never export the raw route/session
+  // identity through that channel.
+  process.env.AGENTWEAVE_SESSION_ID = attributedSessionId
+  process.env.AGENTWEAVE_SESSION_KEY = proxySessionKey
   process.env.AGENTWEAVE_AGENT_ID = agentId
   process.env.AGENTWEAVE_AGENT_TYPE = agentType
   const proxyBaseUrl = normalizeProxyBaseUrl(config.proxyUrl)
@@ -468,8 +475,10 @@ function startUpstreamRootSpanFromSessionState(
 
   if (proxyBaseUrl) {
     const sessionPayload: Record<string, unknown> = {
-      session_id: effectiveSessionId,
-      session_key: sessionKey,
+      session_id: attributedSessionId,
+      // Forced proxy contexts are keyed by the value returned in the request
+      // header. A trusted token is opaque and therefore safe as that key.
+      session_key: proxySessionKey,
       agent_id: agentId,
       agent_type: agentType,
       harness: "openclaw",
@@ -479,7 +488,7 @@ function startUpstreamRootSpanFromSessionState(
     if (config.project) sessionPayload.project = config.project
     if (parentSid) sessionPayload.parent_session_id = parentSid
     if (taskLabel) sessionPayload.task_label = taskLabel
-    if (identity.canonicalUuid) sessionPayload.session_uuid = identity.canonicalUuid
+    if (!sessionCorrelationId && identity.canonicalUuid) sessionPayload.session_uuid = identity.canonicalUuid
     if (upstream.paperclip?.runId) sessionPayload.run_id = upstream.paperclip.runId
     if (upstream.paperclip?.issueId) sessionPayload.issue_id = upstream.paperclip.issueId
     if (parentTraceIdHex && parentSpanIdHex) {
@@ -490,7 +499,7 @@ function startUpstreamRootSpanFromSessionState(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-agentweave-session-key": sessionKey,
+        "x-agentweave-session-key": proxySessionKey,
       },
       body: JSON.stringify(sessionPayload),
     }).then(() => console.log(`[agentweave-bridge] proxy session set for ${agentType}: ${effectiveSessionId}`))
@@ -513,6 +522,8 @@ function endUpstreamRootSpanOnIdle(sessionKey: string): void {
   delete process.env.AGENTWEAVE_AGENT_ID
   delete process.env.AGENTWEAVE_AGENT_TYPE
   delete process.env.AGENTWEAVE_PARENT_SESSION_ID
+  delete process.env.AGENTWEAVE_SESSION_ID
+  delete process.env.AGENTWEAVE_SESSION_KEY
   console.log("[agentweave-bridge] ended upstream root span for session:", sessionKey)
 }
 
@@ -573,6 +584,7 @@ export function createAgentWeaveBridgeService() {
               const upstream = resolveUpstreamContext(clientContext)
               const effectiveSessionId = upstream?.sessionId ?? identity.sessionId
               const attributedSessionId = sessionCorrelationId ?? effectiveSessionId
+              const proxySessionKey = sessionCorrelationId ?? sessionKey
               const exportedSessionKey = sessionCorrelationId ? undefined : sessionKey
               const effectiveAgentId = upstream?.agentId ?? agentId
               const effectiveAgentType = upstream?.agentType ?? agentType
@@ -626,6 +638,7 @@ export function createAgentWeaveBridgeService() {
                   parentSid = resolvedParentSessionId
                 }
               }
+              if (!parentSid) delete process.env.AGENTWEAVE_PARENT_SESSION_ID
               applyLangfuseAgentTurnAttrs(span, {
                 sessionId: attributedSessionId,
                 sessionKey: exportedSessionKey,
@@ -659,7 +672,8 @@ export function createAgentWeaveBridgeService() {
                 process.env.AGENTWEAVE_PARENT_TRACE_ID = parentTraceIdHex
                 process.env.AGENTWEAVE_PARENT_SPAN_ID = parentSpanIdHex
               }
-              process.env.AGENTWEAVE_SESSION_ID = effectiveSessionId
+              process.env.AGENTWEAVE_SESSION_ID = attributedSessionId
+              process.env.AGENTWEAVE_SESSION_KEY = proxySessionKey
               process.env.AGENTWEAVE_AGENT_ID = effectiveAgentId
               process.env.AGENTWEAVE_AGENT_TYPE = effectiveAgentType
               const proxyBaseUrl = normalizeProxyBaseUrl(config.proxyUrl)
@@ -684,14 +698,17 @@ export function createAgentWeaveBridgeService() {
               const proxyBaseUrlForSession = normalizeProxyBaseUrl(config.proxyUrl)
               if (proxyBaseUrlForSession) {
                 // Upstream parent wins; else the sub-agent concurrent-turn heuristic.
-                const proxyParentSid = upstream?.parentSessionId
-                  ?? (effectiveAgentType === "subagent"
+                // `parentSid` has already resolved an active parent to its
+                // opaque token. On tokenized turns it is the only parent
+                // identity that may leave the bridge.
+                const proxyParentSid = parentSid
+                  ?? (!sessionCorrelationId && effectiveAgentType === "subagent"
                     ? (parentSessionKey
                       ?? Array.from(activeTurns.keys()).find(k => k.startsWith("agent:main:") && !k.startsWith("agent:main:subagent:")))
                     : undefined)
                 const sessionPayload: Record<string, unknown> = {
-                  session_id: effectiveSessionId,
-                  session_key: sessionKey,
+                  session_id: attributedSessionId,
+                  session_key: proxySessionKey,
                   agent_id: effectiveAgentId,
                   agent_type: effectiveAgentType,
                   harness: "openclaw",
@@ -702,7 +719,7 @@ export function createAgentWeaveBridgeService() {
                 if (config.project) sessionPayload.project = config.project
                 if (proxyParentSid) sessionPayload.parent_session_id = proxyParentSid
                 if (taskLabel) sessionPayload.task_label = taskLabel
-                if (identity.canonicalUuid) sessionPayload.session_uuid = identity.canonicalUuid
+                if (!sessionCorrelationId && identity.canonicalUuid) sessionPayload.session_uuid = identity.canonicalUuid
                 if (upstream?.paperclip?.runId) sessionPayload.run_id = upstream.paperclip.runId
                 if (upstream?.paperclip?.issueId) sessionPayload.issue_id = upstream.paperclip.issueId
                 if (parentTraceIdHex && parentSpanIdHex) {
@@ -713,7 +730,7 @@ export function createAgentWeaveBridgeService() {
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
-                    "x-agentweave-session-key": sessionKey,
+                    "x-agentweave-session-key": proxySessionKey,
                   },
                   body: JSON.stringify(sessionPayload),
                 }).then(() => console.log(`[agentweave-bridge] proxy session set for ${effectiveAgentType}: ${effectiveSessionId}`))
@@ -744,6 +761,8 @@ export function createAgentWeaveBridgeService() {
               delete process.env.AGENTWEAVE_AGENT_ID
               delete process.env.AGENTWEAVE_AGENT_TYPE
               delete process.env.AGENTWEAVE_PARENT_SESSION_ID
+              delete process.env.AGENTWEAVE_SESSION_ID
+              delete process.env.AGENTWEAVE_SESSION_KEY
               console.log("[agentweave-bridge] ended root span for session:", sessionKey)
               // Don't POST a clear — /session replaces the whole context dict,
               // so {task_label: ""} would wipe session_id/agent_id too. The
@@ -762,6 +781,7 @@ export function createAgentWeaveBridgeService() {
                   const identity = resolveOpenClawSessionId(sessionKey, e.sessionId)
                   const sessionId = identity.sessionId
                   const attributedSessionId = sessionCorrelationId ?? sessionId
+                  const proxySessionKey = sessionCorrelationId ?? sessionKey
                   const exportedSessionKey = sessionCorrelationId ? undefined : sessionKey
                   const tracer = trace.getTracer("openclaw-agentweave-bridge")
                   const span = tracer.startSpan("openclaw.subagent")
@@ -796,6 +816,11 @@ export function createAgentWeaveBridgeService() {
                       parentSessionId = mainSessionId
                     }
                   }
+                  if (parentSessionId) {
+                    process.env.AGENTWEAVE_PARENT_SESSION_ID = parentSessionId
+                  } else {
+                    delete process.env.AGENTWEAVE_PARENT_SESSION_ID
+                  }
                   applyLangfuseAgentTurnAttrs(span, {
                     sessionId: attributedSessionId,
                     sessionKey: exportedSessionKey,
@@ -807,6 +832,8 @@ export function createAgentWeaveBridgeService() {
                     inputPreview,
                   })
                   const spanCtx = trace.setSpan(context.active(), span)
+                  process.env.AGENTWEAVE_SESSION_ID = attributedSessionId
+                  process.env.AGENTWEAVE_SESSION_KEY = proxySessionKey
                   setActiveTurn(sessionKey, {
                     span,
                     ctx: spanCtx,
@@ -816,23 +843,26 @@ export function createAgentWeaveBridgeService() {
 
                   // Force the proxy to attribute LLM calls to this sub-agent session
                   const proxyUrl = normalizeProxyBaseUrl(config.proxyUrl) || "http://192.168.1.70:30400"
-                  const mainSessionId = mainKey ? (activeTurns.get(mainKey)?.span as any)?._attributes?.["session.id"] || "nix-main" : "nix-main"
+                  const mainSessionId = parentSessionId ?? (sessionCorrelationId ? undefined : (mainKey ? (activeTurns.get(mainKey)?.span as any)?._attributes?.["session.id"] || "nix-main" : "nix-main"))
                   // Issue #189: include session_key so the proxy stores this
                   // forced context per-key in _forced_session_contexts, instead
                   // of toggling the legacy global _session_context_force flag
                   // (which would hijack attribution for unrelated callers).
                   fetch(`${proxyUrl}/session`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: {
+                      "Content-Type": "application/json",
+                      "x-agentweave-session-key": proxySessionKey,
+                    },
                     body: JSON.stringify({
-                      session_key: sessionKey,
-                      session_id: sessionId,
-                      ...(identity.canonicalUuid ? { session_uuid: identity.canonicalUuid } : {}),
-                      parent_session_id: mainSessionId,
+                      session_key: proxySessionKey,
+                      session_id: attributedSessionId,
+                      ...(!sessionCorrelationId && identity.canonicalUuid ? { session_uuid: identity.canonicalUuid } : {}),
+                      ...(mainSessionId ? { parent_session_id: mainSessionId } : {}),
                       agent_id: subagentId,
                       agent_type: "subagent",
                       harness: "openclaw",
-                      task_label: taskLabel ?? `subagent ${sessionKey.split(":")[1] || "unknown"}`,
+                      ...(taskLabel ? { task_label: taskLabel } : (sessionCorrelationId ? {} : { task_label: `subagent ${sessionKey.split(":")[1] || "unknown"}` })),
                       force: true,
                     }),
                   }).then(() => console.log(`[agentweave-bridge] proxy session forced to subagent: ${sessionId}`))
@@ -845,6 +875,8 @@ export function createAgentWeaveBridgeService() {
               if (sessionKey.includes(":subagent:") && activeTurns.has(sessionKey)) {
                 if (state === "idle") {
                   const turn = activeTurns.get(sessionKey)!
+                  const proxySessionKey = turn.sessionCorrelationId ?? sessionKey
+                  const attributedSessionId = turn.sessionCorrelationId ?? getSpanSessionId(turn) ?? "nix-main"
                   turn.span.setAttribute("outcome", "completed")
                   turn.span.end()
                   deleteActiveTurn(sessionKey)
@@ -857,15 +889,21 @@ export function createAgentWeaveBridgeService() {
                   const proxyUrl = normalizeProxyBaseUrl(config.proxyUrl) || "http://192.168.1.70:30400"
                   fetch(`${proxyUrl}/session`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: {
+                      "Content-Type": "application/json",
+                      "x-agentweave-session-key": proxySessionKey,
+                    },
                     body: JSON.stringify({
-                      session_key: sessionKey,
-                      session_id: "nix-main",
+                      session_key: proxySessionKey,
+                      session_id: attributedSessionId,
                       agent_type: "main",
                       force: false,
                     }),
                   }).then(() => console.log(`[agentweave-bridge] proxy session restored to nix-main`))
                     .catch(err => console.warn(`[agentweave-bridge] proxy session restore failed:`, err.message))
+
+                  delete process.env.AGENTWEAVE_SESSION_ID
+                  delete process.env.AGENTWEAVE_SESSION_KEY
 
                   console.log(`[agentweave-bridge] ended subagent span: ${sessionKey}`)
                 }
@@ -1008,6 +1046,8 @@ export function createAgentWeaveBridgeService() {
       delete process.env.ANTHROPIC_BASE_URL
       delete process.env.OPENAI_BASE_URL
       delete process.env.OPENAI_API_BASE
+      delete process.env.AGENTWEAVE_SESSION_ID
+      delete process.env.AGENTWEAVE_SESSION_KEY
       if (sdk) { await sdk.shutdown(); sdk = null }
     },
   }
