@@ -40,6 +40,12 @@
                   }
                 },
                 {
+                  "key": "openclaw.session.correlation_id",
+                  "value": {
+                    "stringValue": "hmac-sha256:v1:fixture-key:fixture-session"
+                  }
+                },
+                {
                   "key": "gen_ai.request.model",
                   "value": {
                     "stringValue": "gpt-5.5"

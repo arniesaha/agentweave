@@ -18,7 +18,15 @@ TEMPO_URL = os.environ.get("AGENTWEAVE_TEMPO_URL", "http://192.168.1.70:31989").
 CONTENT_MARKER = "openclaw.content.input_messages"
 PROBE_CASE = "agentweave.probe.case"
 FORBIDDEN_PREFIXES = ("prov.session.",)
-FORBIDDEN_KEYS = {"cost.usd", "prov.activity.type", CONTENT_MARKER}
+FORBIDDEN_KEYS = {
+    "cost.usd",
+    "prov.activity.type",
+    CONTENT_MARKER,
+    "openclaw.session_id",
+    "openclaw.sessionId",
+    "openclaw.session_key",
+    "openclaw.sessionKey",
+}
 
 
 def attribute(key: str, value: str | int) -> dict:
@@ -62,8 +70,10 @@ def _require_exact(attributes: dict, expected: dict) -> None:
         assert attributes.get(key) == value, f"{key} was not {value!r}"
 
 
-def _assert_no_forbidden(attributes: dict) -> None:
+def _assert_no_forbidden(attributes: dict, *, allow_session_correlation: bool = False) -> None:
     forbidden = {key for key in attributes if key in FORBIDDEN_KEYS or key.startswith(FORBIDDEN_PREFIXES)}
+    if allow_session_correlation:
+        forbidden.discard("prov.session.id")
     assert not forbidden, f"forbidden fields reached Tempo: {sorted(forbidden)}"
 
 
@@ -104,9 +114,11 @@ def assert_mapped_trace(trace: dict, expected_trace_id: str) -> None:
             "prov.llm.completion_tokens": 25,
             "tokens.cache_read": 50,
             "tokens.cache_write": 8,
+            "openclaw.session.correlation_id": "hmac-sha256:v1:probe-key:cached-session",
+            "prov.session.id": "hmac-sha256:v1:probe-key:cached-session",
         },
     )
-    _assert_no_forbidden(cached)
+    _assert_no_forbidden(cached, allow_session_correlation=True)
 
     no_cache = spans["no-cache"][2]
     _require_exact(
@@ -126,6 +138,7 @@ def assert_mapped_trace(trace: dict, expected_trace_id: str) -> None:
         },
     )
     assert "tokens.cache_read" not in no_cache and "tokens.cache_write" not in no_cache
+    assert "prov.session.id" not in no_cache
     _assert_no_forbidden(no_cache)
 
     existing = spans["existing-target"][2]
@@ -143,9 +156,11 @@ def assert_mapped_trace(trace: dict, expected_trace_id: str) -> None:
             "prov.llm.provider": "existing-provider",
             "prov.llm.prompt_tokens": 9,
             "prov.llm.completion_tokens": 2,
+            "openclaw.session.correlation_id": "hmac-sha256:v1:probe-key:replacement-must-not-win",
+            "prov.session.id": "hmac-sha256:v1:probe-key:existing-session",
         },
     )
-    _assert_no_forbidden(existing)
+    _assert_no_forbidden(existing, allow_session_correlation=True)
 
     usage = spans["native-usage"][2]
     assert usage == {
@@ -199,6 +214,7 @@ def build_payload(trace_id: str, now_ns: int) -> dict:
                         "gen_ai.usage.output_tokens": 25,
                         "gen_ai.usage.cache_read.input_tokens": 50,
                         "gen_ai.usage.cache_creation.input_tokens": 8,
+                        "openclaw.session.correlation_id": "hmac-sha256:v1:probe-key:cached-session",
                         PROBE_CASE: "cached",
                         **content,
                     }),
@@ -207,6 +223,7 @@ def build_payload(trace_id: str, now_ns: int) -> dict:
                         "openclaw.model": "fallback-model",
                         "gen_ai.usage.input_tokens": 12,
                         "gen_ai.usage.output_tokens": 3,
+                        "openclaw.session_id": "raw-session-id-must-not-map",
                         PROBE_CASE: "no-cache",
                         **content,
                     }),
@@ -216,6 +233,8 @@ def build_payload(trace_id: str, now_ns: int) -> dict:
                         "gen_ai.usage.input_tokens": 9,
                         "gen_ai.usage.output_tokens": 2,
                         "prov.llm.model": "existing-model",
+                        "openclaw.session.correlation_id": "hmac-sha256:v1:probe-key:replacement-must-not-win",
+                        "prov.session.id": "hmac-sha256:v1:probe-key:existing-session",
                         PROBE_CASE: "existing-target",
                         **content,
                     }),

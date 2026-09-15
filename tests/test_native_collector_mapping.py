@@ -68,6 +68,8 @@ def synthetic_tempo_trace(trace_id: str) -> dict:
         "prov.llm.completion_tokens": 25,
         "tokens.cache_read": 50,
         "tokens.cache_write": 8,
+        "openclaw.session.correlation_id": "hmac-sha256:v1:probe-key:cached-session",
+        "prov.session.id": "hmac-sha256:v1:probe-key:cached-session",
     }
     no_cache = {
         "agentweave.probe.case": "no-cache",
@@ -94,6 +96,8 @@ def synthetic_tempo_trace(trace_id: str) -> dict:
         "prov.llm.provider": "existing-provider",
         "prov.llm.prompt_tokens": 9,
         "prov.llm.completion_tokens": 2,
+        "openclaw.session.correlation_id": "hmac-sha256:v1:probe-key:replacement-must-not-win",
+        "prov.session.id": "hmac-sha256:v1:probe-key:existing-session",
     }
     usage = {"agentweave.probe.case": "native-usage", "gen_ai.usage.input_tokens": 77, "openclaw.provider": "usage-provider"}
     unrelated = {
@@ -161,6 +165,8 @@ def test_assert_mapped_trace_accepts_tempo_base64_trace_id():
         ("cached", "prov.llm.completion_tokens", 26),
         ("cached", "tokens.cache_read", 51),
         ("cached", "tokens.cache_write", 9),
+        ("cached", "openclaw.session.correlation_id", "hmac-sha256:v1:probe-key:wrong-session"),
+        ("cached", "prov.session.id", "hmac-sha256:v1:probe-key:wrong-session"),
         ("cached", "openclaw.provider", "changed-source-provider"),
         ("cached", "gen_ai.request.model", "changed-source-model"),
         ("cached", "gen_ai.usage.input_tokens", 101),
@@ -180,6 +186,8 @@ def test_assert_mapped_trace_accepts_tempo_base64_trace_id():
         ("existing-target", "prov.llm.provider", "wrong-provider"),
         ("existing-target", "prov.llm.prompt_tokens", 10),
         ("existing-target", "prov.llm.completion_tokens", 3),
+        ("existing-target", "openclaw.session.correlation_id", "hmac-sha256:v1:probe-key:wrong-source"),
+        ("existing-target", "prov.session.id", "hmac-sha256:v1:probe-key:wrong-existing-target"),
         ("existing-target", "gen_ai.usage.input_tokens", 10),
         ("existing-target", "gen_ai.usage.output_tokens", 3),
         ("native-usage", "gen_ai.usage.input_tokens", 78),
@@ -218,6 +226,22 @@ def test_assert_mapped_trace_rejects_content_leak_or_mutated_untouched_spans():
         if any(attr["key"] == "agentweave.probe.case" and attr["value"]["stringValue"] == "cached" for attr in span["attributes"])
     )
     cached["attributes"].append({"key": "openclaw.content.input_messages", "value": any_value("harmless-content-marker")})
+    with pytest.raises(AssertionError):
+        mapping_probe().assert_mapped_trace(trace, "c" * 32)
+
+
+def test_assert_mapped_trace_rejects_raw_openclaw_session_id():
+    trace = synthetic_tempo_trace("c" * 32)
+    no_cache = next(
+        span
+        for batch in trace["batches"]
+        for scoped in batch["scopeSpans"]
+        for span in scoped["spans"]
+        if any(attr["key"] == "agentweave.probe.case" and attr["value"]["stringValue"] == "no-cache" for attr in span["attributes"])
+    )
+    no_cache["attributes"].append(
+        {"key": "openclaw.session_id", "value": any_value("raw-session-id-must-not-export")},
+    )
     with pytest.raises(AssertionError):
         mapping_probe().assert_mapped_trace(trace, "c" * 32)
 
@@ -360,6 +384,13 @@ def test_native_mapping_skips_malformed_sources_and_preserves_existing_targets()
     assert 'IsString(span.attributes["openclaw.model"])' in fallback
     assert 'span.attributes["prov.llm.model"] == nil' in fallback
 
+    correlation = mapping_statement("prov.session.id", "openclaw.session.correlation_id")
+    assert 'resource.attributes["service.name"] == "openclaw"' in correlation
+    assert 'span.name == "openclaw.model.call"' in correlation
+    assert 'span.attributes["openclaw.session.correlation_id"] != nil' in correlation
+    assert 'IsString(span.attributes["openclaw.session.correlation_id"])' in correlation
+    assert 'span.attributes["prov.session.id"] == nil' in correlation
+
 
 def test_manifest_orders_mapping_after_both_strippers_and_limits_it_to_native_model_calls():
     config = collector_config()
@@ -367,12 +398,24 @@ def test_manifest_orders_mapping_after_both_strippers_and_limits_it_to_native_mo
     assert "processors: [memory_limiter, attributes/strip_pii, attributes/strip_openclaw_content, transform/openclaw_native, batch]" in config
     statements = mapping_statements()
     mapping = "\n".join(statements)
-    assert len(statements) == 9
+    assert len(statements) == 10
     for statement in statements:
         assert 'resource.attributes["service.name"] == "openclaw"' in statement
         assert 'span.name == "openclaw.model.call"' in statement
-    for forbidden in ("prov.session.", "cost.usd", "prov.activity.type"):
+    for forbidden in ("cost.usd", "prov.activity.type"):
         assert forbidden not in mapping
+
+
+def test_manifest_strips_raw_openclaw_session_ids_before_native_mapping():
+    config = collector_config()
+    strip_start = config.index("attributes/strip_openclaw_content:")
+    mapping_start = config.index("transform/openclaw_native:")
+    strip_config = config[strip_start:mapping_start]
+
+    strip_lines = strip_config.splitlines()
+    for key in ("openclaw.session_id", "openclaw.sessionId", "openclaw.session_key", "openclaw.sessionKey"):
+        key_index = strip_lines.index(f"      - key: {key}")
+        assert strip_lines[key_index + 1].strip() == "action: delete"
 
 
 def test_pinned_collector_accepts_extracted_configuration():
