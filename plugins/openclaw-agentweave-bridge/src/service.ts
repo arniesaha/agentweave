@@ -714,7 +714,7 @@ export function createAgentWeaveBridgeService() {
                   harness: "openclaw",
                   // Force the proxy to attribute LLM calls to upstream identity
                   // (same as sub-agents) so codex/model spans match the run.
-                  force: Boolean(upstream) || effectiveAgentType === "subagent",
+                  force: Boolean(sessionCorrelationId) || Boolean(upstream) || effectiveAgentType === "subagent",
                 }
                 if (config.project) sessionPayload.project = config.project
                 if (proxyParentSid) sessionPayload.parent_session_id = proxyParentSid

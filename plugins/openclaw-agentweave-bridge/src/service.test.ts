@@ -982,6 +982,41 @@ describe("createAgentWeaveBridgeService", () => {
     expect(JSON.stringify({ body, headers: init.headers })).not.toContain("upstream-raw-queued-child")
   })
 
+  it("forces an opaque proxy context for a tokenized main turn without upstream context", async () => {
+    const rawSessionKey = "agent:main:raw-local-main-key"
+    const rawSessionId = "018f-raw-local-main-id"
+    const correlationId = "hmac-sha256:v1:0123456789abcdef0123456789abcdef:local-main"
+    const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => new Response())
+    vi.stubGlobal("fetch", fetchMock)
+    await service.stop()
+    service = createAgentWeaveBridgeService()
+    await service.start(makeCtx({ proxyUrl: "http://proxy.test" }))
+
+    fire(
+      {
+        type: "message.queued",
+        sessionKey: rawSessionKey,
+        sessionId: rawSessionId,
+        channel: "cli",
+        source: "user",
+        ts: Date.now(),
+        seq: 1,
+      },
+      { sessionCorrelationId: correlationId },
+    )
+
+    const init = fetchMock.mock.calls[0]![1]!
+    const body = JSON.parse(String(init.body))
+    expect(body).toMatchObject({
+      session_id: correlationId,
+      session_key: correlationId,
+      force: true,
+    })
+    expect(init.headers).toMatchObject({ "x-agentweave-session-key": correlationId })
+    expect(JSON.stringify({ body, headers: init.headers })).not.toContain(rawSessionKey)
+    expect(JSON.stringify({ body, headers: init.headers })).not.toContain(rawSessionId)
+  })
+
   it("posts only opaque child and parent tokens for a tokenized upstream root", async () => {
     const rawSessionKey = "agent:main:raw-upstream-key"
     const rawSessionId = "018f-raw-upstream-id"
